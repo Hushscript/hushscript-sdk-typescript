@@ -1,0 +1,13 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["src/index.ts", "scripts/generate.mjs", "conformance/runner.ts", "smoke/smoke.ts", "tsup.config.ts"],
+  "project": ["src/**/*.ts", "scripts/**/*.mjs", "conformance/**/*.ts", "smoke/**/*.ts", "test/**/*.ts"],
+  "ignore": ["src/generated/**"],
+  "ignoreDependencies": [
+    "openapi-fetch",
+    "music-metadata",
+    "publint",
+    "@arethetypeswrong/cli",
+    "@types/node"
+  ]
+}

@@ -129,12 +129,12 @@ ${lines.join("\n")}
 
 /**
  * @param {string} url
- * @returns {Promise<unknown>}
+ * @returns {Promise<string>}
  */
-async function fetchJson(url) {
+async function fetchText(url) {
   const response = await fetch(url, { signal: AbortSignal.timeout(60_000) });
   if (!response.ok) throw new Error(`GET ${url} answered ${String(response.status)}`);
-  return /** @type {unknown} */ (await response.json());
+  return response.text();
 }
 
 /** @returns {Promise<unknown>} */
@@ -145,27 +145,30 @@ async function loadHints() {
   }
   const pkg = asRecord(JSON.parse(readFileSync(rootPath("package.json"), "utf8")), "package.json");
   const ref = asString(asRecord(pkg["config"], "package.json config")["conformanceRef"], "config.conformanceRef");
-  return fetchJson(`https://raw.githubusercontent.com/Hushscript/hushscript-sdk-conformance/${ref}/hints.json`);
+  const url = `https://raw.githubusercontent.com/Hushscript/hushscript-sdk-conformance/${ref}/hints.json`;
+  return /** @type {unknown} */ (JSON.parse(await fetchText(url)));
 }
 
 /**
+ * The spec's own bytes, so key order and formatting survive and the regen diff stays reviewable.
  * @param {string} source
- * @returns {Promise<unknown>}
+ * @returns {Promise<string>}
  */
-function loadSpec(source) {
-  if (/^https?:\/\//.test(source)) return fetchJson(source);
-  return Promise.resolve(/** @type {unknown} */ (JSON.parse(readFileSync(source, "utf8"))));
+function loadSpecText(source) {
+  if (/^https?:\/\//.test(source)) return fetchText(source);
+  return Promise.resolve(readFileSync(source, "utf8"));
 }
 
 /** @param {string | undefined} source */
 export async function generate(source = DEFAULT_SPEC) {
-  const spec = await loadSpec(source);
+  const specText = await loadSpecText(source);
+  const spec = /** @type {unknown} */ (JSON.parse(specText));
   const hints = await loadHints();
   const catalog = emitCatalog(spec);
   const scopes = emitScopes(spec);
   const hintsTable = emitHints(hints);
 
-  writeFileSync(rootPath("openapi.json"), `${JSON.stringify(spec, null, 2)}\n`);
+  writeFileSync(rootPath("openapi.json"), specText.endsWith("\n") ? specText : `${specText}\n`);
   execFileSync(
     rootPath("node_modules/.bin/openapi-typescript"),
     ["openapi.json", "-o", "src/generated/schema.d.ts"],
