@@ -1,5 +1,5 @@
 /* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -52,18 +52,23 @@ describe("probeDuration", () => {
   it("detects the format by content for a path, a Blob and bytes, whatever their name or type say", async () => {
     const opus = await fixtureBytes("opus-20s.opus");
     const reference = await probeDuration(await openSource(opus));
-    const path = join(await mkdtemp(join(tmpdir(), "hs-probe-")), "really-opus.mp3");
-    await writeFile(path, opus);
-    const sources = [
-      await openSource(path),
-      await openSource(new Blob([opus], { type: "audio/mpeg" })),
-      await openSource(new File([opus], "lie.mp3", { type: "audio/mpeg" })),
-      await openSource(opus),
-    ];
-    for (const source of sources) {
-      expect(source.probeInput?.kind).toBeDefined();
-      expect(await probeDuration(source)).toBeCloseTo(reference, 3);
-      await source.close();
+    const directory = await mkdtemp(join(tmpdir(), "hs-probe-"));
+    try {
+      const path = join(directory, "really-opus.mp3");
+      await writeFile(path, opus);
+      const sources = [
+        await openSource(path),
+        await openSource(new Blob([opus], { type: "audio/mpeg" })),
+        await openSource(new File([opus], "lie.mp3", { type: "audio/mpeg" })),
+        await openSource(opus),
+      ];
+      for (const source of sources) {
+        expect(source.probeInput?.kind).toBeDefined();
+        expect(await probeDuration(source)).toBeCloseTo(reference, 3);
+        await source.close();
+      }
+    } finally {
+      await rm(directory, { recursive: true, force: true });
     }
   });
 

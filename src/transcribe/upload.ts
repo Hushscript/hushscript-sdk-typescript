@@ -136,6 +136,17 @@ class PartUrls {
   }
 }
 
+/** A 4xx other than 429 (which was already retried): the API said no, and trying again will not change it. */
+function isTerminal(error: unknown): boolean {
+  return (
+    error instanceof ApiError &&
+    error.status !== null &&
+    error.status >= 400 &&
+    error.status < 500 &&
+    error.status !== 429
+  );
+}
+
 function etagOf(response: Response): string {
   const etag = response.headers.get("etag")?.replaceAll('"', "") ?? "";
   if (etag === "") {
@@ -225,6 +236,8 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
       !(error instanceof AbortError) &&
       !(error instanceof UploadError && error.code === "part_url_missing");
     if (!retryable || isAborted()) throw error;
+    // The part-urls fetch itself was refused for a reason a fresh page or proxied parts cannot fix.
+    if (url === null && directSucceeded && isTerminal(error)) throw error;
     let cause: HushscriptError = error;
     const forbidden = error instanceof ApiError && error.status === 403;
     if (url !== null && !state.refetched && (forbidden || directSucceeded)) {
@@ -236,7 +249,8 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
         if (
           !(refreshError instanceof HushscriptError) ||
           refreshError instanceof AbortError ||
-          isAborted()
+          isAborted() ||
+          (directSucceeded && isTerminal(refreshError))
         )
           throw refreshError;
         cause = refreshError;
@@ -300,7 +314,7 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
       nextPart += 1;
       if (n > totalParts) return;
       const offset = (n - 1) * partSize;
-      const bytes = await source.read(offset, partSize);
+      const bytes = await source.read(offset, partSize, signal);
       await sendPart(n, bytes);
       sent += bytes.byteLength;
       settings.onAcked(sent);

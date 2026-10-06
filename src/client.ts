@@ -5,22 +5,25 @@ import type { paths } from "./generated/schema";
 import { hardenedFetch } from "./http/fetch.ts";
 import { retryClassForRequest } from "./http/operations.ts";
 import { REDACTED } from "./redact.ts";
+import { JobsResource } from "./resources/jobs.ts";
+import { readAccount, toBalance, type Account, type Balance } from "./resources/account.ts";
+import { TranscriptsResource } from "./resources/transcripts.ts";
 import {
   Pipeline,
-  type Job,
-  type JobWaitOptions,
   type ResumeOptions,
   type ResumeToken,
   type TranscribeOptions,
-  type Transcript,
 } from "./transcribe/index.ts";
 import type { FileInput } from "./transcribe/source.ts";
+import type { Transcript } from "./transcript.ts";
 
 export class Hushscript {
   /** Every `/v1` operation, typed from the OpenAPI document, with the SDK's retries, timeouts and redaction. */
   readonly api: Client<paths>;
-  /** Job helpers; `wait` polls until the job is done or failed. */
-  readonly jobs: { wait(id: string, options?: JobWaitOptions): Promise<Job> };
+  /** Jobs, including those still processing; `wait` polls until one is done or failed. */
+  readonly jobs: JobsResource;
+  /** Finished transcripts: list, read and the deletion records. */
+  readonly transcripts: TranscriptsResource;
   readonly #config: ResolvedConfig;
   readonly #pipeline: Pipeline;
 
@@ -48,9 +51,8 @@ export class Hushscript {
       },
     });
     this.#pipeline = new Pipeline(config, this.api);
-    this.jobs = {
-      wait: (id, options) => this.#pipeline.waitForJob(id, options),
-    };
+    this.jobs = new JobsResource(this.api, (id, options) => this.#pipeline.waitForJob(id, options));
+    this.transcripts = new TranscriptsResource(this.api);
   }
 
   /** Uploads `file`, waits for the transcript and returns it (spec 6.1). */
@@ -61,6 +63,16 @@ export class Hushscript {
   /** Finishes a transcription from the token an `AbortError`, `WaitTimeoutError` or `onResumeToken` gave. */
   resume(token: ResumeToken, file?: FileInput, options?: ResumeOptions): Promise<Transcript> {
     return this.#pipeline.resume(token, file, options);
+  }
+
+  /** What can be spent now. Held minutes are already deducted from it, so do not subtract them again. */
+  async balance(): Promise<Balance> {
+    return toBalance(await readAccount(this.api));
+  }
+
+  /** The full `GET /v1/account` body: balance, limits, `card_on_file` and `data_region`. */
+  account(): Promise<Account> {
+    return readAccount(this.api);
   }
 
   toJSON(): Record<string, unknown> {

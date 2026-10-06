@@ -1,6 +1,7 @@
 /* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
 import { open, type FileHandle } from "node:fs/promises";
 import { PreflightError, UploadError } from "../errors.ts";
+import { aborted } from "./common.ts";
 
 export type FileInput = string | Blob | Uint8Array | ReadableStream<Uint8Array>;
 
@@ -19,7 +20,8 @@ export interface Source {
   readonly sequential: boolean;
   /** The first `length` bytes (fewer when the file is shorter), without consuming them. */
   head(length: number): Promise<Uint8Array>;
-  read(offset: number, length: number): Promise<Uint8Array>;
+  /** `signal` stops a wait on a stream that has stopped producing; the other inputs read at once. */
+  read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array>;
   close(): Promise<void>;
 }
 
@@ -138,9 +140,30 @@ class StreamSource implements Source {
     this.size = size;
   }
 
-  async #fill(length: number): Promise<void> {
+  /** One read, given up with the SDK's `AbortError` when `signal` fires; the stream itself is cancelled by `close()`. */
+  #next(
+    signal: AbortSignal | undefined,
+  ): ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]> {
+    const pending = this.#reader.read();
+    if (signal === undefined) return pending;
+    if (signal.aborted) {
+      pending.catch(() => undefined);
+      return Promise.reject(aborted(signal));
+    }
+    return new Promise((resolve, reject) => {
+      const onAbort = (): void => {
+        reject(aborted(signal));
+      };
+      signal.addEventListener("abort", onAbort, { once: true });
+      pending.then(resolve, reject).finally(() => {
+        signal.removeEventListener("abort", onAbort);
+      });
+    });
+  }
+
+  async #fill(length: number, signal?: AbortSignal): Promise<void> {
     while (this.#buffered < length && !this.#ended) {
-      const { done, value } = await this.#reader.read();
+      const { done, value } = await this.#next(signal);
       if (done) {
         this.#ended = true;
       } else if (value.byteLength > 0) {
@@ -182,7 +205,7 @@ class StreamSource implements Source {
     return this.#take(length, false);
   }
 
-  async read(offset: number, length: number): Promise<Uint8Array> {
+  async read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array> {
     if (offset !== this.#position) {
       throw new UploadError({
         code: "stream_not_seekable",
@@ -190,7 +213,7 @@ class StreamSource implements Source {
       });
     }
     const wanted = clampLength(this.size, offset, length);
-    await this.#fill(wanted);
+    await this.#fill(wanted, signal);
     if (this.#buffered < wanted) {
       throw streamSizeMismatch(
         `The stream ended after ${String(offset + this.#buffered)} bytes; size says ${String(this.size)}.`,
@@ -200,7 +223,7 @@ class StreamSource implements Source {
     this.#position += wanted;
     if (this.#position === this.size) {
       // The size is what gets billed and completed: a longer stream would be cut off silently.
-      await this.#fill(1);
+      await this.#fill(1, signal);
       if (this.#buffered > 0) {
         throw streamSizeMismatch(
           `The stream has more than the ${String(this.size)} bytes size says.`,

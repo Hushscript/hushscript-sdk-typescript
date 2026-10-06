@@ -886,6 +886,31 @@ describe("part-urls failures (spec 8.4)", () => {
     expect(fake.count("complete")).toBe(0);
   });
 
+  it("surfaces a 401 from the next page as AuthenticationError, not parts_exhausted", async () => {
+    const { hs, clock, fake } = setup({
+      parts: 40,
+      hooks: { partUrls: () => apiError("unauthorized", 2000, 401) },
+    });
+    const error = await failure(driven(hs.transcribe(mp3, { concurrency: 1 }), clock));
+    expect(error).toBeInstanceOf(AuthenticationError);
+    expect(fake.count("complete")).toBe(0);
+  });
+
+  it("surfaces a 401 from the refresh after an R2 403 once direct PUTs worked", async () => {
+    const { hs, clock } = setup({
+      parts: 8,
+      hooks: {
+        r2: (call, f) =>
+          call.n === 8 && f.directSuccesses > 0
+            ? new Response("<Error>expired</Error>", { status: 403 })
+            : undefined,
+        partUrls: () => apiError("unauthorized", 2000, 401),
+      },
+    });
+    const error = await failure(driven(hs.transcribe(mp3), clock));
+    expect(error).toBeInstanceOf(AuthenticationError);
+  });
+
   it("stops a page fetch that is still running when another part has failed", async () => {
     let aborted = false;
     let fetchStarted: () => void = () => undefined;

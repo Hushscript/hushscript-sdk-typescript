@@ -123,6 +123,9 @@ describe("hs.api", () => {
       body: { size_bytes: 1, duration_seconds: 20, idempotency_key: "0123456789abcdef0123" },
     });
     expect(keyed.calls).toBe(2);
+    // Looking at the body to classify the create must leave it intact for the wire.
+    expect(keyed.bodies[0]).toContain("0123456789abcdef0123");
+    expect(keyed.bodies[1]).toContain("0123456789abcdef0123");
 
     const keyless = stubFetch([
       { status: 503, text: "x" },
@@ -221,7 +224,7 @@ describe("hs.api", () => {
 describe("the client object", () => {
   it("exposes api and nothing that holds the token", () => {
     const hs = client();
-    expect(Object.keys(hs)).toEqual(["api", "jobs"]);
+    expect(Object.keys(hs)).toEqual(["api", "jobs", "transcripts"]);
     expect(JSON.stringify(hs)).not.toContain(TOKEN.slice(12));
   });
 });
