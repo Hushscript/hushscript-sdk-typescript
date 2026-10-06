@@ -64,6 +64,10 @@ services:
 
   mutation:
     <<: *sandboxed
+    build:
+      <<: *dev-build
+      target: mutation
+    image: hushscript-typescript-mutation:node${NODE_VERSION:?set by the justfile}
     command: ["timeout", "1800", "stryker", "run"]
 
   lint:

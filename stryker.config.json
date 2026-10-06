@@ -8,5 +8,6 @@
   "cleanTempDir": false,
   "reporters": ["clear-text", "progress"],
   "thresholds": { "high": 90, "low": 85, "break": 80 },
-  "allowEmpty": true
+  "allowEmpty": true,
+  "concurrency": 4
 }

@@ -24,3 +24,11 @@ USER 10001:10001
 FROM base AS proddeps
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --ignore-scripts --no-audit --no-fund
+
+# StrykerJS needs ps to manage its worker processes, which the slim image lacks.
+FROM dev AS mutation
+USER root
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends procps=2:4.0.2-3 \
+ && rm -rf /var/lib/apt/lists/*
+USER 10001:10001
