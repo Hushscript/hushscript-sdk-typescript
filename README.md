@@ -10,6 +10,20 @@ test and release automation. The client itself is not published yet, so there is
 Node 22 or newer, Bun 1.2 or newer, or Deno 2 or newer. The SDK is for server runtimes only: a token
 in a browser bundle is a leaked token.
 
+The package is ESM-first: `import { ... } from "@hushscript/sdk"`. On Node 22.12 and newer,
+`require("@hushscript/sdk")` also works, because Node can `require()` an ES module (the `default`
+export condition points at the same ESM build). TypeScript consumers need TypeScript 5.5 or newer;
+`just build` type-checks the packed declarations with exactly 5.5 in a container.
+
+## Releases
+
+Releases come from release-please. The package is published to npm by `publish.yml` through npm
+trusted publishing (OIDC): no npm token is stored in GitHub. The very first publish of
+`@hushscript/sdk` cannot use a trusted publisher, because the package does not exist on the registry
+yet, so the owner publishes it once by hand (workspace plan, Task 19) and then attaches the trusted
+publisher (this repository, workflow `publish.yml`, environment `release`) in the package settings on
+npmjs.com. Every later release is published by the workflow with provenance.
+
 ## Development
 
 Everything runs in containers; nothing touches a host toolchain. You need Docker with Compose v2 and

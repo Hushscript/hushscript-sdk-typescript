@@ -17,8 +17,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     permissions:
-      contents: write # push the regen/spec branch
-      pull-requests: write # open or update the PR
+      contents: read # the push and the PR go through the App token below
     steps:
       - name: Harden runner
         uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
@@ -85,19 +84,30 @@ jobs:
           echo "title=$title" >> "$GITHUB_OUTPUT"
       - name: Regenerate
         if: steps.fetch.outputs.changed == 'true'
-        run: just regen
+        run: just regen "$RUNNER_TEMP/openapi.new.json"
       - name: Check that only the spec and the generated files changed
         if: steps.fetch.outputs.changed == 'true'
         run: scripts/check-regen-diff.sh
       - name: Run just ci
         if: steps.fetch.outputs.changed == 'true'
         run: just ci
+      - name: Create the App token
+        id: app-token
+        if: steps.fetch.outputs.changed == 'true'
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ secrets.APP_ID }}
+          private-key: ${{ secrets.APP_PRIVATE_KEY }}
+          permission-contents: write # push the regen/spec branch
+          permission-pull-requests: write # open or update the PR
       - name: Open or update the pull request
         if: steps.fetch.outputs.changed == 'true'
         uses: peter-evans/create-pull-request@5f6978faf089d4d20b00c7766989d076bb2fc7f1 # v8.1.1
         with:
-          # A PR opened with the default token does not start ci.yml; the `just ci` step above is the gate.
-          token: ${{ github.token }}
+          # The App token makes ci.yml run on the PR, and sign-commits has the API sign the commit
+          # as the App (branch protection requires signed commits).
+          token: ${{ steps.app-token.outputs.token }}
+          sign-commits: true
           branch: regen/spec
           title: ${{ steps.oasdiff.outputs.title }}
           commit-message: ${{ steps.oasdiff.outputs.title }}

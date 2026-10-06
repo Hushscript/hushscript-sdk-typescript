@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import spec from "../openapi.json" with { type: "json" };
 import { ERROR_CATALOG } from "../src/generated/catalog";
+import { HINTS } from "../src/generated/hints";
 import { OPERATION_SCOPES } from "../src/generated/scopes";
 
 function declaresScope(operation: unknown): boolean {
@@ -24,5 +25,32 @@ describe("generated tables", () => {
         .map(([m]) => `${m.toUpperCase()} ${p}`),
     );
     expect(Object.keys(OPERATION_SCOPES).sort()).toEqual(declared.sort());
+  });
+  it("carries a hint for every slug of spec section 9.3", () => {
+    const slugs = [
+      "unauthorized",
+      "pat_scope_missing",
+      "insufficient_balance",
+      "rate_limited",
+      "too_many_active_jobs",
+      "agent_purchase_capped",
+      "agent_pack_locked",
+      "pat_purchase_requires_app",
+      "pat_purchase_requires_authentication",
+      "no_default_card",
+      "unsupported_media",
+      "duration_unreadable",
+      "duration_out_of_range",
+      "size_out_of_range",
+      "daily_limit",
+      "policy_version_stale",
+      "wrong_state",
+      "resume_file_mismatch",
+      "resume_file_required",
+      "config_invalid",
+    ];
+    expect(Object.keys(HINTS).sort()).toEqual([...slugs].sort());
+    expect(HINTS["resume_file_mismatch"]).toContain("not the file the upload started with");
+    expect(HINTS["resume_file_required"]).toContain("Pass the original file to resume it");
   });
 });

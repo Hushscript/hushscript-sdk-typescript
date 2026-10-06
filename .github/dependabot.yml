@@ -6,6 +6,9 @@ updates:
       interval: weekly
     cooldown:
       default-days: 7
+    ignore:
+      # The consumer TypeScript floor stays put until the owner moves it on purpose.
+      - dependency-name: typescript-floor
     commit-message:
       prefix: chore
       include: scope
