@@ -5,11 +5,24 @@ import type { paths } from "./generated/schema";
 import { hardenedFetch } from "./http/fetch.ts";
 import { retryClassForRequest } from "./http/operations.ts";
 import { REDACTED } from "./redact.ts";
+import {
+  Pipeline,
+  type Job,
+  type JobWaitOptions,
+  type ResumeOptions,
+  type ResumeToken,
+  type TranscribeOptions,
+  type Transcript,
+} from "./transcribe/index.ts";
+import type { FileInput } from "./transcribe/source.ts";
 
 export class Hushscript {
   /** Every `/v1` operation, typed from the OpenAPI document, with the SDK's retries, timeouts and redaction. */
   readonly api: Client<paths>;
+  /** Job helpers; `wait` polls until the job is done or failed. */
+  readonly jobs: { wait(id: string, options?: JobWaitOptions): Promise<Job> };
   readonly #config: ResolvedConfig;
+  readonly #pipeline: Pipeline;
 
   constructor(options: HushscriptOptions = {}) {
     const config = resolveConfig(options);
@@ -29,6 +42,20 @@ export class Hushscript {
         request.headers.set("user-agent", config.userAgent);
       },
     });
+    this.#pipeline = new Pipeline(config, this.api);
+    this.jobs = {
+      wait: (id, options) => this.#pipeline.waitForJob(id, options),
+    };
+  }
+
+  /** Uploads `file`, waits for the transcript and returns it (spec 6.1). */
+  transcribe(file: FileInput, options?: TranscribeOptions): Promise<Transcript> {
+    return this.#pipeline.transcribe(file, options);
+  }
+
+  /** Finishes a transcription from the token an `AbortError`, `WaitTimeoutError` or `onResumeToken` gave. */
+  resume(token: ResumeToken, file?: FileInput, options?: ResumeOptions): Promise<Transcript> {
+    return this.#pipeline.resume(token, file, options);
   }
 
   toJSON(): Record<string, unknown> {

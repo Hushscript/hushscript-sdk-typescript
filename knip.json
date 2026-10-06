@@ -9,7 +9,6 @@
     "test/**/*.ts"
   ],
   "ignoreDependencies": [
-    "music-metadata",
     "openapi-typescript",
     "prettier",
     "publint",

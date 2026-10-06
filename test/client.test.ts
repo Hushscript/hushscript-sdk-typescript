@@ -184,7 +184,7 @@ describe("hs.api", () => {
 describe("the client object", () => {
   it("exposes api and nothing that holds the token", () => {
     const hs = client();
-    expect(Object.keys(hs)).toEqual(["api"]);
+    expect(Object.keys(hs)).toEqual(["api", "jobs"]);
     expect(JSON.stringify(hs)).not.toContain(TOKEN.slice(12));
   });
 });
