@@ -11,30 +11,30 @@ file from this repository byte for byte.
 
 ## Files
 
-| File | Copy or adapt | What changes per language |
-|---|---|---|
-| `LICENSE`, `SECURITY.md` | copy | Nothing. |
-| `.github/CODEOWNERS` | copy | Nothing. The team handle is a placeholder until the org team exists. |
-| `.github/workflows/scorecard.yml`, `dependency-review.yml` | copy | Nothing. |
-| `.github/workflows/codeql.yml` | adapt | `languages:` and the `category` (`javascript-typescript`, `python`, `go`). PHP has no CodeQL job; see "PHP". |
-| `.github/workflows/ci.yml` | adapt | The matrix values (`node: ['22', '24']` becomes the language's floor and latest) and the env name passed to `just ci`. |
-| `.github/workflows/nightly.yml` | adapt | Recipe names stay. Drop the `fuzz` job for PHP. Python uses `FC_RUNS_FACTOR` equivalents (Hypothesis `max_examples` profile), Go runs native fuzz targets for 60 s each. |
-| `.github/workflows/regenerate.yml` | adapt | Nothing for the control flow. `just regen` is the generator step. Egress list gains the language's registry hosts. |
-| `.github/workflows/release.yml` | adapt | `release-type` in the workflow input and in `release-please-config.json` (`node`, `python`, `go`, `php`). |
-| `.github/workflows/publish.yml` | adapt | The registry steps; see "Publish". |
-| `.github/dependabot.yml` | adapt | The language ecosystem (`npm`, `pip` or `uv`, `gomod`, `composer`); keep `docker` on `/docker` and `github-actions`. Keep the 7-day cooldown and the `chore` commit prefix. |
-| `release-please-config.json`, `.release-please-manifest.json` | adapt | `release-type`, `package-name`. Keep `bump-minor-pre-major: true` (spec section 11: a breaking regen PR bumps the minor in 0.x). Manifest starts at `0.0.0`; the first `feat:` release becomes `0.1.0`. |
-| `docker/dev.Dockerfile` | adapt | The `base` image, the `deps` install command, the version stages and the `proddeps` stage; see "Dockerfile". |
-| `docker/typos.Dockerfile` | copy | Nothing. |
-| `compose.yaml` | adapt | Service commands, the `x-scratch` tmpfs list, the `regen` bind mounts. Structure, hardening and the `mock` service are copied. |
-| `justfile` | adapt | Recipe bodies for `test`, `mutation`, `lint`, `build`, `regen`; the image table. Recipe names and arguments are fixed by spec 13.1. |
-| `.hadolint.yaml`, `zizmor.yml`, `_typos.toml`, `.gitleaks.toml` | copy | `_typos.toml` and `.gitleaks.toml` paths follow the repo layout. |
-| `.dockerignore`, `.gitignore`, `.prettierignore` | adapt | Language build output and caches. |
-| `scripts/generate.*` | adapt | The generator. Writes the spec to `openapi.json` byte for byte, then the language's low-level layer, then the three tables. |
-| `scripts/check-regen-diff.sh` | copy | Nothing. Fails unless only `openapi.json` and the generated directory changed. |
-| `openapi.json` | copy | Identical in every repo (the committed spec). |
-| `README.md` | adapt | Stub per language; no em-dashes. |
-| Static-analysis configs | adapt | Per the language column of spec 13.2: `eslint.config.js`, `.prettierrc`, `knip.json`, `stryker.config.json`, `tsconfig*.json` here. |
+| File                                                            | Copy or adapt | What changes per language                                                                                                                                                                               |
+| --------------------------------------------------------------- | ------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `LICENSE`, `SECURITY.md`                                        | copy          | Nothing.                                                                                                                                                                                                |
+| `.github/CODEOWNERS`                                            | copy          | Nothing. The team handle is a placeholder until the org team exists.                                                                                                                                    |
+| `.github/workflows/scorecard.yml`, `dependency-review.yml`      | copy          | Nothing.                                                                                                                                                                                                |
+| `.github/workflows/codeql.yml`                                  | adapt         | `languages:` and the `category` (`javascript-typescript`, `python`, `go`). PHP has no CodeQL job; see "PHP".                                                                                            |
+| `.github/workflows/ci.yml`                                      | adapt         | The matrix values (`node: ['22', '24']` becomes the language's floor and latest) and the env name passed to `just ci`.                                                                                  |
+| `.github/workflows/nightly.yml`                                 | adapt         | Recipe names stay. Drop the `fuzz` job for PHP. Python uses `FC_RUNS_FACTOR` equivalents (Hypothesis `max_examples` profile), Go runs native fuzz targets for 60 s each.                                |
+| `.github/workflows/regenerate.yml`                              | adapt         | Nothing for the control flow. `just regen` is the generator step. Egress list gains the language's registry hosts.                                                                                      |
+| `.github/workflows/release.yml`                                 | adapt         | `release-type` in the workflow input and in `release-please-config.json` (`node`, `python`, `go`, `php`).                                                                                               |
+| `.github/workflows/publish.yml`                                 | adapt         | The registry steps; see "Publish".                                                                                                                                                                      |
+| `.github/dependabot.yml`                                        | adapt         | The language ecosystem (`npm`, `pip` or `uv`, `gomod`, `composer`); keep `docker` on `/docker` and `github-actions`. Keep the 7-day cooldown and the `chore` commit prefix.                             |
+| `release-please-config.json`, `.release-please-manifest.json`   | adapt         | `release-type`, `package-name`. Keep `bump-minor-pre-major: true` (spec section 11: a breaking regen PR bumps the minor in 0.x). Manifest starts at `0.0.0`; the first `feat:` release becomes `0.1.0`. |
+| `docker/dev.Dockerfile`                                         | adapt         | The `base` image, the `deps` install command, the version stages and the `proddeps` stage; see "Dockerfile".                                                                                            |
+| `docker/typos.Dockerfile`                                       | copy          | Nothing.                                                                                                                                                                                                |
+| `compose.yaml`                                                  | adapt         | Service commands, the `x-scratch` tmpfs list, the `regen` bind mounts. Structure, hardening and the `mock` service are copied.                                                                          |
+| `justfile`                                                      | adapt         | Recipe bodies for `test`, `mutation`, `lint`, `build`, `regen`; the image table. Recipe names and arguments are fixed by spec 13.1.                                                                     |
+| `.hadolint.yaml`, `zizmor.yml`, `_typos.toml`, `.gitleaks.toml` | copy          | `_typos.toml` and `.gitleaks.toml` paths follow the repo layout.                                                                                                                                        |
+| `.dockerignore`, `.gitignore`, `.prettierignore`                | adapt         | Language build output and caches.                                                                                                                                                                       |
+| `scripts/generate.*`                                            | adapt         | The generator. Writes the spec to `openapi.json` byte for byte, then the language's low-level layer, then the three tables.                                                                             |
+| `scripts/check-regen-diff.sh`                                   | copy          | Nothing. Fails unless only `openapi.json` and the generated directory changed.                                                                                                                          |
+| `openapi.json`                                                  | copy          | Identical in every repo (the committed spec).                                                                                                                                                           |
+| `README.md`                                                     | adapt         | Stub per language; no em-dashes.                                                                                                                                                                        |
+| Static-analysis configs                                         | adapt         | Per the language column of spec 13.2: `eslint.config.js`, `.prettierrc`, `knip.json`, `stryker.config.json`, `tsconfig*.json` here.                                                                     |
 
 ## Container model
 
@@ -148,7 +148,7 @@ The gates are in `just lint` and `just test`. Values for the other languages are
 - vitest with v8 coverage: `include: ["src/**/*.ts"]`, `exclude: ["src/generated/**"]`, thresholds
   `lines: 90`, `branches: 85`, `maxWorkers: 4`. The report goes to `os.tmpdir()` because the root
   filesystem is read-only. `test/setup.ts` sets the global `fast-check` run count to `100 *
-  FC_RUNS_FACTOR`; the nightly job sets the factor to 10.
+FC_RUNS_FACTOR`; the nightly job sets the factor to 10.
 - Package checks in `just build`: `npm pack --dry-run`, `publint` and `attw --profile esm-only` on the
   real tarball, then an import of the tarball in clean Node (the matrix version), Bun and Deno
   containers.
@@ -161,7 +161,7 @@ The gates are in `just lint` and `just test`. Values for the other languages are
 Two tool quirks worth knowing:
 
 - `tsup` bundles its own config next to the config file, which fails on a read-only root. `just
-  build` copies `tsup.config.ts` to `/tmp` and passes `--config`. Likewise `vitest` needs a tmpfs at
+build` copies `tsup.config.ts` to `/tmp` and passes `--config`. Likewise `vitest` needs a tmpfs at
   `node_modules/.vite-temp`.
 - `tsup`'s declaration build sets `baseUrl`, which TypeScript 6 deprecates: the config passes
   `dts.compilerOptions.ignoreDeprecations: "6.0"`. `openapi-typescript` peers on TypeScript 5, so
@@ -176,7 +176,7 @@ Every repository's generator (`scripts/generate.*`, run only by `just regen`):
    reserialize it: JSON libraries reorder numeric keys and make the regen diff unreadable.
 3. Generates the language's low-level layer (spec section 5) into the generated directory.
 4. Emits the error catalog (slug to code, status and meaning), the operation scope map (`"GET
-   /v1/account"` to scope) and the hints table (slug to text, from the conformance `hints.json`).
+/v1/account"` to scope) and the hints table (slug to text, from the conformance `hints.json`).
    Duplicate slugs, non-integer codes and empty strings fail the run.
 5. Is idempotent: running it twice leaves `git status` clean. Tests re-emit the tables from the
    committed `openapi.json` and compare them with the committed files, so drift fails `just test`.
@@ -191,16 +191,16 @@ Every workflow starts with `permissions: {}` and grants each job the minimum. Ev
 sets `persist-credentials: false`. Every Action is pinned by full commit SHA with the version in a
 comment, and every concurrency block sets `cancel-in-progress: true` (zizmor pedantic).
 
-| Workflow | Trigger | Job permissions |
-|---|---|---|
-| `ci.yml` | PR, push to `main` | `contents: read` |
-| `nightly.yml` | schedule only | `contents: read` (smoke runs in environment `smoke`) |
-| `regenerate.yml` | daily cron, `workflow_dispatch` | `contents: write`, `pull-requests: write` |
-| `release.yml` | push to `main` | `contents: write`, `pull-requests: write` (release-please needs both) |
-| `publish.yml` | `release: published` | `contents: read`, `id-token: write`, `attestations: write` (environment `release`) |
-| `codeql.yml` | PR, push, weekly | `contents: read`, `security-events: write` |
-| `scorecard.yml` | weekly, push, branch protection | `contents: read`, `actions: read`, `security-events: write`, `id-token: write` |
-| `dependency-review.yml` | PR | `contents: read` |
+| Workflow                | Trigger                         | Job permissions                                                                    |
+| ----------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
+| `ci.yml`                | PR, push to `main`              | `contents: read`                                                                   |
+| `nightly.yml`           | schedule only                   | `contents: read` (smoke runs in environment `smoke`)                               |
+| `regenerate.yml`        | daily cron, `workflow_dispatch` | `contents: write`, `pull-requests: write`                                          |
+| `release.yml`           | push to `main`                  | `contents: write`, `pull-requests: write` (release-please needs both)              |
+| `publish.yml`           | `release: published`            | `contents: read`, `id-token: write`, `attestations: write` (environment `release`) |
+| `codeql.yml`            | PR, push, weekly                | `contents: read`, `security-events: write`                                         |
+| `scorecard.yml`         | weekly, push, branch protection | `contents: read`, `actions: read`, `security-events: write`, `id-token: write`     |
+| `dependency-review.yml` | PR                              | `contents: read`                                                                   |
 
 `regenerate.yml` flow: fetch the spec with `curl` and compare it with `openapi.json` after `jq -S`
 normalization (stop if equal); run `oasdiff breaking --fail-on ERR` in the pinned image (exit 0 means
@@ -217,7 +217,7 @@ publishes that same tarball. Language-specific parts:
 
 - TypeScript: `actions/setup-node` with `registry-url`, `npm ci --ignore-scripts`, `npm run build`,
   `npm pack`, `npm sbom --sbom-format cyclonedx`, `npm publish "$TARBALL" --provenance --access
-  public`, `NODE_AUTH_TOKEN` from the `NPM_TOKEN` secret of environment `release`.
+public`, `NODE_AUTH_TOKEN` from the `NPM_TOKEN` secret of environment `release`.
 - Python: build sdist and wheel in the pinned Python container, `twine check`, publish with PyPI
   trusted publishing (`pypa/gh-action-pypi-publish`, `id-token: write`, no token), attestations on.
   SBOM from `cyclonedx-py`.
@@ -234,19 +234,19 @@ the first release.
 
 Reuse these SHAs; refresh them with Dependabot.
 
-| Action | SHA | Version |
-|---|---|---|
-| `actions/checkout` | `3d3c42e5aac5ba805825da76410c181273ba90b1` | v7.0.1 |
-| `actions/setup-node` | `820762786026740c76f36085b0efc47a31fe5020` | v7.0.0 |
-| `actions/upload-artifact` | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | v7.0.1 |
-| `actions/attest-build-provenance` | `4d101475d8b20a2381f78447822ac1eab6504dd8` | v4.2.2 |
-| `actions/dependency-review-action` | `a1d282b36b6f3519aa1f3fc636f609c47dddb294` | v5.0.0 |
-| `step-security/harden-runner` | `351661ca32ac09a36dc5ee2d536e3128f2a3c8ed` | v2.22.0 |
-| `extractions/setup-just` | `53165ef7e734c5c07cb06b3c8e7b647c5aa16db3` | v4.0.0 |
-| `github/codeql-action` | `2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2` | v4.38.2 |
-| `ossf/scorecard-action` | `2d1146689b8cda280b9bc96326124645441f03bc` | v2.4.4 |
-| `googleapis/release-please-action` | `45996ed1f6d02564a971a2fa1b5860e934307cf7` | v5.0.0 |
-| `peter-evans/create-pull-request` | `5f6978faf089d4d20b00c7766989d076bb2fc7f1` | v8.1.1 |
+| Action                             | SHA                                        | Version |
+| ---------------------------------- | ------------------------------------------ | ------- |
+| `actions/checkout`                 | `3d3c42e5aac5ba805825da76410c181273ba90b1` | v7.0.1  |
+| `actions/setup-node`               | `820762786026740c76f36085b0efc47a31fe5020` | v7.0.0  |
+| `actions/upload-artifact`          | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | v7.0.1  |
+| `actions/attest-build-provenance`  | `4d101475d8b20a2381f78447822ac1eab6504dd8` | v4.2.2  |
+| `actions/dependency-review-action` | `a1d282b36b6f3519aa1f3fc636f609c47dddb294` | v5.0.0  |
+| `step-security/harden-runner`      | `351661ca32ac09a36dc5ee2d536e3128f2a3c8ed` | v2.22.0 |
+| `extractions/setup-just`           | `53165ef7e734c5c07cb06b3c8e7b647c5aa16db3` | v4.0.0  |
+| `github/codeql-action`             | `2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2` | v4.38.2 |
+| `ossf/scorecard-action`            | `2d1146689b8cda280b9bc96326124645441f03bc` | v2.4.4  |
+| `googleapis/release-please-action` | `45996ed1f6d02564a971a2fa1b5860e934307cf7` | v5.0.0  |
+| `peter-evans/create-pull-request`  | `5f6978faf089d4d20b00c7766989d076bb2fc7f1` | v8.1.1  |
 
 Tool images are listed with their digests at the top of this repository's `justfile` and in
 `.github/workflows/regenerate.yml` (oasdiff).
