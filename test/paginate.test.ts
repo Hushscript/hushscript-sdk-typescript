@@ -1,5 +1,6 @@
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import { AbortError, HushscriptError } from "../src/errors";
 import { paginate, type Page } from "../src/paginate";
 
 function rows(total: number, size: number): (cursor: string | null) => Promise<Page<number>> {
@@ -79,5 +80,65 @@ describe("paginate", () => {
       })(),
     ).rejects.toThrow("boom");
     expect(seen).toEqual([0, 1, 2, 3, 4]);
+  });
+
+  it("raises pagination_loop when a page hands back the cursor it was sent", async () => {
+    const sent: (string | null)[] = [];
+    const seen: number[] = [];
+    const looping = paginate((cursor) => {
+      sent.push(cursor);
+      return Promise.resolve({ items: [sent.length], nextCursor: "same" });
+    });
+    const error = await (async () => {
+      for await (const item of looping) seen.push(item);
+    })().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).toMatchObject({ code: "pagination_loop" });
+    // The first page's "same" is new; the second page repeats it, so the walk ends after two requests.
+    expect(sent).toEqual([null, "same"]);
+    expect(seen).toEqual([1, 2]);
+  });
+
+  it("continues past an empty page that carries a new cursor", async () => {
+    const seen = await drain(
+      paginate((cursor) =>
+        Promise.resolve(
+          cursor === null ? { items: [], nextCursor: "c1" } : { items: [7], nextCursor: null },
+        ),
+      ),
+    );
+    expect(seen).toEqual([7]);
+  });
+
+  it("stops between pages and between items once the signal aborts", async () => {
+    const stop = new AbortController();
+    const fetchPage = rows(10, 5);
+    let calls = 0;
+    const walk = paginate((cursor) => {
+      calls += 1;
+      return fetchPage(cursor);
+    }, stop.signal);
+    const seen: number[] = [];
+    const error = await (async () => {
+      for await (const item of walk) {
+        seen.push(item);
+        if (item === 1) stop.abort();
+      }
+    })().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AbortError);
+    expect(seen).toEqual([0, 1]);
+    expect(calls).toBe(1);
+  });
+
+  it("does not fetch at all when the signal is already aborted", async () => {
+    const stop = new AbortController();
+    stop.abort();
+    let calls = 0;
+    const walk = paginate(() => {
+      calls += 1;
+      return Promise.resolve({ items: [1], nextCursor: null });
+    }, stop.signal);
+    await expect(drain(walk)).rejects.toBeInstanceOf(AbortError);
+    expect(calls).toBe(0);
   });
 });

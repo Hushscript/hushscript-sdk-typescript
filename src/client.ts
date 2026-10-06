@@ -6,7 +6,13 @@ import { hardenedFetch } from "./http/fetch.ts";
 import { retryClassForRequest } from "./http/operations.ts";
 import { REDACTED } from "./redact.ts";
 import { JobsResource } from "./resources/jobs.ts";
-import { readAccount, toBalance, type Account, type Balance } from "./resources/account.ts";
+import {
+  readAccount,
+  toAccount,
+  toBalance,
+  type Account,
+  type Balance,
+} from "./resources/account.ts";
 import { TranscriptsResource } from "./resources/transcripts.ts";
 import {
   Pipeline,
@@ -70,9 +76,9 @@ export class Hushscript {
     return toBalance(await readAccount(this.api));
   }
 
-  /** The full `GET /v1/account` body: balance, limits, `card_on_file` and `data_region`. */
-  account(): Promise<Account> {
-    return readAccount(this.api);
+  /** The account in camelCase: balance, holds, expiry, limits, `cardOnFile` and `dataRegion` (spec 6.3). */
+  async account(): Promise<Account> {
+    return toAccount(await readAccount(this.api));
   }
 
   toJSON(): Record<string, unknown> {

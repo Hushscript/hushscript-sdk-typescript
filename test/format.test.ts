@@ -2,7 +2,7 @@ import { readFile, readdir } from "node:fs/promises";
 import { join } from "node:path";
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
-import { GOLDEN_COUNT, goldens, renderGolden } from "../conformance/goldens";
+import { TRANSCRIPTS, goldens, renderGolden } from "../conformance/goldens";
 import { MAX_CHARS_PER_LINE, MAX_CUE_MS, segmentCaptions } from "../src/format/captions";
 import type { components } from "../src/generated/schema";
 import { Transcript, type Utterance } from "../src/transcript";
@@ -16,11 +16,16 @@ const rawFetch = globalThis.fetch;
 const dir = process.env["CONFORMANCE_DIR"];
 const fromDisk = dir !== undefined && dir !== "";
 
-async function fixture(path: string): Promise<string> {
-  if (fromDisk) return readFile(join(dir, "fixtures", path), "utf8");
-  const response = await rawFetch(`${BASE}/__files/fixtures/${path}`);
+/** A file of the conformance repo, by its path from the repo root. */
+async function conformanceFile(path: string): Promise<string> {
+  if (fromDisk) return readFile(join(dir, path), "utf8");
+  const response = await rawFetch(`${BASE}/__files/${path}`);
   if (!response.ok) throw new Error(`the mock answered ${String(response.status)} for ${path}`);
   return response.text();
+}
+
+function fixture(path: string): Promise<string> {
+  return conformanceFile(`fixtures/${path}`);
 }
 
 const bodies = new Map<string, Promise<Body>>();
@@ -34,12 +39,22 @@ function transcriptBody(name: string): Promise<Body> {
 }
 
 describe("golden exports", () => {
-  it(`lists exactly the ${String(GOLDEN_COUNT)} goldens the suite ships`, async () => {
+  it("lists exactly the goldens and transcripts the suite ships", async () => {
     const names = goldens().map((g) => g.file);
-    expect(names).toHaveLength(GOLDEN_COUNT);
-    expect(new Set(names).size).toBe(GOLDEN_COUNT);
+    expect(new Set(names).size).toBe(names.length);
+    // The mock cannot list a directory, so its own `format-goldens` scenario is the source for the
+    // count: a golden added or dropped upstream changes it and fails here until the list follows.
+    const scenario = JSON.parse(await conformanceFile("scenarios/format-goldens.json")) as {
+      expect: { result: { checked: number } };
+    };
+    expect(names).toHaveLength(scenario.expect.result.checked);
     if (fromDisk) {
       expect([...names].sort()).toEqual((await readdir(join(dir, "fixtures", "exports"))).sort());
+      expect(
+        (await readdir(join(dir, "fixtures", "transcripts")))
+          .map((f) => f.replace(/\.json$/, ""))
+          .sort(),
+      ).toEqual([...TRANSCRIPTS].sort());
     }
   });
 
@@ -277,6 +292,14 @@ describe("caption segmentation", () => {
         }
       }),
     );
+  });
+
+  it("counts line length in UTF-16 units: 21 astral emoji fill a line, so the next word wraps", () => {
+    const emoji = "\u{1F600}".repeat(21);
+    expect(emoji).toHaveLength(42);
+    const cues = segmentCaptions([utterance({ text: `${emoji} ok` })]);
+    expect(cues).toHaveLength(1);
+    expect(cues[0]?.text).toBe(`${emoji}\nok`);
   });
 
   it("does not count the speaker prefix toward the 42 characters", () => {

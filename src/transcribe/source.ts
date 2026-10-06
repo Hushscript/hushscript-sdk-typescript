@@ -18,8 +18,8 @@ export interface Source {
   readonly probeInput: ProbeInput | null;
   /** A stream is read once, in order, one part at a time. */
   readonly sequential: boolean;
-  /** The first `length` bytes (fewer when the file is shorter), without consuming them. */
-  head(length: number): Promise<Uint8Array>;
+  /** The first `length` bytes (fewer when the file is shorter), without consuming them. `signal` stops a wait on a stream. */
+  head(length: number, signal?: AbortSignal): Promise<Uint8Array>;
   /** `signal` stops a wait on a stream that has stopped producing; the other inputs read at once. */
   read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array>;
   close(): Promise<void>;
@@ -200,8 +200,8 @@ class StreamSource implements Source {
     return out;
   }
 
-  async head(length: number): Promise<Uint8Array> {
-    await this.#fill(length);
+  async head(length: number, signal?: AbortSignal): Promise<Uint8Array> {
+    await this.#fill(length, signal);
     return this.#take(length, false);
   }
 

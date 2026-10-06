@@ -3,9 +3,7 @@
 import type { components } from "../src/generated/schema";
 import { Transcript } from "../src/transcript.ts";
 
-export const GOLDEN_COUNT = 72;
-
-const TRANSCRIPTS = [
+export const TRANSCRIPTS = [
   "escapes",
   "long-utterances",
   "multi-renamed",
@@ -46,7 +44,11 @@ export interface Golden {
   render: Render;
 }
 
-/** Every golden the suite ships, listed from the naming scheme (the mock serves files, not directories). */
+/**
+ * Every golden the suite ships, listed from the naming scheme (the mock serves files, not directories,
+ * so test/format.test.ts checks this list against the mock's `format-goldens` scenario count, or
+ * against the directory when CONFORMANCE_DIR is set).
+ */
 export function goldens(): Golden[] {
   const out: Golden[] = [];
   for (const transcript of TRANSCRIPTS) {

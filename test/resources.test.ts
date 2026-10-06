@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
-import { AuthenticationError, HushscriptError } from "../src/errors";
+import { AbortError, AuthenticationError, HushscriptError } from "../src/errors";
 import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, stubFetch } from "./helpers";
 
 afterEach(() => {
@@ -154,6 +154,37 @@ describe("hs.transcripts", () => {
     ]);
   });
 
+  it("keeps a deletion receipt opaque, with its snake_case keys and string timestamps, and lets an unknown cause through", async () => {
+    const receipt = {
+      type: "deletion",
+      version: 1,
+      created_at: "2026-09-07T14:53:35Z",
+      items: [{ kind: "transcript", deleted_at: "2026-09-07T14:53:35Z" }],
+    };
+    stubFetch([
+      {
+        status: 200,
+        body: {
+          deleted: [
+            {
+              id: "tr_r",
+              title: "R",
+              duration_seconds: 1,
+              created_at: 1,
+              deleted_at: 2,
+              cause: "legal_hold_release",
+              receipt,
+            },
+          ],
+          next_cursor: null,
+        },
+      },
+    ]);
+    const [record] = await drain(client().transcripts.deleted());
+    expect(record?.receipt).toEqual(receipt);
+    expect(record?.cause).toBe("legal_hold_release");
+  });
+
   it("raises the SDK's typed error for a refused call", async () => {
     stubFetch([{ status: 401, body: { error: "unauthorized", code: 2000 } }]);
     const error = await drain(client().transcripts.list()).catch((e: unknown) => e);
@@ -210,7 +241,7 @@ describe("hs.jobs", () => {
     expect(new URL(f.requests[0]?.url ?? "").search).toBe("");
   });
 
-  it("gets one job as camelCase fields", async () => {
+  it("gets one job as the spec 6.4 shape: camelCase fields and options, without private-result or fetch fields", async () => {
     stubFetch([
       {
         status: 200,
@@ -219,22 +250,115 @@ describe("hs.jobs", () => {
           failure_kind: "media_unreadable",
           transcript_id: null,
           retry_of: "j8",
+          private_result_expires_at: 1_760_000_500,
+          private_result_available: true,
+          fetched_bytes: 10,
+          fetch_total_bytes: 20,
+          options: {
+            language_code: "de",
+            speaker_detection: true,
+            medical_mode: false,
+            multichannel: false,
+            translation_targets: ["es", "fr"],
+            keyterms: true,
+            prompt: false,
+            auto_generate_insights: null,
+          },
         }),
       },
     ]);
     expect(await client().jobs.get("j9")).toEqual({
       id: "j9",
       state: "failed",
+      transcriptId: null,
+      error: "bad",
+      failureKind: "media_unreadable",
       mode: "standard",
       declaredSeconds: 21,
       verifiedSeconds: 20,
       actualSeconds: null,
       billableSeconds: 0,
-      error: "bad",
-      failureKind: "media_unreadable",
       retryOf: "j8",
       createdAt: new Date(1_760_000_000_000),
-      transcriptId: null,
+      options: {
+        languageCode: "de",
+        speakerDetection: true,
+        medicalMode: false,
+        multichannel: false,
+        translationTargets: ["es", "fr"],
+        keyterms: true,
+        prompt: false,
+        autoGenerateInsights: null,
+      },
+    });
+  });
+});
+
+describe("signal on lists", () => {
+  it("stops transcripts.list between pages and sends no further request", async () => {
+    const f = stubFetch([
+      { status: 200, body: { transcripts: [row(1), row(2)], next_cursor: "c1" } },
+      { status: 200, body: { transcripts: [row(3)], next_cursor: null } },
+    ]);
+    const stop = new AbortController();
+    const seen: string[] = [];
+    const error = await (async () => {
+      for await (const item of client().transcripts.list({ signal: stop.signal })) {
+        seen.push(item.id);
+        if (seen.length === 2) stop.abort();
+      }
+    })().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AbortError);
+    expect(seen).toEqual(["tr_1", "tr_2"]);
+    expect(f.calls).toBe(1);
+  });
+
+  it("passes the signal to the page request itself", async () => {
+    const stop = new AbortController();
+    const f = stubFetch([{ status: 200, body: { transcripts: [], next_cursor: null } }]);
+    await client().transcripts.page({ signal: stop.signal });
+    expect(f.requests).toHaveLength(1);
+    stop.abort();
+    await expect(client().transcripts.page({ signal: stop.signal })).rejects.toBeInstanceOf(
+      AbortError,
+    );
+    expect(f.calls).toBe(1);
+  });
+
+  it("stops deleted() and jobs.list() between pages", async () => {
+    const record = {
+      id: "d",
+      title: "t",
+      duration_seconds: 1,
+      created_at: 1,
+      deleted_at: 2,
+      cause: "manual",
+      receipt: null,
+    };
+    const stop = new AbortController();
+    const f = stubFetch([{ status: 200, body: { deleted: [record], next_cursor: "d1" } }]);
+    const deleted = client().transcripts.deleted({ signal: stop.signal })[Symbol.asyncIterator]();
+    await deleted.next();
+    stop.abort();
+    await expect(deleted.next()).rejects.toBeInstanceOf(AbortError);
+    expect(f.calls).toBe(1);
+
+    const stopJobs = new AbortController();
+    const g = stubFetch([{ status: 200, body: { jobs: [job("j1", "done")], next_cursor: "j1" } }]);
+    const jobs = client().jobs.list({ signal: stopJobs.signal })[Symbol.asyncIterator]();
+    await jobs.next();
+    stopJobs.abort();
+    await expect(jobs.next()).rejects.toBeInstanceOf(AbortError);
+    expect(g.calls).toBe(1);
+  });
+
+  it("raises pagination_loop through a real list when the API repeats a cursor", async () => {
+    stubFetch([
+      { status: 200, body: { transcripts: [row(1)], next_cursor: "c1" } },
+      { status: 200, body: { transcripts: [row(2)], next_cursor: "c1" } },
+    ]);
+    await expect(drain(client().transcripts.list())).rejects.toMatchObject({
+      code: "pagination_loop",
     });
   });
 });

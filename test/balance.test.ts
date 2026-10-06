@@ -74,9 +74,39 @@ describe("hs.balance", () => {
 });
 
 describe("hs.account", () => {
-  it("returns the full account body", async () => {
-    const body = account({ purchases_remaining_in_window: 3 });
-    stubFetch([{ status: 200, body }]);
-    expect(await client().account()).toEqual(body);
+  it("returns the camelCase account with Date expiry and camelCased limits", async () => {
+    stubFetch([
+      {
+        status: 200,
+        body: account({
+          credits_expire_at: 1_760_000_000,
+          purchases_remaining_in_window: 3,
+          limits: {
+            max_daily_seconds: 36_000,
+            max_active_jobs: 3,
+            active_jobs: 1,
+            used_today_seconds: 120,
+          },
+        }),
+      },
+    ]);
+    expect(await client().account()).toEqual({
+      balanceSeconds: 18_000,
+      heldSeconds: 600,
+      creditsExpireAt: new Date(1_760_000_000_000),
+      cardOnFile: true,
+      dataRegion: "eu",
+      limits: { maxDailySeconds: 36_000, maxActiveJobs: 3, activeJobs: 1, usedTodaySeconds: 120 },
+      purchasesRemainingInWindow: 3,
+    });
+  });
+
+  it("has a null expiry and null purchasesRemainingInWindow when the API sends neither", async () => {
+    stubFetch([{ status: 200, body: account() }]);
+    const result = await client().account();
+    expect(result.creditsExpireAt).toBeNull();
+    expect(result.purchasesRemainingInWindow).toBeNull();
+    expect(result.limits).toEqual({ maxDailySeconds: 36_000 });
+    expect(Object.keys(result).some((key) => key.includes("_"))).toBe(false);
   });
 });

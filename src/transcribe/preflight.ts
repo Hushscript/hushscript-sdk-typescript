@@ -80,7 +80,7 @@ export async function preflight(
   api: Client<paths>,
   signal: AbortSignal,
 ): Promise<number> {
-  if (sniff(await source.head(SNIFF_BYTES)) === null) {
+  if (sniff(await source.head(SNIFF_BYTES, signal)) === null) {
     throw new UnsupportedMediaError({
       code: "unsupported_media",
       message: "The file is not in a supported audio format.",

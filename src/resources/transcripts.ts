@@ -23,14 +23,17 @@ export interface DeletedTranscript {
   /** When the transcript was uploaded. */
   createdAt: Date;
   deletedAt: Date;
-  cause: "manual" | "scheduled" | "dormant" | "expired";
-  /** The stored deletion receipt as the API sends it, or null when it could not be read back. */
-  receipt: components["schemas"]["DeletedTranscript"]["receipt"];
+  /** A cause the SDK does not know yet passes through as the API's own string. */
+  cause: "manual" | "scheduled" | "dormant" | "expired" | (string & Record<never, never>);
+  /** The stored deletion receipt, opaque and as the API sends it (snake_case keys, string timestamps); null when it could not be read back. */
+  receipt: Record<string, unknown> | null;
 }
 
 export interface PageOptions {
   /** Rows per page; the API defaults to 50 and clamps at 100. */
   pageSize?: number | undefined;
+  /** Stops the request in flight and, for `list()`, the walk between pages. */
+  signal?: AbortSignal | undefined;
 }
 
 export interface PageRequest extends PageOptions {
@@ -40,6 +43,10 @@ export interface PageRequest extends PageOptions {
 
 function date(unixSeconds: number): Date {
   return new Date(unixSeconds * 1000);
+}
+
+function signalOf(signal: AbortSignal | undefined): { signal?: AbortSignal } {
+  return signal === undefined ? {} : { signal };
 }
 
 function query(options: PageRequest): { cursor?: string; limit?: number } {
@@ -88,13 +95,17 @@ export class TranscriptsResource {
   /** Every finished transcript, newest first, fetching pages as it goes. Jobs still running are in `jobs.list({ active: true })`. */
   list(options: PageOptions = {}): AsyncIterable<TranscriptSummary> {
     query(options);
-    return paginate((cursor) => this.page({ ...options, ...(cursor === null ? {} : { cursor }) }));
+    return paginate(
+      (cursor) => this.page({ ...options, ...(cursor === null ? {} : { cursor }) }),
+      options.signal,
+    );
   }
 
   /** One page of `list()`. */
   async page(options: PageRequest = {}): Promise<Page<TranscriptSummary>> {
     const { data } = await this.#api.GET("/v1/transcripts", {
       params: { query: query(options) },
+      ...signalOf(options.signal),
     });
     const body = present(data, "GET /v1/transcripts");
     return { items: body.transcripts.map(summaryOf), nextCursor: body.next_cursor };
@@ -106,13 +117,14 @@ export class TranscriptsResource {
   }
 
   /** Deletion records, by upload time, newest first. */
-  deleted(): AsyncIterable<DeletedTranscript> {
+  deleted(options: { signal?: AbortSignal | undefined } = {}): AsyncIterable<DeletedTranscript> {
     return paginate(async (cursor) => {
       const { data } = await this.#api.GET("/v1/transcripts/deleted", {
         params: { query: cursor === null ? {} : { cursor } },
+        ...signalOf(options.signal),
       });
       const body = present(data, "GET /v1/transcripts/deleted");
       return { items: body.deleted.map(deletedOf), nextCursor: body.next_cursor };
-    });
+    }, options.signal);
   }
 }

@@ -31,8 +31,8 @@ export { HINTS } from "./generated/hints.ts";
 export { OPERATION_SCOPES } from "./generated/scopes.ts";
 export type { components, operations, paths } from "./generated/schema";
 export type { Page } from "./paginate.ts";
-export type { Account, Balance } from "./resources/account.ts";
-export type { Job, JobState } from "./resources/jobs.ts";
+export type { Account, Balance, UploadLimits } from "./resources/account.ts";
+export type { Job, JobOptions, JobState } from "./resources/jobs.ts";
 export type {
   DeletedTranscript,
   PageOptions,
