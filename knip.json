@@ -1,6 +1,6 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["scripts/generate.mjs", "conformance/runner.ts", "smoke/smoke.ts"],
+  "entry": ["scripts/generate.mjs", "smoke/smoke.ts"],
   "project": [
     "src/**/*.ts",
     "scripts/**/*.mjs",
@@ -9,7 +9,6 @@
     "test/**/*.ts"
   ],
   "ignoreDependencies": [
-    "openapi-fetch",
     "music-metadata",
     "openapi-typescript",
     "prettier",

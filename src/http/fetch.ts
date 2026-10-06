@@ -1,0 +1,277 @@
+import type { ResolvedConfig } from "../config.ts";
+import {
+  AbortError,
+  NetworkError,
+  OutcomeUnknownError,
+  errorFromResponse,
+  type HushscriptError,
+} from "../errors.ts";
+import { describeTarget } from "../log.ts";
+import { operationFor } from "./operations.ts";
+import { parseRetryAfter, planRetry, type RetryClass } from "./retry.ts";
+
+const BODY_CHUNK_BYTES = 256 * 1024;
+// Failures that happen before a single byte of the request is written.
+const NEVER_SENT =
+  /^(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT|ERR_TLS_|ERR_SSL_|CERT_|DEPTH_ZERO_|UNABLE_TO_|SELF_SIGNED_)/;
+
+interface Failure {
+  error: unknown;
+  sent: boolean;
+  timedOut: boolean;
+}
+
+type Outcome = { kind: "response"; response: Response } | { kind: "failure"; failure: Failure };
+
+function errorCode(error: unknown): string | undefined {
+  let current: unknown = error;
+  for (let depth = 0; depth < 4 && current instanceof Error; depth += 1) {
+    const code = (current as { code?: unknown }).code;
+    if (typeof code === "string") return code;
+    current = current.cause;
+  }
+  return undefined;
+}
+
+/**
+ * The body as a stream that records when its last chunk was handed over. A network error before
+ * that point means the server cannot have received a complete request. The queue holds nothing
+ * (highWaterMark 0), so a chunk is produced only when the transport asks for it.
+ */
+/* eslint-disable n/no-unsupported-features/node-builtins -- stable in every Node 22 release we test; the rule's table lags */
+function bodyStream(bytes: Uint8Array, progress: { done: boolean }): ReadableStream<Uint8Array> {
+  let offset = 0;
+  return new ReadableStream<Uint8Array>(
+    {
+      pull(controller): void {
+        const end = Math.min(offset + BODY_CHUNK_BYTES, bytes.byteLength);
+        controller.enqueue(bytes.subarray(offset, end));
+        offset = end;
+        if (offset >= bytes.byteLength) {
+          progress.done = true;
+          controller.close();
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
+/* eslint-enable n/no-unsupported-features/node-builtins */
+
+const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
+
+/** Never resolves; rejects with the signal's reason once it aborts. */
+function whenAborted(signal: AbortSignal): Promise<never> {
+  return new Promise<never>((_resolve, reject) => {
+    if (signal.aborted) reject(signal.reason as Error);
+    else
+      signal.addEventListener(
+        "abort",
+        () => {
+          reject(signal.reason as Error);
+        },
+        { once: true },
+      );
+  });
+}
+
+function parseBody(text: string): unknown {
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return text;
+  }
+}
+
+function slugOf(body: unknown): string | null {
+  if (typeof body !== "object" || body === null) return null;
+  const slug = (body as { error?: unknown }).error;
+  return typeof slug === "string" ? slug : null;
+}
+
+// A function call, so the compiler does not carry an earlier `signal.aborted` check into the loop.
+function isAborted(signal: AbortSignal): boolean {
+  return signal.aborted;
+}
+
+function aborted(signal: AbortSignal): AbortError {
+  return new AbortError({ message: "The request was aborted.", cause: signal.reason });
+}
+
+async function pause(cfg: ResolvedConfig, ms: number, signal: AbortSignal): Promise<void> {
+  try {
+    await cfg.clock.sleep(ms, signal);
+  } catch (error) {
+    if (signal.aborted) throw aborted(signal);
+    throw error;
+  }
+}
+
+async function attempt(
+  timeoutMs: number,
+  cfg: ResolvedConfig,
+  request: {
+    url: string;
+    method: string;
+    headers: Headers;
+    bytes: Uint8Array | null;
+    redirect: NonNullable<RequestInit["redirect"]>;
+  },
+  callerSignal: AbortSignal,
+): Promise<Outcome> {
+  const controller = new AbortController();
+  const stopTimer = new AbortController();
+  const onCallerAbort = (): void => {
+    controller.abort(callerSignal.reason);
+  };
+  callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+  let timedOut = false;
+  // The timeout runs on the injected clock, so a virtual clock can fire it.
+  cfg.clock.sleep(timeoutMs, stopTimer.signal).then(
+    () => {
+      timedOut = true;
+      controller.abort(new Error("timeout"));
+    },
+    () => undefined,
+  );
+  const progress = { done: request.bytes === null };
+  let headersArrived = false;
+  try {
+    const response = await globalThis.fetch(request.url, {
+      method: request.method,
+      headers: request.headers,
+      body: request.bytes === null ? null : bodyStream(request.bytes, progress),
+      duplex: "half",
+      redirect: request.redirect,
+      signal: controller.signal,
+    });
+    headersArrived = true;
+    // The body is read here, while the timeout and the abort are still armed: a body that stalls
+    // or breaks is a failed attempt, not something the caller finds out about later.
+    const bytes = NULL_BODY_STATUSES.has(response.status)
+      ? null
+      : await Promise.race([response.arrayBuffer(), whenAborted(controller.signal)]);
+    return {
+      kind: "response",
+      response: new Response(bytes, {
+        status: response.status,
+        statusText: response.statusText,
+        headers: response.headers,
+      }),
+    };
+  } catch (error) {
+    const connectPhase = NEVER_SENT.test(errorCode(error) ?? "");
+    const sent = headersArrived || (!connectPhase && progress.done);
+    return { kind: "failure", failure: { error, sent, timedOut } };
+  } finally {
+    stopTimer.abort();
+    callerSignal.removeEventListener("abort", onCallerAbort);
+  }
+}
+
+function terminalFailure(
+  timeoutMs: number,
+  retryClass: RetryClass,
+  operation: string,
+  failure: Failure,
+): HushscriptError {
+  const code = errorCode(failure.error);
+  const reason = failure.timedOut
+    ? `The request timed out after ${String(timeoutMs / 1000)} s.`
+    : `The request failed before a response arrived${code === undefined ? "" : ` (${code})`}.`;
+  if (retryClass === "never" && failure.sent) {
+    return new OutcomeUnknownError({
+      message: `${reason} The request was sent, so its outcome is unknown.`,
+      hint: OutcomeUnknownError.hintFor(operation),
+      cause: failure.error,
+    });
+  }
+  return new NetworkError({ message: reason, cause: failure.error });
+}
+
+/**
+ * `fetch` with the spec's hardening: per-request timeout, retries by class (spec 7.2), pacing of
+ * upload creates (7.5), typed errors for non-2xx answers, redacted debug lines (10). It adds no
+ * credentials: direct-to-storage part PUTs must not carry an Authorization header.
+ */
+export function hardenedFetch(
+  cfg: ResolvedConfig,
+  retryClass: RetryClass,
+  options: { timeoutMs?: number } = {},
+): typeof fetch {
+  const timeoutMs = options.timeoutMs ?? cfg.timeoutMs;
+  return async (input, init) => {
+    const request = new Request(input, init);
+    const url = new URL(request.url);
+    const method = request.method.toUpperCase();
+    const operation = operationFor(method, url.pathname);
+    const target = describeTarget(url, new URL(cfg.baseUrl).origin);
+    const signal = request.signal;
+    const buffer = request.body === null ? null : new Uint8Array(await request.arrayBuffer());
+    const bytes = buffer !== null && buffer.byteLength > 0 ? buffer : null;
+    const headers = new Headers(request.headers);
+    if (bytes !== null) headers.set("content-length", String(bytes.byteLength));
+    const prepared = { url: request.url, method, headers, bytes, redirect: request.redirect };
+
+    for (let retriesDone = 0; ; retriesDone += 1) {
+      if (signal.aborted) throw aborted(signal);
+      if (retryClass === "upload-create")
+        await cfg.createPacer.acquire(signal).catch(() => {
+          throw aborted(signal);
+        });
+      const startedAt = cfg.clock.now();
+      const outcome = await attempt(timeoutMs, cfg, prepared, signal);
+      const durationMs = cfg.clock.now() - startedAt;
+      const log = (status: number | string, retryDelayMs: number | null): void => {
+        cfg.logger.attempt({
+          method,
+          target,
+          status,
+          attempt: retriesDone + 1,
+          durationMs,
+          retryDelayMs,
+        });
+      };
+
+      if (outcome.kind === "response") {
+        const response = outcome.response;
+        if (response.ok) {
+          log(response.status, null);
+          return response;
+        }
+        const body = parseBody(await response.text().catch(() => ""));
+        const plan = planRetry({
+          retryClass,
+          status: response.status,
+          sent: true,
+          slug: slugOf(body),
+          retryAfter: parseRetryAfter(response.headers.get("retry-after")),
+          retriesDone,
+          maxRetries: cfg.maxRetries,
+          random: cfg.random,
+        });
+        log(response.status, plan.retry ? plan.delayMs : null);
+        if (!plan.retry) throw errorFromResponse(response, body, operation);
+        await pause(cfg, plan.delayMs, signal);
+        continue;
+      }
+
+      const failure = outcome.failure;
+      if (isAborted(signal)) throw aborted(signal);
+      const plan = planRetry({
+        retryClass,
+        status: null,
+        sent: failure.sent,
+        slug: null,
+        retryAfter: null,
+        retriesDone,
+        maxRetries: cfg.maxRetries,
+        random: cfg.random,
+      });
+      log(failure.timedOut ? "timeout" : "network_error", plan.retry ? plan.delayMs : null);
+      if (!plan.retry) throw terminalFailure(timeoutMs, retryClass, operation, failure);
+      await pause(cfg, plan.delayMs, signal);
+    }
+  };
+}

@@ -37,7 +37,8 @@
     "conformanceRef": "v0.1.0"
   },
   "scripts": {
-    "build": "tsup"
+    "build": "tsup",
+    "conformance": "node --disable-warning=ExperimentalWarning conformance/runner.ts"
   },
   "dependencies": {
     "music-metadata": "12.0.0",
