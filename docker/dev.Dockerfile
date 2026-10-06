@@ -3,6 +3,8 @@ ARG NODE_VERSION=22
 FROM node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392 AS node22
 FROM node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20 AS node24
 
+# node22 and node24 above are the digest-pinned images; the build arg only selects one.
+# hadolint ignore=DL3006
 FROM node${NODE_VERSION} AS base
 RUN groupadd --gid 10001 dev && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin dev
 ENV HOME=/tmp
