@@ -55,14 +55,20 @@ Everything runs in containers (spec 13.1). The facts the compose file relies on:
   equivalent for the language's tools by running `just test` and reading the EROFS errors. Prefer a
   tool setting that points the output at `/tmp` over a new mount (the coverage report does this).
 - `regen` runs as the host user (`HOST_UID`/`HOST_GID`, exported by the justfile) and bind-mounts
-  `./openapi.json` and the generated directory read-write. Nothing else is writable.
+  `./openapi.json` and the generated directory read-write. Nothing else is writable. When `just regen`
+  gets a path to an existing file, the recipe bind-mounts that file read-only at `/spec/openapi.json`
+  and passes that path to the generator, so `regenerate.yml` generates from the exact bytes it diffed.
 - Long commands carry their own limit inside the container (`timeout 1800 ...`). A host-side
   `timeout` only kills the client.
 - Every recipe that starts compose installs `trap 'docker compose down --remove-orphans' EXIT`, so the
   mock never outlives the recipe. After a run, `docker ps -q --filter label=sdk.test` must be empty.
 - Host code never runs tools. The only host-side commands in CI are `just`, `curl` and `jq` (in
-  `regenerate.yml`) and `npm` in `publish.yml` (a registry upload has to run where the credentials
-  are).
+  `regenerate.yml`), `git` and `jq` (the tag guard) and `npm` in `publish.yml` (the registry upload has
+  to run where the OIDC token is).
+- Builds must not install OS packages: CI blocks egress, so `apt-get` at image build time would need
+  Debian mirror hosts on the allow-list. The TypeScript `mutation` stage builds on the full
+  `node:*-bookworm` images, which carry `ps` (StrykerJS needs it), instead of apt-installing `procps`
+  into the slim image. Other languages: bake the tool into a pinned image stage, never `apt-get`.
 
 ### The mock and the conformance repository
 
@@ -70,7 +76,9 @@ Everything runs in containers (spec 13.1). The facts the compose file relies on:
 `${CONFORMANCE_CONTEXT:-https://github.com/Hushscript/hushscript-sdk-conformance.git#v0.1.0}`. Until
 the conformance repository is public and tagged, set
 `CONFORMANCE_CONTEXT=../hushscript-sdk-conformance` (a sibling checkout) in the environment of every
-`just` call. `hints.json` is read from `$CONFORMANCE_DIR/hints.json` when `CONFORMANCE_DIR` is set (the
+`just` call. Every workflow job that builds compose services builds the mock too, so its egress allow-list carries
+`github.com` and `codeload.github.com` (BuildKit fetches the git context) plus the Docker Hub hosts
+(the mock's base image). `hints.json` is read from `$CONFORMANCE_DIR/hints.json` when `CONFORMANCE_DIR` is set (the
 `regen` recipe mounts it read-only at `/conformance` and rewrites the variable), otherwise from
 `raw.githubusercontent.com` at the tag in `package.json` `config.conformanceRef`. The other languages keep the tag in one place of their own (a manifest
 field or a constant in the generator); it must equal the compose default.
@@ -78,7 +86,7 @@ field or a constant in the generator); it must equal the compose default.
 ### Justfile
 
 Recipes and arguments are fixed: `test [version]`, `lint [version]`, `conformance [version]`,
-`examples [version]`, `build [version]`, `regen [spec]`, `ci [version]`, `smoke`, plus `mutation`
+`examples [version]`, `build [version]`, `regen [spec-path-or-url]`, `ci [version]`, `smoke`, plus `mutation`
 (used by the nightly job). The version argument is the runtime version (default: the floor) and is
 validated by a `just` `error()` expression. `ci` with no argument runs lint on the floor, test and
 conformance on floor and latest, then examples and build on the floor. With an argument it runs
@@ -108,7 +116,10 @@ One multi-stage file, `docker/dev.Dockerfile`:
    13.1).
 4. `dev` copies `node_modules` from `deps`, copies the source, puts `node_modules/.bin` on `PATH` and
    switches to uid 10001.
-5. `proddeps` installs production dependencies only. `just build` uses it to assemble an install
+5. `mutation` builds on the digest-pinned full images (`node22full`, `node24full`, selected like `base`)
+   because StrykerJS needs `ps` and nothing may install packages at build time. It repeats the user,
+   `PATH` and source steps of `dev`.
+6. `proddeps` installs production dependencies only. `just build` uses it to assemble an install
    without a network: the packed tarball is extracted into `node_modules/@hushscript/sdk` next to
    these dependencies.
 
@@ -150,8 +161,14 @@ The gates are in `just lint` and `just test`. Values for the other languages are
   filesystem is read-only. `test/setup.ts` sets the global `fast-check` run count to `100 *
 FC_RUNS_FACTOR`; the nightly job sets the factor to 10.
 - Package checks in `just build`: `npm pack --dry-run`, `publint` and `attw --profile esm-only` on the
-  real tarball, then an import of the tarball in clean Node (the matrix version), Bun and Deno
-  containers.
+  real tarball, a type check of a consumer file against the packed `.d.ts` with the oldest supported
+  TypeScript (devDependency alias `typescript-floor`, `npm:typescript@5.5.4`; Dependabot ignores it;
+  `skipLibCheck: false`, `module: NodeNext`), then an `import` of the tarball in clean Node (the
+  matrix version), a `require()` of it in the same Node image (`require(esm)`, Node 22.12 and newer)
+  and an `import` in clean Bun and Deno containers. `package.json` `exports["."]` has `types`,
+  `import` and `default` (the last makes `require(esm)` resolve). A new language states its consumer
+  floor in the README and checks it the same way (Python: the oldest supported interpreter installs
+  and imports the wheel; Go: `go.mod`'s `go` line is the floor; PHP: `composer.json` `php` constraint).
 - Mutation: `stryker.config.json` mutates `src/http` and `src/transcribe`, `break` at 80,
   `allowEmpty: true` until those directories exist.
 - Whole-repo: hadolint (`.hadolint.yaml`, failure threshold `info`), actionlint, zizmor `--pedantic`
@@ -195,8 +212,8 @@ comment, and every concurrency block sets `cancel-in-progress: true` (zizmor ped
 | ----------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
 | `ci.yml`                | PR, push to `main`              | `contents: read`                                                                   |
 | `nightly.yml`           | schedule only                   | `contents: read` (smoke runs in environment `smoke`)                               |
-| `regenerate.yml`        | daily cron, `workflow_dispatch` | `contents: write`, `pull-requests: write`                                          |
-| `release.yml`           | push to `main`                  | `contents: write`, `pull-requests: write` (release-please needs both)              |
+| `regenerate.yml`        | daily cron, `workflow_dispatch` | `contents: read` (writes go through the App token)                                 |
+| `release.yml`           | push to `main`                  | none (writes go through the App token)                                             |
 | `publish.yml`           | `release: published`            | `contents: read`, `id-token: write`, `attestations: write` (environment `release`) |
 | `codeql.yml`            | PR, push, weekly                | `contents: read`, `security-events: write`                                         |
 | `scorecard.yml`         | weekly, push, branch protection | `contents: read`, `actions: read`, `security-events: write`, `id-token: write`     |
@@ -206,8 +223,13 @@ comment, and every concurrency block sets `cancel-in-progress: true` (zizmor ped
 normalization (stop if equal); run `oasdiff breaking --fail-on ERR` in the pinned image (exit 0 means
 not breaking, 1 breaking, anything else fails the job); `just regen`;
 `scripts/check-regen-diff.sh`; `just ci`; then `peter-evans/create-pull-request` on branch `regen/spec`
-titled `feat: sync with api spec` (`feat!:` when breaking) with the oasdiff output as the body. A PR
-opened with the default token does not start `ci.yml`, so the in-workflow `just ci` is the gate.
+titled `feat: sync with api spec` (`feat!:` when breaking) with the oasdiff output as the body. The
+generator reads the downloaded file itself (`just regen "$RUNNER_TEMP/openapi.new.json"`), not a second
+download. The PR is created with a GitHub App token (`actions/create-github-app-token`, secrets
+`APP_ID` and `APP_PRIVATE_KEY`): a PR opened with the default token does not start `ci.yml`, and
+`sign-commits: true` makes the API sign the commit as the App, which branch protection (signed
+commits) requires. The GITHUB_TOKEN of the job stays `contents: read`; a missing secret fails the
+App-token step.
 
 ### Publish
 
@@ -215,9 +237,16 @@ opened with the default token does not start `ci.yml`, so the in-workflow `just 
 tarball with `actions/attest-build-provenance`, uploads the tarball and SBOM as an artifact and
 publishes that same tarball. Language-specific parts:
 
-- TypeScript: `actions/setup-node` with `registry-url`, `npm ci --ignore-scripts`, `npm run build`,
-  `npm pack`, `npm sbom --sbom-format cyclonedx`, `npm publish "$TARBALL" --provenance --access
-public`, `NODE_AUTH_TOKEN` from the `NPM_TOKEN` secret of environment `release`.
+- Every language first checks that the release tag equals `v` plus the manifest version and that the
+  tagged commit is an ancestor of `origin/main` (`fetch-depth: 0`), before building anything.
+- TypeScript: `actions/setup-node` with Node 24 (no `registry-url`, so no `.npmrc` token line), a step
+  that fails when `npm --version` is below 11.5.1 (trusted publishing needs it), `npm ci
+--ignore-scripts`, `npm run build`, `npm pack`, `npm sbom --sbom-format cyclonedx`, `npm publish
+"$TARBALL" --provenance --access public`. No `NPM_TOKEN` and no `NODE_AUTH_TOKEN`: npm trades the
+  job's OIDC token (`id-token: write`) for a short-lived publish token through the trusted publisher
+  attached to the package. The first publish of a new package is an owner bootstrap (plan Task 19),
+  after which the owner attaches the trusted publisher on npmjs.com; the egress list needs
+  `registry.npmjs.org` and the sigstore hosts.
 - Python: build sdist and wheel in the pinned Python container, `twine check`, publish with PyPI
   trusted publishing (`pypa/gh-action-pypi-publish`, `id-token: write`, no token), attestations on.
   SBOM from `cyclonedx-py`.
@@ -226,9 +255,10 @@ public`, `NODE_AUTH_TOKEN` from the `NPM_TOKEN` secret of environment `release`.
   produced by a pinned tool image.
 - CLI: as TypeScript, with its own package name.
 
-`release.yml` passes `secrets.RELEASE_PLEASE_TOKEN || github.token`. A release created with the default
-token does not start `publish.yml`, so set that secret to a GitHub App or fine-grained PAT token before
-the first release.
+`release.yml` creates the same kind of App token and hands it to release-please, with no fallback: a
+release created with the default token would not start `publish.yml`, and a missing secret should fail
+loudly. The token asks for `contents`, `pull-requests` and `issues` write; release-please needs
+`issues: write` for its `autorelease:` labels (its README lists all three).
 
 ### Pinned actions
 
@@ -247,6 +277,7 @@ Reuse these SHAs; refresh them with Dependabot.
 | `ossf/scorecard-action`            | `2d1146689b8cda280b9bc96326124645441f03bc` | v2.4.4  |
 | `googleapis/release-please-action` | `45996ed1f6d02564a971a2fa1b5860e934307cf7` | v5.0.0  |
 | `peter-evans/create-pull-request`  | `5f6978faf089d4d20b00c7766989d076bb2fc7f1` | v8.1.1  |
+| `actions/create-github-app-token`  | `bcd2ba49218906704ab6c1aa796996da409d3eb1` | v3.2.0  |
 
 Tool images are listed with their digests at the top of this repository's `justfile` and in
 `.github/workflows/regenerate.yml` (oasdiff).
@@ -257,16 +288,31 @@ PHP has no CodeQL support; spec 13.3 covers it with PHPStan and `psalm --taint-a
 `codeql.yml` from the PHP repository and run Psalm in `just lint` instead. PHP also has no fuzz job
 and no `mutation` job until Infection is wired in (spec 13.2).
 
-## Repository settings (not files)
+## Owner steps (repository settings, not files)
 
-Set these by hand on a new repository; nothing in the workflows can do it:
+The workflows cannot do these. Do every one on a new repository before the first release:
 
-- Branch protection on `main`: pull requests only, required checks `just ci (node 22)`,
-  `just ci (node 24)` (renamed per language) and CodeQL, linear history, signed commits, no
-  force-push, CODEOWNERS review.
-- Private vulnerability reporting on. Environments `release` (secret `NPM_TOKEN`, or none for PyPI
-  trusted publishing) and `smoke` (secret `SMOKE_TOKEN`, a token that can read the account).
-- Secret `RELEASE_PLEASE_TOKEN` (see above). Actions allowed to create pull requests.
+1. **GitHub App.** Create one App for the SDK repositories (or one per repository) with repository
+   permissions Contents, Pull requests and Issues set to read and write (Metadata read is implied) and
+   install it on the repository. Generate a private key. Store the App id as the Actions secret
+   `APP_ID` and the key as `APP_PRIVATE_KEY` (repository secrets, or organization secrets limited to
+   the SDK repositories). `regenerate.yml` and `release.yml` use them; there is no fallback token.
+2. **Environments.** `release` (required reviewer is the owner; no secret, npm uses OIDC; for PyPI the
+   environment name goes into the trusted publisher) and `smoke` (secret `SMOKE_TOKEN`, a token that
+   can read the account).
+3. **Actions may create pull requests.** Settings, Actions, General, "Allow GitHub Actions to create
+   and approve pull requests": not required, because the App token opens the PRs. Leave it off.
+4. **CODEOWNERS handle.** `.github/CODEOWNERS` names `@Hushscript/sdk-maintainers`, a placeholder:
+   create that team (or change the handle) so CODEOWNERS review can be enforced.
+5. **Package registry bootstrap and trusted publisher.** npm: the owner publishes the first version by
+   hand (plan Task 19), then adds a trusted publisher on npmjs.com (organization `Hushscript`,
+   repository, workflow `publish.yml`, environment `release`). PyPI: add a pending trusted publisher
+   before the first release. Store no registry token in GitHub.
+6. **Branch protection on `main`.** Pull requests only, required checks `just ci (node 22)`, `just ci
+(node 24)` (renamed per language) and CodeQL, linear history, signed commits, no force-push,
+   CODEOWNERS review. Releases and regen PRs are signed by the App through the API, so the signed
+   commits rule holds for them.
+7. **Private vulnerability reporting** on.
 
 ## Checklist for a new repository
 
