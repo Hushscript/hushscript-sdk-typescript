@@ -79,7 +79,8 @@ lint version=floor:
     docker run {{sandbox}} "hushscript-typescript-dev:node{{version}}" \
       sh -c 'timeout 300 npm audit --omit=dev --audit-level=high && timeout 300 npm audit signatures'
 
-# package build plus package-correctness checks, then import the packed tarball in clean Node, Bun and Deno
+# package build plus package-correctness checks, then import the packed tarball in clean Node, Bun and Deno.
+# tsup bundles its config next to the file, so the (read-only) repo root gets a copy in /tmp.
 build version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -94,11 +95,11 @@ build version=floor:
     user="$(id -u):$(id -g)"
     docker run {{sandbox}} --network none --user "$user" -e HOME=/tmp -e npm_config_cache=/tmp/npm \
       -v "$out/dist":/work/dist -v "$out":/out "hushscript-typescript-dev:node{{version}}" \
-      sh -c 'timeout 600 tsup \
+      sh -c 'cp tsup.config.ts /tmp/tsup.config.ts && timeout 600 tsup --config /tmp/tsup.config.ts \
         && timeout 120 npm pack --dry-run --ignore-scripts \
         && timeout 120 npm pack --ignore-scripts --pack-destination /out \
-        && timeout 120 publint \
-        && timeout 300 attw --pack . --profile esm-only \
+        && timeout 120 publint /out/hushscript-sdk-*.tgz \
+        && timeout 300 attw /out/hushscript-sdk-*.tgz --profile esm-only \
         && tar -xzf /out/hushscript-sdk-*.tgz -C /out/consumer/node_modules/@hushscript/sdk --strip-components=1'
     docker run {{sandbox}} --network none --user "$user" -v "$out":/out "hushscript-typescript-proddeps:node{{version}}" \
       sh -c 'cp -r /work/node_modules/. /out/consumer/node_modules/ && printf "{\"type\":\"module\",\"dependencies\":{\"@hushscript/sdk\":\"*\"}}\n" > /out/consumer/package.json'
@@ -107,8 +108,8 @@ build version=floor:
       timeout 60 node --input-type=module -e "$check"
     docker run {{sandbox}} --network none --user "$user" -v "$out/consumer":/consumer:ro -w /consumer {{bun_image}} \
       timeout 60 bun --eval "$check"
-    docker run {{sandbox}} --network none --user "$user" -e DENO_DIR=/tmp/deno -v "$out/consumer":/consumer:ro -w /consumer {{deno_image}} \
-      timeout 60 deno eval --node-modules-dir=manual "$check"
+    docker run {{sandbox}} --network none --user "$user" -e DENO_DIR=/tmp/deno -v "$out/consumer":/consumer:ro -w /consumer --entrypoint timeout {{deno_image}} \
+      60 deno eval --node-modules-dir=manual "$check"
 
 # regenerate openapi.json and src/generated from the production spec (outbound network)
 regen spec="":
