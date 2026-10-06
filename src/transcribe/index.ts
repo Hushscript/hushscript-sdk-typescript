@@ -3,6 +3,7 @@ import type { Client } from "openapi-fetch";
 import type { ResolvedConfig } from "../config.ts";
 import { AbortError, HushscriptError, NotFoundError, UploadError } from "../errors.ts";
 import type { paths } from "../generated/schema";
+import { Transcript } from "../transcript.ts";
 import { present } from "./common.ts";
 import { runHeartbeat } from "./heartbeat.ts";
 import { checkDurationOption, invalidOption, preflight } from "./preflight.ts";
@@ -16,15 +17,18 @@ import {
   type ResumeToken,
 } from "./resume.ts";
 import { openSource, type FileInput, type Source } from "./source.ts";
-import { toTranscript, type Transcript } from "./transcript.ts";
 import type { Progress, ResumeOptions, TranscribeOptions } from "./types.ts";
 import { uploadParts } from "./upload.ts";
-import { DEFAULT_WAIT_TIMEOUT_SECONDS, failureOf, readJob, waitForJob, type Job } from "./wait.ts";
+import {
+  DEFAULT_WAIT_TIMEOUT_SECONDS,
+  failureOf,
+  readJob,
+  waitForJob,
+  type RawJob,
+} from "./wait.ts";
 
-export type { Job } from "./wait.ts";
 export type { ResumeToken } from "./resume.ts";
 export type { Progress, ResumeOptions, TranscribeOptions } from "./types.ts";
-export type { Transcript } from "./transcript.ts";
 
 const DEFAULT_CONCURRENCY = 4;
 const MAX_CONCURRENCY = 8;
@@ -205,7 +209,7 @@ export class Pipeline {
     }
   }
 
-  async waitForJob(id: string, options: JobWaitOptions = {}): Promise<Job> {
+  async waitForJob(id: string, options: JobWaitOptions = {}): Promise<RawJob> {
     const { waitTimeout } = checkRuntimeOptions({ waitTimeout: options.waitTimeout });
     return waitForJob({
       api: this.#api,
@@ -246,7 +250,7 @@ export class Pipeline {
   async #finish(
     created: Pick<CreateResponse, "state" | "upload">,
     run: Run,
-    known: Job | null = null,
+    known: RawJob | null = null,
   ): Promise<Transcript> {
     const { state, signal } = run;
     let jobState = created.state;
@@ -331,7 +335,7 @@ export class Pipeline {
     }
   }
 
-  async #fetch(job: Job, run: Run): Promise<Transcript> {
+  async #fetch(job: RawJob, run: Run): Promise<Transcript> {
     if (job.state === "failed") throw failureOf(job);
     if (job.transcript_id === null) {
       throw new UploadError({
@@ -343,7 +347,7 @@ export class Pipeline {
       params: { path: { id: job.transcript_id } },
       signal: run.signal,
     });
-    return toTranscript(present(data, "GET /v1/transcripts/{id}"));
+    return Transcript.fromApi(present(data, "GET /v1/transcripts/{id}"));
   }
 }
 

@@ -3,7 +3,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { PreflightError, UploadError } from "../../src/errors";
+import { AbortError, PreflightError, UploadError } from "../../src/errors";
 import { openSource } from "../../src/transcribe/source";
 
 const DATA = Uint8Array.from({ length: 100 }, (_, i) => i);
@@ -137,6 +137,34 @@ describe("stream source", () => {
     const error = await source.read(0, 100).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(UploadError);
     expect((error as UploadError).code).toBe("stream_size_mismatch");
+    await source.close();
+  });
+
+  it("stops waiting for a stream left open after exactly size bytes when the call is aborted", async () => {
+    const open = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(DATA);
+      },
+    });
+    const source = await openSource(open, 100);
+    const stop = new AbortController();
+    const read = source.read(0, 100, stop.signal).catch((e: unknown) => e);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    stop.abort();
+    expect(await read).toBeInstanceOf(AbortError);
+    await source.close();
+  });
+
+  it("refuses at once when the signal is already aborted before the stream answers", async () => {
+    const source = await openSource(
+      new ReadableStream<Uint8Array>({ start: () => undefined }),
+      100,
+    );
+    const stop = new AbortController();
+    stop.abort();
+    expect(await source.read(0, 100, stop.signal).catch((e: unknown) => e)).toBeInstanceOf(
+      AbortError,
+    );
     await source.close();
   });
 });

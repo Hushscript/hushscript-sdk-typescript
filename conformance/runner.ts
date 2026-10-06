@@ -13,6 +13,7 @@ import type { Clock } from "../src/clock.ts";
 import * as sdk from "../src/index.ts";
 import { probeDuration } from "../src/transcribe/probe.ts";
 import { openSource } from "../src/transcribe/source.ts";
+import { goldens, renderGolden } from "./goldens.ts";
 
 const BASE_URL = "http://127.0.0.1:4010";
 const TEST_TOKEN = `hsr1:eu:pat.${"0123456789abcdef".repeat(2)}.${"fedcba9876543210".repeat(4)}`;
@@ -235,15 +236,16 @@ function fixtureFile(relative: string): Promise<string> {
 
 type Op = (hs: Hushscript, args: Obj, context: CallContext) => Promise<unknown>;
 
-/** The runner's view of a transcript until the Transcript class exists: the raw body, in the contract's shape. */
+/** The contract's view of a transcript (runner-contract.md, `transcribe`). */
 function transcriptResult(transcript: sdk.Transcript): Obj {
   return {
     id: transcript.id,
     title: transcript.title,
-    language: transcript.language_detected,
-    durationSeconds: transcript.duration_seconds,
-    utteranceCount: transcript.body.original.utterances.length,
-    raw: transcript,
+    language: transcript.language,
+    durationSeconds: transcript.durationSeconds,
+    utteranceCount: transcript.utterances.length,
+    text: transcript.text,
+    raw: transcript.toJSON(),
   };
 }
 
@@ -262,17 +264,22 @@ const OPS: Record<string, Op> = {
     const file = typeof args["file"] === "string" ? await fixtureFile(args["file"]) : undefined;
     return transcriptResult(await hs.resume(context.resumeToken, file));
   },
-  // hs.balance() arrives with the friendly layer; until then the same read goes through hs.api.
   balance: async (hs) => {
-    const { data } = await hs.api.GET("/v1/account");
-    if (data === undefined) throw new Error("GET /v1/account returned no body");
+    const balance = await hs.balance();
     return {
-      seconds: data.balance_seconds,
-      minutes: Math.trunc(data.balance_seconds / 60),
-      heldSeconds: data.held_seconds,
-      expiresAt: data.credits_expire_at,
+      seconds: balance.seconds,
+      minutes: balance.minutes,
+      heldSeconds: balance.heldSeconds,
+      expiresAt: balance.expiresAt,
     };
   },
+  listTranscripts: async (hs, args) => {
+    const pageSize = typeof args["pageSize"] === "number" ? args["pageSize"] : undefined;
+    const ids: string[] = [];
+    for await (const row of hs.transcripts.list({ pageSize })) ids.push(row.id);
+    return { count: ids.length, firstId: ids[0] ?? null, lastId: ids.at(-1) ?? null };
+  },
+  getTranscript: async (hs, args) => transcriptResult(await hs.transcripts.get(String(args["id"]))),
 };
 
 function isObj(value: unknown): value is Obj {
@@ -368,7 +375,8 @@ function errorMismatches(error: unknown, want: ErrorExpectation): string[] {
 
 function mapped(call: CallSpec): boolean {
   return (
-    (call.op in OPS || call.op === "probe") && (call.prior === undefined || mapped(call.prior))
+    (call.op in OPS || call.op === "probe" || call.op === "format") &&
+    (call.prior === undefined || mapped(call.prior))
   );
 }
 
@@ -399,6 +407,34 @@ async function probeAll(args: Obj): Promise<unknown> {
   return { checked: Object.keys(expected).length, failures };
 }
 
+async function fetchText(path: string): Promise<string> {
+  const response = await rawFetch(`${BASE_URL}/__files/${path}`);
+  if (!response.ok) throw new Error(`${path}: the mock answered ${String(response.status)}`);
+  return await response.text();
+}
+
+const transcriptBodies = new Map<string, Promise<string>>();
+
+/** Renders every golden from its transcript fixture; it needs no virtual time and sends no API request. */
+async function formatAll(): Promise<unknown> {
+  const mismatches: string[] = [];
+  const all = goldens();
+  for (const golden of all) {
+    let body = transcriptBodies.get(golden.transcript);
+    if (body === undefined) {
+      body = fetchText(`fixtures/transcripts/${golden.transcript}.json`);
+      transcriptBodies.set(golden.transcript, body);
+    }
+    const rendered = renderGolden(
+      golden,
+      JSON.parse(await body) as Parameters<typeof renderGolden>[1],
+    );
+    if (rendered !== (await fetchText(`fixtures/exports/${golden.file}`)))
+      mismatches.push(golden.file);
+  }
+  return { checked: all.length, mismatches };
+}
+
 async function runCall(
   hs: Hushscript,
   clock: VirtualClock,
@@ -408,6 +444,13 @@ async function runCall(
   if (call.op === "probe") {
     try {
       return { ok: true, value: await probeAll(call.args ?? {}) };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
+  if (call.op === "format") {
+    try {
+      return { ok: true, value: await formatAll() };
     } catch (error) {
       return { ok: false, error };
     }

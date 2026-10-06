@@ -5,18 +5,19 @@ import type { components, paths } from "../generated/schema";
 import { present, sleepOrAbort } from "./common.ts";
 import type { Progress } from "./types.ts";
 
-export type Job = components["schemas"]["Job"];
+/** A job as the API sends it; `hs.jobs` hands out the camelCase `Job`. */
+export type RawJob = components["schemas"]["Job"];
 
 export const DEFAULT_WAIT_TIMEOUT_SECONDS = 3600;
 const POLL_START_MS = 5000;
 const POLL_FACTOR = 1.5;
 const POLL_CEILING_MS = 15_000;
 
-function isFinished(job: Job): boolean {
+function isFinished(job: RawJob): boolean {
   return job.state === "done" || job.state === "failed";
 }
 
-export function failureOf(job: Job): JobFailedError {
+export function failureOf(job: RawJob): JobFailedError {
   const kind = job.failure_kind === "media_unreadable" || job.failure_kind === "media_undecodable";
   return new JobFailedError({
     message: job.error ?? "The job failed.",
@@ -26,7 +27,11 @@ export function failureOf(job: Job): JobFailedError {
   });
 }
 
-export async function readJob(api: Client<paths>, id: string, signal?: AbortSignal): Promise<Job> {
+export async function readJob(
+  api: Client<paths>,
+  id: string,
+  signal?: AbortSignal,
+): Promise<RawJob> {
   const { data } = await api.GET("/v1/jobs/{id}", {
     params: { path: { id } },
     ...(signal === undefined ? {} : { signal }),
@@ -47,7 +52,7 @@ export interface WaitSettings {
 }
 
 /** Polls the job at 5 s, times 1.5 up to 15 s, until done or failed (spec 8.6); a timeout is `WaitTimeoutError`. */
-export async function waitForJob(settings: WaitSettings): Promise<Job> {
+export async function waitForJob(settings: WaitSettings): Promise<RawJob> {
   const { api, clock, jobId, signal } = settings;
   const startedAt = clock.now();
   const deadline = startedAt + settings.waitTimeout * 1000;

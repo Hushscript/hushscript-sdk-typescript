@@ -27,10 +27,12 @@ describe("public entry", () => {
         "PreflightError",
         "RateLimitError",
         "ResumeMismatchError",
+        "Transcript",
         "UnsupportedMediaError",
         "UploadError",
         "ValidationError",
         "WaitTimeoutError",
+        "paginate",
       ].sort(),
     );
   });
