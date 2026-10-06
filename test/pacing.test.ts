@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { systemClock } from "../src/clock";
 import { TokenBucket } from "../src/http/pacing";
 import { fakeClock } from "./helpers";
 
@@ -65,5 +66,20 @@ describe("TokenBucket", () => {
     const pending = bucket.acquire(controller.signal);
     controller.abort(new Error("stop"));
     await expect(pending).rejects.toThrow("stop");
+  });
+});
+
+describe("the system clock", () => {
+  it("is monotonic: a wall-clock jump backwards does not move it", () => {
+    const wall = vi.spyOn(Date, "now");
+    try {
+      wall.mockReturnValue(1_800_000_000_000);
+      const before = systemClock.now();
+      wall.mockReturnValue(1_700_000_000_000);
+      const after = systemClock.now();
+      expect(after).toBeGreaterThanOrEqual(before);
+    } finally {
+      wall.mockRestore();
+    }
   });
 });

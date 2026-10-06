@@ -1,5 +1,5 @@
 import { OPERATION_SCOPES } from "../generated/scopes.ts";
-import { EXPLICIT_CLASSES } from "./retry.ts";
+import { EXPLICIT_CLASSES, retryClassFor, type RetryClass } from "./retry.ts";
 
 interface Template {
   key: string;
@@ -38,4 +38,10 @@ export function operationFor(method: string, pathname: string): string {
 export function resolveOperation(operation: string): string {
   const space = operation.indexOf(" ");
   return operationFor(operation.slice(0, space), operation.slice(space + 1));
+}
+
+/** The retry class of a concrete request, from its method and URL path alone (spec 7.4). */
+export function retryClassForRequest(method: string, pathname: string): RetryClass {
+  const operation = operationFor(method, pathname);
+  return retryClassFor(method, operation.slice(operation.indexOf(" ") + 1));
 }

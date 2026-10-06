@@ -5,7 +5,7 @@ import {
   AuthenticationError,
   NetworkError,
   OutcomeUnknownError,
-  PermissionError,
+  PermissionDeniedError,
   RateLimitError,
   ApiError,
 } from "../src/errors";
@@ -27,6 +27,8 @@ function plan(over: Partial<RetryInput>): ReturnType<typeof planRetry> {
     slug: null,
     retryAfter: null,
     retriesDone: 0,
+    rateLimitsDone: 0,
+    activeJobsDone: 0,
     maxRetries: 3,
     random: () => 1,
     ...over,
@@ -74,8 +76,8 @@ describe("retry class by operation (spec 7.2)", () => {
     ["HEAD", "/v1/account", "safe"],
     ["GET", "/v1/uploads/{job}/part-urls", "safe"],
     ["POST", "/v1/uploads/{job}/heartbeat", "safe"],
-    ["PUT", "/v1/uploads/{job}/parts/{n}", "safe"],
-    ["POST", "/v1/uploads/{job}/complete", "safe"],
+    ["PUT", "/v1/uploads/{job}/parts/{n}", "idempotent"],
+    ["POST", "/v1/uploads/{job}/complete", "idempotent"],
     ["POST", "/v1/uploads", "upload-create"],
     ["POST", "/v1/billing/purchase", "purchase"],
     ["POST", "/v1/billing/setup-session", "purchase"],
@@ -109,10 +111,20 @@ describe("retry class by operation (spec 7.2)", () => {
 });
 
 describe("planRetry", () => {
-  it("retries a safe call on network errors, 429 and 5xx", () => {
+  it("retries a safe call on network errors, 429, 500, 502, 503 and 504 only", () => {
     for (const status of [null, 429, 500, 502, 503, 504]) {
       expect(plan({ status }).retry, String(status)).toBe(true);
     }
+    for (const status of [501, 505, 507]) {
+      expect(plan({ status }).retry, String(status)).toBe(false);
+    }
+  });
+
+  it("retries an idempotent call (part PUT, complete) on any 5xx", () => {
+    for (const status of [null, 429, 500, 501, 502, 503, 504, 505]) {
+      expect(plan({ retryClass: "idempotent", status }).retry, String(status)).toBe(true);
+    }
+    expect(plan({ retryClass: "idempotent", status: 404 }).retry).toBe(false);
   });
 
   it("does not retry other statuses", () => {
@@ -169,12 +181,40 @@ describe("planRetry", () => {
   });
 
   it("paces upload creates: 429 without Retry-After backs off 15, 30, 60 s, then stops", () => {
-    const create = (retriesDone: number): ReturnType<typeof planRetry> =>
-      plan({ retryClass: "upload-create", status: 429, slug: "rate_limited", retriesDone });
+    const create = (rateLimitsDone: number, retriesDone = rateLimitsDone, maxRetries = 10) =>
+      plan({
+        retryClass: "upload-create",
+        status: 429,
+        slug: "rate_limited",
+        rateLimitsDone,
+        retriesDone,
+        maxRetries,
+      });
     expect(create(0)).toEqual({ retry: true, delayMs: 15_000 });
     expect(create(1)).toEqual({ retry: true, delayMs: 30_000 });
     expect(create(2)).toEqual({ retry: true, delayMs: 60_000 });
     expect(create(3)).toEqual({ retry: false });
+  });
+
+  it("counts only its own 429s for the 15/30/60 schedule (M4)", () => {
+    // Two network retries came first; the first 429 still waits 15 s, the second 30 s.
+    const create = (rateLimitsDone: number, retriesDone: number) =>
+      plan({
+        retryClass: "upload-create",
+        status: 429,
+        slug: "rate_limited",
+        rateLimitsDone,
+        retriesDone,
+        maxRetries: 10,
+      });
+    expect(create(0, 2)).toEqual({ retry: true, delayMs: 15_000 });
+    expect(create(1, 3)).toEqual({ retry: true, delayMs: 30_000 });
+    expect(create(3, 5)).toEqual({ retry: false });
+    // maxRetries still caps every kind of retry together.
+    expect(
+      plan({ retryClass: "upload-create", status: 429, slug: "rate_limited", retriesDone: 3 })
+        .retry,
+    ).toBe(false);
   });
 
   it("honors Retry-After on an upload create 429", () => {
@@ -184,11 +224,16 @@ describe("planRetry", () => {
   });
 
   it("waits 30 s between tries on too_many_active_jobs, up to 10 tries", () => {
-    const create = (retriesDone: number, maxRetries = 3): ReturnType<typeof planRetry> =>
+    const create = (
+      activeJobsDone: number,
+      maxRetries = 3,
+      retriesDone = 0,
+    ): ReturnType<typeof planRetry> =>
       plan({
         retryClass: "upload-create",
         status: 429,
         slug: "too_many_active_jobs",
+        activeJobsDone,
         retriesDone,
         maxRetries,
       });
@@ -198,6 +243,21 @@ describe("planRetry", () => {
     expect(create(0, 0)).toEqual({ retry: false });
   });
 
+  it("counts only too_many_active_jobs responses for the 10-try budget (M4)", () => {
+    const create = (activeJobsDone: number, retriesDone: number): ReturnType<typeof planRetry> =>
+      plan({
+        retryClass: "upload-create",
+        status: 429,
+        slug: "too_many_active_jobs",
+        activeJobsDone,
+        retriesDone,
+      });
+    // Earlier network retries and other 429s do not shorten the budget or pass maxRetries.
+    expect(create(0, 5)).toEqual({ retry: true, delayMs: 30_000 });
+    expect(create(8, 12)).toEqual({ retry: true, delayMs: 30_000 });
+    expect(create(9, 12)).toEqual({ retry: false });
+  });
+
   it("caps the 15/30/60 schedule by maxRetries", () => {
     expect(
       plan({
@@ -205,6 +265,7 @@ describe("planRetry", () => {
         status: 429,
         slug: "rate_limited",
         retriesDone: 1,
+        rateLimitsDone: 1,
         maxRetries: 1,
       }).retry,
     ).toBe(false);
@@ -281,7 +342,7 @@ describe("through the hardened fetch", () => {
       { status: 403, body: { error: "pat_purchase_requires_app", code: 4021 } },
     ]);
     await expect(call("purchase", { method: "POST", body: "{}" })).rejects.toBeInstanceOf(
-      PermissionError,
+      PermissionDeniedError,
     );
     expect(g.calls).toBe(1);
   });
@@ -335,5 +396,61 @@ describe("through the hardened fetch", () => {
     const f = stubFetch([{ status: 401, body: { error: "unauthorized", code: 2000 } }]);
     await expect(call("safe")).rejects.toBeInstanceOf(AuthenticationError);
     expect(f.calls).toBe(1);
+  });
+
+  it("raises the status's own class, with retryAfter, for a Retry-After above 60 s on a non-429", async () => {
+    const f = stubFetch([{ status: 503, headers: { "retry-after": "120" }, text: "busy" }]);
+    const error = await call("safe").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).not.toBeInstanceOf(RateLimitError);
+    expect(error).toMatchObject({ status: 503, retryAfter: 120 });
+    expect(f.calls).toBe(1);
+  });
+
+  it("does not retry a 501 on a safe call but does on an idempotent one", async () => {
+    const safe = stubFetch([{ status: 501, text: "x" }]);
+    await expect(call("safe")).rejects.toMatchObject({ status: 501 });
+    expect(safe.calls).toBe(1);
+    const idempotent = stubFetch([{ status: 501, text: "x" }]);
+    await expect(
+      call("idempotent", { method: "PUT", path: "/v1/uploads/j/parts/1", body: "x" }),
+    ).rejects.toMatchObject({ status: 501 });
+    expect(idempotent.calls).toBe(4);
+  });
+
+  it("starts the create schedule at 15 s even after a network retry (M4)", async () => {
+    const clock = fakeClock();
+    const f = stubFetch([
+      { error: networkError("ECONNRESET") },
+      { status: 429, body: { error: "rate_limited", code: 5000 } },
+    ]);
+    await expect(
+      call("upload-create", {
+        method: "POST",
+        path: "/v1/uploads",
+        body: "{}",
+        cfg: config(clock, { maxRetries: 10 }),
+      }),
+    ).rejects.toMatchObject({ code: "rate_limited" });
+    expect(clock.sleeps).toEqual([500, 15_000, 30_000, 60_000]);
+    expect(f.calls).toBe(5);
+  });
+
+  it("keeps the 10-try too_many_active_jobs budget after a network retry (M4)", async () => {
+    const clock = fakeClock();
+    const f = stubFetch([
+      { error: networkError("ECONNRESET") },
+      { status: 429, body: { error: "too_many_active_jobs", code: 5001 } },
+    ]);
+    await expect(
+      call("upload-create", {
+        method: "POST",
+        path: "/v1/uploads",
+        body: "{}",
+        cfg: config(clock),
+      }),
+    ).rejects.toMatchObject({ code: "too_many_active_jobs" });
+    expect(f.calls).toBe(11);
+    expect(clock.sleeps.filter((ms) => ms === 30_000)).toHaveLength(9);
   });
 });

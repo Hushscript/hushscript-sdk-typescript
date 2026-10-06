@@ -11,9 +11,12 @@ import { operationFor } from "./operations.ts";
 import { parseRetryAfter, planRetry, type RetryClass } from "./retry.ts";
 
 const BODY_CHUNK_BYTES = 256 * 1024;
-// Failures that happen before a single byte of the request is written.
+// Failures of connection setup (DNS, connect, TLS certificate checks): they come before the first
+// byte of the request is written, so they mean "not sent" whatever the body stream did. Every other
+// code (EHOSTUNREACH, ENETUNREACH, ERR_SSL_* and the rest) can also surface on a connection that is
+// already carrying the request, so it does not.
 const NEVER_SENT =
-  /^(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN|ENETUNREACH|EHOSTUNREACH|UND_ERR_CONNECT_TIMEOUT|ERR_TLS_|ERR_SSL_|CERT_|DEPTH_ZERO_|UNABLE_TO_|SELF_SIGNED_)/;
+  /^(?:ECONNREFUSED|ENOTFOUND|EAI_AGAIN|UND_ERR_CONNECT_TIMEOUT|ERR_TLS_CERT_ALTNAME_INVALID|CERT_|DEPTH_ZERO_|UNABLE_TO_|SELF_SIGNED_)/;
 
 interface Failure {
   error: unknown;
@@ -161,6 +164,7 @@ async function attempt(
       }),
     };
   } catch (error) {
+    // Once the body is fully written the request is sent, whatever the error code says.
     const connectPhase = NEVER_SENT.test(errorCode(error) ?? "");
     const sent = headersArrived || (!connectPhase && progress.done);
     return { kind: "failure", failure: { error, sent, timedOut } };
@@ -175,18 +179,23 @@ function terminalFailure(
   retryClass: RetryClass,
   operation: string,
   failure: Failure,
+  callerSignal: AbortSignal,
 ): HushscriptError {
   const code = errorCode(failure.error);
-  const reason = failure.timedOut
-    ? `The request timed out after ${String(timeoutMs / 1000)} s.`
-    : `The request failed before a response arrived${code === undefined ? "" : ` (${code})`}.`;
+  const callerAborted = isAborted(callerSignal);
+  const reason = callerAborted
+    ? "The request was aborted."
+    : failure.timedOut
+      ? `The request timed out after ${String(timeoutMs / 1000)} s.`
+      : `The request failed before a response arrived${code === undefined ? "" : ` (${code})`}.`;
   if (retryClass === "never" && failure.sent) {
     return new OutcomeUnknownError({
       message: `${reason} The request was sent, so its outcome is unknown.`,
       hint: OutcomeUnknownError.hintFor(operation),
-      cause: failure.error,
+      cause: callerAborted ? aborted(callerSignal) : failure.error,
     });
   }
+  if (callerAborted) return aborted(callerSignal);
   return new NetworkError({ message: reason, cause: failure.error });
 }
 
@@ -214,6 +223,8 @@ export function hardenedFetch(
     if (bytes !== null) headers.set("content-length", String(bytes.byteLength));
     const prepared = { url: request.url, method, headers, bytes, redirect: request.redirect };
 
+    let rateLimitsDone = 0;
+    let activeJobsDone = 0;
     for (let retriesDone = 0; ; retriesDone += 1) {
       if (signal.aborted) throw aborted(signal);
       if (retryClass === "upload-create")
@@ -248,9 +259,15 @@ export function hardenedFetch(
           slug: slugOf(body),
           retryAfter: parseRetryAfter(response.headers.get("retry-after")),
           retriesDone,
+          rateLimitsDone,
+          activeJobsDone,
           maxRetries: cfg.maxRetries,
           random: cfg.random,
         });
+        if (response.status === 429) {
+          if (slugOf(body) === "too_many_active_jobs") activeJobsDone += 1;
+          else rateLimitsDone += 1;
+        }
         log(response.status, plan.retry ? plan.delayMs : null);
         if (!plan.retry) throw errorFromResponse(response, body, operation);
         await pause(cfg, plan.delayMs, signal);
@@ -258,7 +275,8 @@ export function hardenedFetch(
       }
 
       const failure = outcome.failure;
-      if (isAborted(signal)) throw aborted(signal);
+      if (isAborted(signal))
+        throw terminalFailure(timeoutMs, retryClass, operation, failure, signal);
       const plan = planRetry({
         retryClass,
         status: null,
@@ -266,11 +284,13 @@ export function hardenedFetch(
         slug: null,
         retryAfter: null,
         retriesDone,
+        rateLimitsDone,
+        activeJobsDone,
         maxRetries: cfg.maxRetries,
         random: cfg.random,
       });
       log(failure.timedOut ? "timeout" : "network_error", plan.retry ? plan.delayMs : null);
-      if (!plan.retry) throw terminalFailure(timeoutMs, retryClass, operation, failure);
+      if (!plan.retry) throw terminalFailure(timeoutMs, retryClass, operation, failure, signal);
       await pause(cfg, plan.delayMs, signal);
     }
   };

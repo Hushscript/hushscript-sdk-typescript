@@ -3,7 +3,17 @@ import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AbortError, NetworkError, OutcomeUnknownError } from "../src/errors";
 import { hardenedFetch } from "../src/http/fetch";
-import { BASE, TOKEN, call, config, fakeClock, hang, networkError, stubFetch } from "./helpers";
+import {
+  BASE,
+  TOKEN,
+  call,
+  config,
+  fakeClock,
+  hang,
+  networkError,
+  stubFetch,
+  type StubFetch,
+} from "./helpers";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -76,6 +86,70 @@ describe("network errors and the sent flag", () => {
     expect(f).toHaveBeenCalledTimes(1);
   });
 
+  /** A fetch that reads the whole request body, then fails with `error`. */
+  function failAfterBody(error: Error): ReturnType<typeof vi.fn> {
+    const f = vi.fn(
+      async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+        await new Request(input, init).arrayBuffer();
+        throw error;
+      },
+    );
+    vi.stubGlobal("fetch", f);
+    return f;
+  }
+
+  it.each(["EHOSTUNREACH", "ENETUNREACH", "ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC"])(
+    "treats %s after the body was written as sent: no mutation replay, claim outcome unknown",
+    async (code) => {
+      const mutate = failAfterBody(networkError(code));
+      await expect(
+        call("mutate", { method: "POST", path: "/v1/org/custody", body: "{}" }),
+      ).rejects.toBeInstanceOf(NetworkError);
+      expect(mutate).toHaveBeenCalledTimes(1);
+      const claim = failAfterBody(networkError(code));
+      await expect(
+        call("never", {
+          method: "POST",
+          path: "/v1/agent/accounts/sg_1/claim",
+          body: JSON.stringify({ claim_secret: "x" }),
+        }),
+      ).rejects.toBeInstanceOf(OutcomeUnknownError);
+      expect(claim).toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it.each(["EHOSTUNREACH", "ENETUNREACH", "ERR_SSL_DECRYPTION_FAILED_OR_BAD_RECORD_MAC"])(
+    "keeps the rotate hint when a bodyless rotate fails with %s",
+    async (code) => {
+      stubFetch([{ error: networkError(code) }]);
+      const error = await call("never", {
+        method: "POST",
+        path: "/v1/agent/credentials/rotate",
+      }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(OutcomeUnknownError);
+      expect((error as OutcomeUnknownError).hint).toContain("old token may already be revoked");
+    },
+  );
+
+  it.each([
+    "ECONNREFUSED",
+    "ENOTFOUND",
+    "EAI_AGAIN",
+    "UND_ERR_CONNECT_TIMEOUT",
+    "CERT_HAS_EXPIRED",
+  ])("treats the connection-setup failure %s as not sent, body or no body", async (code) => {
+    const rotate = stubFetch([{ error: networkError(code) }]);
+    await expect(
+      call("never", { method: "POST", path: "/v1/agent/credentials/rotate" }),
+    ).rejects.toBeInstanceOf(NetworkError);
+    expect(rotate.calls).toBe(1);
+    const mutate = failAfterBody(networkError(code));
+    await expect(
+      call("mutate", { method: "POST", path: "/v1/org/custody", body: "{}" }),
+    ).rejects.toBeInstanceOf(NetworkError);
+    expect(mutate).toHaveBeenCalledTimes(4);
+  });
+
   it("wraps the final network error with the cause attached and redacted", async () => {
     stubFetch([{ error: new TypeError(`fetch failed for ${TOKEN}`) }]);
     const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
@@ -100,6 +174,122 @@ function brokenBody(mode: "error" | "stall"): Response {
 }
 
 /* eslint-enable n/no-unsupported-features/node-builtins */
+
+describe("outcome unknown after a sent unrepeatable call (spec 7.4)", () => {
+  const SIGNUP = { method: "POST", path: "/v1/agent/accounts", body: "{}" };
+  const CLAIM = {
+    method: "POST",
+    path: "/v1/agent/accounts/sg_1/claim",
+    body: JSON.stringify({ claim_secret: "x" }),
+  };
+  const ROTATE = { method: "POST", path: "/v1/agent/credentials/rotate" };
+
+  /** Reads the request body, then waits for the request's own signal. */
+  function stallAfterSend(): StubFetch {
+    return stubFetch([
+      (request) =>
+        new Promise<Response>((_resolve, reject) => {
+          request.signal.addEventListener(
+            "abort",
+            () => {
+              reject(request.signal.reason as Error);
+            },
+            { once: true },
+          );
+        }),
+    ]);
+  }
+
+  async function abortedCall(
+    options: { method: string; path: string; body?: string },
+    abortAfter: () => Promise<void> | void,
+  ): Promise<unknown> {
+    const controller = new AbortController();
+    const pending = call("never", {
+      ...options,
+      signal: controller.signal,
+      cfg: config(fakeClock({ manual: true })),
+    }).catch((e: unknown) => e);
+    await abortAfter();
+    controller.abort();
+    return pending;
+  }
+
+  // The stub counts a call once it has read the whole body, so a counted call is a sent request.
+  const sentBy = (stub: StubFetch) => (): Promise<void> =>
+    vi.waitFor(() => {
+      expect(stub.calls).toBeGreaterThan(0);
+    });
+
+  it("raises OutcomeUnknownError with the claim hint when the caller aborts after the body was sent", async () => {
+    const error = await abortedCall(CLAIM, sentBy(stallAfterSend()));
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).hint).toContain("agent_claim_invalid");
+    expect(((error as OutcomeUnknownError).cause as Error).name).toBe("AbortError");
+    expect(((error as OutcomeUnknownError).cause as { code?: string }).code).toBe("aborted");
+  });
+
+  it("does the same for a bodyless rotate", async () => {
+    const error = await abortedCall(ROTATE, sentBy(stallAfterSend()));
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).hint).toContain("old token may already be revoked");
+    expect(((error as OutcomeUnknownError).cause as Error).name).toBe("AbortError");
+  });
+
+  it("does the same for an agent signup, without a hint", async () => {
+    const error = await abortedCall(SIGNUP, sentBy(stallAfterSend()));
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).hint).toBeNull();
+    expect(((error as OutcomeUnknownError).cause as Error).name).toBe("AbortError");
+  });
+
+  it("raises a plain AbortError when the caller aborts before the body was written", async () => {
+    // This stub never reads the body, so the request cannot have been sent.
+    const f = vi.fn(hang);
+    vi.stubGlobal("fetch", f);
+    const error = await abortedCall(CLAIM, () =>
+      vi.waitFor(() => {
+        expect(f).toHaveBeenCalled();
+      }),
+    );
+    expect(error).toBeInstanceOf(AbortError);
+  });
+
+  it("raises a plain AbortError for an abort during a GET", async () => {
+    const stub = stallAfterSend();
+    const controller = new AbortController();
+    const pending = call("safe", {
+      signal: controller.signal,
+      cfg: config(fakeClock({ manual: true })),
+    }).catch((e: unknown) => e);
+    await sentBy(stub)();
+    controller.abort();
+    expect(await pending).toBeInstanceOf(AbortError);
+  });
+
+  it("raises OutcomeUnknownError with no hint for a signup lost after sending", async () => {
+    const f = stubFetch([{ error: networkError("ECONNRESET") }]);
+    const error = await call("never", SIGNUP).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).hint).toBeNull();
+    expect(f.calls).toBe(1);
+  });
+
+  it("raises OutcomeUnknownError for a signup that timed out after sending", async () => {
+    // The auto clock resolves the timeout sleep at once, after the stub has read the body.
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      await new Request(input, init).arrayBuffer();
+      return hang(input, init);
+    });
+    const error = await call("never", {
+      ...SIGNUP,
+      cfg: config(fakeClock(), { timeout: 7 }),
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).message).toMatch(/timed out/i);
+    expect((error as OutcomeUnknownError).hint).toBeNull();
+  });
+});
 
 describe("failures while the body is still arriving", () => {
   it("raises OutcomeUnknownError when a claim loses its body after the headers", async () => {
@@ -470,6 +660,28 @@ describe("against a real HTTP server", () => {
     await hardenedFetch(config(), "safe")(`${url}/v1/x`, { method: "PUT", body });
     expect(seen[0]?.body.length).toBe(700_000);
     expect(seen[0]?.length).toBe("700000");
+  });
+
+  it("treats a refused connection as not sent even with a body: claim is a NetworkError, mutate is retried", async () => {
+    vi.unstubAllGlobals();
+    const { url } = await listen(() => ({ status: 200 }));
+    server?.close();
+    server?.closeAllConnections();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    const clock = fakeClock();
+    const cfg = config(clock, { maxRetries: 1 });
+    await expect(
+      hardenedFetch(cfg, "never")(`${url}/v1/agent/accounts/sg_1/claim`, {
+        method: "POST",
+        body: JSON.stringify({ claim_secret: "x" }),
+      }),
+    ).rejects.toBeInstanceOf(NetworkError);
+    expect(clock.sleeps).toEqual([]);
+    await expect(
+      hardenedFetch(cfg, "mutate")(`${url}/v1/org/custody`, { method: "POST", body: "{}" }),
+    ).rejects.toBeInstanceOf(NetworkError);
+    // the mutation was judged unsent and replayed once: one backoff sleep
+    expect(clock.sleeps).toHaveLength(1);
   });
 
   it("reports a refused connection as NetworkError after the retries", async () => {
