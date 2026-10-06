@@ -1,0 +1,8 @@
+node_modules/
+dist/
+coverage/
+reports/
+.stryker-tmp/
+src/generated/
+openapi.json
+package-lock.json

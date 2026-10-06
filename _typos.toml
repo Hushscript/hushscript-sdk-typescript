@@ -1,0 +1,2 @@
+[files]
+extend-exclude = ["openapi.json", "package-lock.json", "src/generated/**", "LICENSE"]

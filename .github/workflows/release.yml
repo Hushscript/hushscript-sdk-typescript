@@ -1,0 +1,37 @@
+name: release
+
+on:
+  push:
+    branches: [main]
+
+permissions: {}
+
+concurrency:
+  group: release
+  cancel-in-progress: true
+
+jobs:
+  release-please:
+    name: release-please
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write # tag and create the release
+      pull-requests: write # open and update the release PR
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: block
+          allowed-endpoints: >
+            github.com:443
+            api.github.com:443
+      - name: Run release-please
+        uses: googleapis/release-please-action@45996ed1f6d02564a971a2fa1b5860e934307cf7 # v5.0.0
+        with:
+          # A release created with the default token does not start publish.yml, so use a token
+          # of a GitHub App or a fine-grained PAT when one is configured.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || github.token }}
+          release-type: node
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
