@@ -4,6 +4,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 export HOST_UID := `id -u`
 export HOST_GID := `id -g`
+# No scenario may be skipped: an unmapped op fails the conformance run.
+export CONFORMANCE_STRICT := env("CONFORMANCE_STRICT", "1")
 
 node22_image := "node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392"
 node24_image := "node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"

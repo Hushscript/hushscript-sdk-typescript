@@ -84,6 +84,8 @@ services:
 
   conformance:
     <<: *sandboxed
+    environment:
+      CONFORMANCE_STRICT: ${CONFORMANCE_STRICT:-1}
     command:
       - timeout
       - "1800"
