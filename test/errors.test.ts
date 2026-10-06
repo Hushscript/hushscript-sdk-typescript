@@ -1,4 +1,6 @@
-import { describe, expect, it } from "vitest";
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
+import { beforeAll, describe, expect, it } from "vitest";
 import {
   AbortError,
   ApiError,
@@ -14,7 +16,7 @@ import {
   NotFoundError,
   OutcomeUnknownError,
   PaymentMethodRequiredError,
-  PermissionError,
+  PermissionDeniedError,
   PreflightError,
   RateLimitError,
   ResumeMismatchError,
@@ -23,9 +25,13 @@ import {
   ValidationError,
   WaitTimeoutError,
   errorFromResponse,
+  hintValuesFrom,
+  renderHint,
+  type HintInputs,
 } from "../src/errors";
+import { HINTS } from "../src/generated/hints";
 import { REDACTED } from "../src/redact";
-import { TOKEN } from "./helpers";
+import { BASE, TOKEN } from "./helpers";
 
 function res(status: number, headers: Record<string, string> = {}): Response {
   return new Response(null, { status, headers });
@@ -47,7 +53,7 @@ describe("class tree (spec 9.2)", () => {
     }
     const api = [
       new AuthenticationError({ ...sdkInit, status: 401 }),
-      new PermissionError({ ...sdkInit, status: 403 }),
+      new PermissionDeniedError({ ...sdkInit, status: 403 }),
       new InsufficientBalanceError({ ...sdkInit, status: 402 }),
       new NotFoundError({ ...sdkInit, status: 404 }),
       new ConflictError({ ...sdkInit, status: 409 }),
@@ -157,7 +163,7 @@ describe("errorFromResponse", () => {
     [400, ValidationError],
     [401, AuthenticationError],
     [402, InsufficientBalanceError],
-    [403, PermissionError],
+    [403, PermissionDeniedError],
     [404, NotFoundError],
     [409, ConflictError],
     [422, ValidationError],
@@ -184,8 +190,8 @@ describe("errorFromResponse", () => {
     ["org_pool_expired", 402, 4026, InsufficientBalanceError],
     ["org_plan_frozen", 402, 4025, InsufficientBalanceError],
     ["org_insufficient_balance", 402, 3003, InsufficientBalanceError],
-    ["pat_scope_missing", 403, 2023, PermissionError],
-    ["pat_purchase_requires_app", 403, 4021, PermissionError],
+    ["pat_scope_missing", 403, 2023, PermissionDeniedError],
+    ["pat_purchase_requires_app", 403, 4021, PermissionDeniedError],
     ["agent_claim_invalid", 401, 4036, AuthenticationError],
     ["wrong_state", 409, 4001, ConflictError],
     ["pat_limit", 409, 4022, ConflictError],
@@ -336,7 +342,7 @@ describe("errorFromResponse", () => {
       { error: "rate_limited", code: 5000 },
       "GET /v1/jobs",
     );
-    expect(limited.hint).toBe("Too many requests. The SDK already waited and retried.");
+    expect(limited.hint).toBe("Too many requests.");
     const capped = errorFromResponse(
       res(429),
       { error: "agent_purchase_capped", code: 4038 },
@@ -386,5 +392,113 @@ describe("errorFromResponse", () => {
     });
     expect(wrapped.message).not.toContain(TOKEN);
     expect((wrapped.cause as Error).message).not.toContain(TOKEN);
+  });
+});
+
+// Shared with the other SDKs: fixtures/hint-rendering.json in the conformance repo, read from
+// $CONFORMANCE_DIR when set, else from the mock this container shares a network with.
+interface HintCase {
+  slug: string;
+  scope?: string;
+  details: {
+    needed_seconds?: number;
+    balance_seconds?: number;
+    used_seconds?: number;
+    max_seconds?: number;
+    retry_after_seconds?: number;
+    allowed_packs?: string[];
+    current_version?: string;
+  };
+  expected: string | null;
+}
+
+const rawFetch = globalThis.fetch;
+
+async function loadHintCases(): Promise<HintCase[]> {
+  const dir = process.env["CONFORMANCE_DIR"];
+  if (dir !== undefined && dir !== "") {
+    return JSON.parse(
+      await readFile(join(dir, "fixtures", "hint-rendering.json"), "utf8"),
+    ) as HintCase[];
+  }
+  const response = await rawFetch(`${BASE}/__files/fixtures/hint-rendering.json`);
+  if (!response.ok) {
+    throw new Error(
+      `fixtures/hint-rendering.json is not served by the mock (HTTP ${String(response.status)}); build it from a conformance checkout that has the file: CONFORMANCE_CONTEXT=../hushscript-sdk-conformance`,
+    );
+  }
+  return (await response.json()) as HintCase[];
+}
+
+function inputsOf(c: HintCase): HintInputs {
+  return {
+    scope: c.scope,
+    neededSeconds: c.details.needed_seconds,
+    balanceSeconds: c.details.balance_seconds,
+    usedSeconds: c.details.used_seconds,
+    maxSeconds: c.details.max_seconds,
+    retryAfter: c.details.retry_after_seconds,
+    allowedPacks: c.details.allowed_packs,
+    currentVersion: c.details.current_version,
+  };
+}
+
+describe("hint rendering fixture (conformance, spec 9.3)", () => {
+  let cases: HintCase[] = [];
+  beforeAll(async () => {
+    cases = await loadHintCases();
+  });
+
+  it("renders every case as pinned", () => {
+    expect(cases.length).toBeGreaterThan(20);
+    for (const c of cases) {
+      const label = `${c.slug} ${JSON.stringify(c.details)} ${c.scope ?? ""}`;
+      expect(renderHint(c.slug, hintValuesFrom(inputsOf(c))), label).toBe(c.expected);
+    }
+  });
+
+  it("covers every slug with placeholders, with values and without", () => {
+    const slugs = Object.entries(HINTS)
+      .filter(([, text]) => text.includes("{"))
+      .map(([slug]) => slug);
+    expect(slugs.length).toBeGreaterThanOrEqual(7);
+    for (const slug of slugs) {
+      const own = cases.filter((c) => c.slug === slug);
+      expect(
+        own.some((c) => c.expected !== null),
+        `${slug} with values`,
+      ).toBe(true);
+      expect(
+        own.some((c) => Object.keys(c.details).length === 0 && c.scope === undefined),
+        `${slug} without values`,
+      ).toBe(true);
+    }
+    expect(
+      cases.some((c) => HINTS[c.slug] !== undefined && !HINTS[c.slug]?.includes("{")),
+      "a slug without placeholders",
+    ).toBe(true);
+    for (const c of cases) expect(c.expected ?? "").not.toMatch(/[{}]/);
+  });
+
+  it("gives the same text through errorFromResponse for the values an API body carries", () => {
+    let checked = 0;
+    for (const c of cases) {
+      const d = c.details;
+      if (c.scope !== undefined || d.used_seconds !== undefined || d.max_seconds !== undefined) {
+        continue;
+      }
+      const body = {
+        error: c.slug,
+        code: 1,
+        needed_seconds: d.needed_seconds,
+        balance_seconds: d.balance_seconds,
+        current_version: d.current_version,
+        details: { allowed_packs: d.allowed_packs, retry_after_seconds: d.retry_after_seconds },
+      };
+      const error = errorFromResponse(res(400), body, "GET /v1/unscoped");
+      expect(error.hint, JSON.stringify(c)).toBe(c.expected);
+      checked += 1;
+    }
+    expect(checked).toBeGreaterThan(15);
   });
 });

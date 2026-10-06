@@ -16,7 +16,7 @@ export {
   NotFoundError,
   OutcomeUnknownError,
   PaymentMethodRequiredError,
-  PermissionError,
+  PermissionDeniedError,
   PreflightError,
   RateLimitError,
   ResumeMismatchError,

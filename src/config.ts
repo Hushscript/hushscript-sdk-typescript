@@ -8,6 +8,7 @@ import { REDACTED, registerSecret } from "./redact.ts";
 
 const DEFAULT_BASE_URL = "https://api.hushscript.com";
 const DEFAULT_TIMEOUT_SECONDS = 60;
+const MAX_TIMEOUT_SECONDS = 3600;
 const DEFAULT_MAX_RETRIES = 3;
 const PART_TIMEOUT_MS = 300_000;
 const CREATES_PER_WINDOW = 4;
@@ -19,7 +20,7 @@ export interface HushscriptOptions {
   token?: string | undefined;
   /** Falls back to HUSHSCRIPT_BASE_URL, then the production host. */
   baseUrl?: string | undefined;
-  /** Seconds per request; default 60. */
+  /** Seconds per request; default 60, at most 3600. */
   timeout?: number | undefined;
   /** Retries after the first attempt, per request; default 3. */
   maxRetries?: number | undefined;
@@ -152,9 +153,20 @@ export function resolveConfig(
   if (!token.startsWith("hsr")) {
     throw new ConfigurationError({ message: "This doesn't look like a Hushscript token." });
   }
+  if (!/^[\u0021-\u007e]+$/u.test(token)) {
+    throw new ConfigurationError({
+      message:
+        "The token has spaces, control characters or non-ASCII characters in it; check how it was copied.",
+    });
+  }
   const timeout = options.timeout ?? DEFAULT_TIMEOUT_SECONDS;
   if (!Number.isFinite(timeout) || timeout <= 0) {
     throw new ConfigurationError({ message: "timeout must be a positive number of seconds." });
+  }
+  if (timeout > MAX_TIMEOUT_SECONDS) {
+    throw new ConfigurationError({
+      message: `timeout must be at most ${String(MAX_TIMEOUT_SECONDS)} seconds.`,
+    });
   }
   const maxRetries = options.maxRetries ?? DEFAULT_MAX_RETRIES;
   if (!Number.isInteger(maxRetries) || maxRetries < 0) {

@@ -61,6 +61,25 @@ describe("construction", () => {
     expect(String(error.hint)).not.toContain(secret);
   });
 
+  it.each([
+    ["a line feed", "\n"],
+    ["a carriage return", "\r"],
+    ["a NUL", "\u0000"],
+    ["a space", " "],
+    ["a tab", "\t"],
+    ["DEL", "\u007f"],
+    ["a non-ASCII letter", "é"],
+  ])("rejects a token with %s inside, without echoing it", (_label, char) => {
+    const secret = `hsr1:eu:pat.00.00${char}zz-secretpart-abcdef`;
+    const error = failure(() => resolveConfig({ token: secret }, { env: NO_ENV }));
+    expect(error).toBeInstanceOf(ConfigurationError);
+    expect(error.code).toBe("config_invalid");
+    expect(error.message).not.toContain("secretpart");
+    expect(String(error.hint)).not.toContain("secretpart");
+    expect(JSON.stringify(error.details)).not.toContain("secretpart");
+    expect(() => new Hushscript({ token: secret })).toThrow(ConfigurationError);
+  });
+
   it("checks only the prefix of the token", () => {
     expect(() => resolveConfig({ token: "hsr9:moon:whatever" }, { env: NO_ENV })).not.toThrow();
   });
@@ -127,6 +146,19 @@ describe("limits", () => {
     expect(cfg.maxRetries).toBe(0);
   });
 
+  it("accepts a timeout of up to 3600 s and rejects more", () => {
+    expect(resolveConfig({ token: TOKEN, timeout: 3600 }, { env: NO_ENV }).timeoutMs).toBe(
+      3_600_000,
+    );
+    expect(() => resolveConfig({ token: TOKEN, timeout: 3600.5 }, { env: NO_ENV })).toThrow(
+      /at most 3600/,
+    );
+    // setTimeout overflows above 2^31 ms and would fire at once.
+    expect(() => resolveConfig({ token: TOKEN, timeout: 2_200_000 }, { env: NO_ENV })).toThrow(
+      ConfigurationError,
+    );
+  });
+
   it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])("rejects timeout %s", (timeout) => {
     expect(() => resolveConfig({ token: TOKEN, timeout }, { env: NO_ENV })).toThrow(/timeout/);
   });
@@ -148,6 +180,22 @@ describe("logging and clock", () => {
       resolveConfig({ token: TOKEN, logLevel: "off" }, { env: { HUSHSCRIPT_LOG: "debug" } })
         .logLevel,
     ).toBe("off");
+  });
+
+  it("lets every explicitly passed option beat its environment variable", () => {
+    const env = {
+      HUSHSCRIPT_TOKEN: "hsr1:eu:pat.env.env",
+      HUSHSCRIPT_BASE_URL: "https://env.example.com",
+      HUSHSCRIPT_LOG: "debug",
+    };
+    const cfg = resolveConfig(
+      { token: TOKEN, baseUrl: "http://127.0.0.1:4010", logLevel: "off" },
+      { env },
+    );
+    expect(cfg.authorization()).toBe(`Bearer ${TOKEN}`);
+    expect(cfg.baseUrl).toBe("http://127.0.0.1:4010");
+    expect(cfg.logLevel).toBe("off");
+    expect(cfg.logger.enabled).toBe(false);
   });
 
   it("rejects an unknown log level", () => {

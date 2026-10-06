@@ -1,4 +1,8 @@
-export type RetryClass = "safe" | "upload-create" | "purchase" | "never" | "mutate";
+/**
+ * `safe`: GETs and heartbeats. `idempotent`: part PUTs and complete, which can be repeated after
+ * any 5xx. `upload-create`: like idempotent plus the pacing rules of spec 7.5.
+ */
+export type RetryClass = "safe" | "idempotent" | "upload-create" | "purchase" | "never" | "mutate";
 
 /** A Retry-After above this is never waited for (spec 7.2). */
 const MAX_RETRY_AFTER_SECONDS = 60;
@@ -18,9 +22,9 @@ const CREATE_ACTIVE_JOBS_RETRIES = 9;
  */
 export const EXPLICIT_CLASSES: Readonly<Record<string, RetryClass>> = {
   "POST /v1/uploads": "upload-create",
-  "PUT /v1/uploads/{job}/parts/{n}": "safe",
+  "PUT /v1/uploads/{job}/parts/{n}": "idempotent",
   "POST /v1/uploads/{job}/heartbeat": "safe",
-  "POST /v1/uploads/{job}/complete": "safe",
+  "POST /v1/uploads/{job}/complete": "idempotent",
   "POST /v1/billing/purchase": "purchase",
   "POST /v1/billing/setup-session": "purchase",
   "POST /v1/agent/accounts/{signup_id}/claim": "never",
@@ -56,6 +60,10 @@ export interface RetryInput {
   retryAfter: number | null;
   /** Retries already made; 0 after the first attempt. */
   retriesDone: number;
+  /** Earlier 429 responses to this request, other than too_many_active_jobs; drives the 15/30/60 s schedule. */
+  rateLimitsDone: number;
+  /** Earlier too_many_active_jobs responses to this request; drives the 10-try budget. */
+  activeJobsDone: number;
   maxRetries: number;
   random: () => number;
 }
@@ -67,6 +75,10 @@ const STOP: RetryPlan = { retry: false };
 function retriableFailure(retryClass: RetryClass, status: number | null, sent: boolean): boolean {
   switch (retryClass) {
     case "safe":
+      return (
+        status === null || status === 429 || status === 500 || (status >= 502 && status <= 504)
+      );
+    case "idempotent":
     case "upload-create":
       return status === null || status === 429 || status >= 500;
     case "purchase":
@@ -84,18 +96,16 @@ export function planRetry(input: RetryInput): RetryPlan {
   if (!retriableFailure(retryClass, status, input.sent)) return STOP;
   if (retryAfter !== null && retryAfter > MAX_RETRY_AFTER_SECONDS) return STOP;
 
-  let limit = retryClass === "purchase" ? Math.min(maxRetries, PURCHASE_MAX_RETRIES) : maxRetries;
   let delayMs = backoffMs(retriesDone, input.random);
+  let limit = retryClass === "purchase" ? Math.min(maxRetries, PURCHASE_MAX_RETRIES) : maxRetries;
   if (retryClass === "upload-create" && status === 429) {
     if (input.slug === "too_many_active_jobs") {
-      limit = maxRetries === 0 ? 0 : CREATE_ACTIVE_JOBS_RETRIES;
+      if (maxRetries === 0 || input.activeJobsDone >= CREATE_ACTIVE_JOBS_RETRIES) return STOP;
+      limit = Infinity;
       delayMs = CREATE_ACTIVE_JOBS_WAIT_MS;
     } else if (retryAfter === null) {
-      limit = Math.min(maxRetries, CREATE_RATE_LIMIT_SCHEDULE_MS.length);
-      delayMs =
-        CREATE_RATE_LIMIT_SCHEDULE_MS[
-          Math.min(retriesDone, CREATE_RATE_LIMIT_SCHEDULE_MS.length - 1)
-        ] ?? delayMs;
+      if (input.rateLimitsDone >= CREATE_RATE_LIMIT_SCHEDULE_MS.length) return STOP;
+      delayMs = CREATE_RATE_LIMIT_SCHEDULE_MS[input.rateLimitsDone] ?? delayMs;
     }
   }
   if (retriesDone >= limit) return STOP;

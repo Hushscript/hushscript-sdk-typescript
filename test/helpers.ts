@@ -17,7 +17,7 @@ export interface ManualClock extends Clock {
 }
 
 /** Request timeout every test config uses; the auto clock never lets a sleep of this length finish. */
-export const TEST_TIMEOUT_SECONDS = 4242;
+export const TEST_TIMEOUT_SECONDS = 3333;
 
 /**
  * A clock whose sleeps resolve at once, advancing time and recording the request, unless `manual`

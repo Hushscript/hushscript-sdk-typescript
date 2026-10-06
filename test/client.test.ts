@@ -1,6 +1,11 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
-import { OutcomeUnknownError, PermissionError, RateLimitError } from "../src/errors";
+import {
+  NetworkError,
+  OutcomeUnknownError,
+  PermissionDeniedError,
+  RateLimitError,
+} from "../src/errors";
 import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, networkError, stubFetch } from "./helpers";
 
 afterEach(() => {
@@ -29,8 +34,8 @@ describe("hs.api", () => {
     const error = await client()
       .api.GET("/v1/transcripts")
       .catch((e: unknown) => e);
-    expect(error).toBeInstanceOf(PermissionError);
-    expect((error as PermissionError).hint).toContain('"transcripts:read" permission');
+    expect(error).toBeInstanceOf(PermissionDeniedError);
+    expect((error as PermissionDeniedError).hint).toContain('"transcripts:read" permission');
   });
 
   it("does not wait for Retry-After above 60 s", async () => {
@@ -120,11 +125,59 @@ describe("hs.api", () => {
     });
   });
 
-  it("falls back to GET-safe or mutate when a request was not tagged by the middleware", async () => {
+  it("classifies a GET by its URL and retries it", async () => {
+    const f = stubFetch([{ error: networkError("ECONNRESET") }]);
+    await expect(client().api.request("get", "/v1/account")).rejects.toThrow();
+    expect(f.calls).toBe(4);
+  });
+
+  it("classifies by the concrete URL: a claim path spelled out is still never retried", async () => {
+    const f = stubFetch([{ error: networkError("ECONNRESET") }]);
+    const error = await client()
+      // The generated type forbids the template's path parameter, so callers cast; a concrete path is the natural cast.
+      .api.POST("/v1/agent/accounts/sg_1/claim" as never, { body: { claim_secret: "cs" } } as never)
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).hint).toContain("agent_claim_invalid");
+    expect(f.calls).toBe(1);
+  });
+
+  it("keeps the class when a middleware swaps the request for a new one", async () => {
     const f = stubFetch([{ error: networkError("ECONNRESET") }]);
     const hs = client();
-    await expect(hs.api.request("get", "/v1/account")).rejects.toThrow();
-    expect(f.calls).toBe(4);
+    hs.api.use({
+      onRequest: ({ request }) =>
+        new Request(request.url, {
+          method: request.method,
+          headers: request.headers,
+          body: JSON.stringify({ claim_secret: "cs" }),
+        }),
+    });
+    await expect(
+      hs.api.POST("/v1/agent/accounts/{signup_id}/claim", {
+        params: { path: { signup_id: "sg_1" } } as never,
+        body: { claim_secret: "cs" },
+      }),
+    ).rejects.toBeInstanceOf(OutcomeUnknownError);
+    expect(f.calls).toBe(1);
+  });
+
+  it("does not replay an unlisted POST that was sent", async () => {
+    const f = stubFetch([{ error: networkError("EHOSTUNREACH") }]);
+    await expect(
+      client().api.POST("/v1/org/custody", { body: { transcript_ids: [] } as never }),
+    ).rejects.toBeInstanceOf(NetworkError);
+    expect(f.calls).toBe(1);
+  });
+
+  it("does not replay a lost agent signup and gives it no hint", async () => {
+    const f = stubFetch([{ error: networkError("ECONNRESET") }]);
+    const error = await client()
+      .api.POST("/v1/agent/accounts", { body: {} as never })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).hint).toBeNull();
+    expect(f.calls).toBe(1);
   });
 });
 

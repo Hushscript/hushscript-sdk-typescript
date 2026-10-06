@@ -25,27 +25,57 @@ type WithDefaultCode = Omit<ErrorInit, "code"> & { code?: string };
 const PLACEHOLDER = /\{(\w+)\}/g;
 
 /**
- * Fills a hint template. A clause whose value is unknown is dropped rather than shown with a bare
- * placeholder; a hint left with nothing in it is null.
+ * Fills a hint template (spec 9.3 rendering rules): split after each ". ", drop every sentence
+ * with a placeholder that has no value, join the rest with one space. Nothing left is null.
  */
 function fillHint(template: string, values: Record<string, unknown>): string | null {
   const known = (name: string): boolean => values[name] !== undefined && values[name] !== null;
-  const pieces = template.split(/(?<=[.;]) +/);
-  const kept = pieces.filter((piece) =>
-    [...piece.matchAll(PLACEHOLDER)].every((match) => known(match[1] ?? "")),
-  );
+  const kept = template
+    .split(/(?<=\.) /)
+    .filter((sentence) => [...sentence.matchAll(PLACEHOLDER)].every((m) => known(m[1] ?? "")));
   if (kept.length === 0) return null;
-  return kept
-    .join(" ")
-    .replace(PLACEHOLDER, (_whole, name: string) => String(values[name]))
-    .replace(/;$/, ".");
+  return kept.join(" ").replace(PLACEHOLDER, (_whole, name: string) => String(values[name]));
+}
+
+/** What an SDK has in hand for a hint, before rounding; seconds stay seconds. */
+export interface HintInputs {
+  scope?: string | undefined;
+  neededSeconds?: number | undefined;
+  balanceSeconds?: number | undefined;
+  usedSeconds?: number | undefined;
+  maxSeconds?: number | undefined;
+  retryAfter?: number | null | undefined;
+  allowedPacks?: readonly string[] | undefined;
+  currentVersion?: string | number | undefined;
+}
+
+function minutes(seconds: number | undefined, round: (n: number) => number): number | undefined {
+  return seconds === undefined ? undefined : round(seconds / 60);
+}
+
+/** Placeholder values for a hint: `{needed}` rounds up, the other minute values round down. */
+export function hintValuesFrom(inputs: HintInputs): Record<string, unknown> {
+  return {
+    scope: inputs.scope,
+    needed: minutes(inputs.neededSeconds, Math.ceil),
+    balance: minutes(inputs.balanceSeconds, Math.trunc),
+    used: minutes(inputs.usedSeconds, Math.trunc),
+    max: minutes(inputs.maxSeconds, Math.trunc),
+    retryAfter: inputs.retryAfter,
+    allowedPacks: inputs.allowedPacks?.join(", "),
+    currentVersion: inputs.currentVersion,
+  };
+}
+
+/** The shared hint for `slug` filled from `values`, or null when it has none or nothing is left. */
+export function renderHint(slug: string, values: Record<string, unknown>): string | null {
+  const template = HINTS[slug];
+  return template === undefined ? null : fillHint(template, values);
 }
 
 function resolveHint(init: ErrorInit): string | null {
   if (init.hint !== undefined) return init.hint === null ? null : redact(init.hint);
-  const template = HINTS[init.code];
-  if (template === undefined) return null;
-  const hint = fillHint(template, init.hintValues ?? {});
+  const hint = renderHint(init.code, init.hintValues ?? {});
   return hint === null ? null : redact(hint);
 }
 
@@ -98,7 +128,7 @@ export class ResumeMismatchError extends PreflightError {}
 /** Any non-2xx response not listed below; `status` is set. */
 export class ApiError extends HushscriptError {}
 export class AuthenticationError extends ApiError {}
-export class PermissionError extends ApiError {}
+export class PermissionDeniedError extends ApiError {}
 export class InsufficientBalanceError extends ApiError {}
 export class NotFoundError extends ApiError {}
 export class ConflictError extends ApiError {}
@@ -204,7 +234,7 @@ function classFor(status: number, slug: string): ErrorClass {
     case 402:
       return InsufficientBalanceError;
     case 403:
-      return PermissionError;
+      return PermissionDeniedError;
     case 404:
       return NotFoundError;
     case 409:
@@ -234,8 +264,8 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function minutes(seconds: unknown, round: (n: number) => number): number | undefined {
-  return typeof seconds === "number" ? round(seconds / 60) : undefined;
+function numberOf(value: unknown): number | undefined {
+  return typeof value === "number" ? value : undefined;
 }
 
 function hintValuesFor(
@@ -245,14 +275,16 @@ function hintValuesFor(
 ): Record<string, unknown> {
   const nested = isRecord(details["details"]) ? details["details"] : {};
   const packs = nested["allowedPacks"];
-  return {
+  const version = details["currentVersion"] ?? nested["currentVersion"];
+  return hintValuesFrom({
     scope: OPERATION_SCOPES[resolveOperation(operation)],
-    needed: minutes(details["neededSeconds"], Math.ceil),
-    balance: minutes(details["balanceSeconds"], Math.trunc),
+    neededSeconds: numberOf(details["neededSeconds"]),
+    balanceSeconds: numberOf(details["balanceSeconds"]),
     retryAfter,
-    allowedPacks: Array.isArray(packs) ? packs.join(", ") : undefined,
-    currentVersion: details["currentVersion"] ?? nested["currentVersion"],
-  };
+    allowedPacks: Array.isArray(packs) ? (packs as string[]) : undefined,
+    currentVersion:
+      typeof version === "string" || typeof version === "number" ? version : undefined,
+  });
 }
 
 /**

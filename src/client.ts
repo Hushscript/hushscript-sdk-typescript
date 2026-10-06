@@ -3,7 +3,7 @@ import createClient, { type Client } from "openapi-fetch";
 import { resolveConfig, type HushscriptOptions, type ResolvedConfig } from "./config.ts";
 import type { paths } from "./generated/schema";
 import { hardenedFetch } from "./http/fetch.ts";
-import { retryClassFor, type RetryClass } from "./http/retry.ts";
+import { retryClassForRequest } from "./http/operations.ts";
 import { REDACTED } from "./redact.ts";
 
 export class Hushscript {
@@ -15,21 +15,18 @@ export class Hushscript {
     const config = resolveConfig(options);
     this.#config = config;
     Object.defineProperty(this, inspect.custom, { value: () => this.toString() });
-    // The middleware sees the path template and the transport sees only the request, so the
-    // middleware leaves the retry class here for the transport to pick up.
-    const classes = new WeakMap<Request, RetryClass>();
+    // The class comes from the request's method and real URL, so a path a caller spelled out or a
+    // middleware that swapped the Request still gets the right policy.
     const transport: typeof fetch = (input, init) => {
-      const tagged = input instanceof Request ? classes.get(input) : undefined;
-      const method = input instanceof Request ? input.method : (init?.method ?? "GET");
-      const fallback = retryClassFor(method, "");
-      return hardenedFetch(config, tagged ?? fallback)(input, init);
+      const request = new Request(input, init);
+      const retryClass = retryClassForRequest(request.method, new URL(request.url).pathname);
+      return hardenedFetch(config, retryClass)(request);
     };
     this.api = createClient<paths>({ baseUrl: config.baseUrl, fetch: transport });
     this.api.use({
-      onRequest: ({ request, schemaPath }) => {
+      onRequest: ({ request }) => {
         request.headers.set("authorization", config.authorization());
         request.headers.set("user-agent", config.userAgent);
-        classes.set(request, retryClassFor(request.method, schemaPath));
       },
     });
   }

@@ -23,7 +23,7 @@ describe("public entry", () => {
         "OPERATION_SCOPES",
         "OutcomeUnknownError",
         "PaymentMethodRequiredError",
-        "PermissionError",
+        "PermissionDeniedError",
         "PreflightError",
         "RateLimitError",
         "ResumeMismatchError",
