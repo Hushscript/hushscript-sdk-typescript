@@ -1,29 +1,45 @@
-import { parseBlob, type IAudioMetadata } from "music-metadata";
+// eslint-disable-next-line n/no-unsupported-features/node-builtins -- present, if flagged experimental, in every Node 22 release (since 19.8); the rule's table lags
+import { openAsBlob } from "node:fs";
+import { parseBlob, parseBuffer, type IAudioMetadata } from "music-metadata";
 import { UnsupportedMediaError } from "../errors.ts";
-import type { Source } from "./source.ts";
+import type { ProbeInput, Source } from "./source.ts";
 
 const ID3_HEADER_BYTES = 10;
 const MAX_ID3_TAGS = 4;
 const FRAME_SCAN_BYTES = 4096;
-// music-metadata subtracts the Opus pre-skip from the length; adding the usual 312 samples back keeps the probe from undershooting.
-const OPUS_PRE_SKIP_SECONDS = 312 / 48_000;
+const OPUS_SAMPLE_RATE = 48_000;
+const OPUS_HEAD_BYTES = 512;
+const OPUS_PRE_SKIP_AT = 10;
 
 /**
- * The source as a Blob-shaped object for music-metadata. Handing it a path would let the file
- * extension pick the parser (a WebM named .mp3 parses as MP3); a typeless Blob is read by content.
+ * music-metadata subtracts the Opus pre-skip (the samples a decoder drops at the start) from the
+ * length; the probe adds it back so it never undershoots. It is read from the stream's own
+ * OpusHead (u16 little-endian at offset 10), so a file with a larger pre-skip counts too.
  */
-function asBlob(source: Source): Blob {
-  const slice = (start = 0, end = source.size): { arrayBuffer: () => Promise<ArrayBuffer> } => ({
-    arrayBuffer: async () => {
-      const bytes = await source.read(start, Math.max(0, end - start));
-      return bytes.slice().buffer;
-    },
-  });
-  return { size: source.size, type: "", slice } as unknown as Blob;
+async function opusPreSkipSeconds(source: Source): Promise<number> {
+  const head = await source.head(OPUS_HEAD_BYTES);
+  const at = ascii(head, 0, head.length).indexOf("OpusHead");
+  if (at === -1 || at + OPUS_PRE_SKIP_AT + 2 > head.length) return 0;
+  const preSkip =
+    (head[at + OPUS_PRE_SKIP_AT] ?? 0) | ((head[at + OPUS_PRE_SKIP_AT + 1] ?? 0) << 8);
+  return preSkip / OPUS_SAMPLE_RATE;
 }
 
-async function parse(source: Source, duration: boolean): Promise<IAudioMetadata> {
-  return parseBlob(asBlob(source), { duration, skipCovers: true });
+/**
+ * Parses the real input, never a hand-built stand-in: a path becomes a lazily read Blob, and every
+ * input is handed over without a MIME type, so the file extension or a Blob's own type cannot
+ * pick the parser (a WebM named .mp3 must not parse as MP3).
+ */
+async function parse(input: ProbeInput, duration: boolean): Promise<IAudioMetadata> {
+  const options = { duration, skipCovers: true };
+  switch (input.kind) {
+    case "path":
+      return parseBlob(await openAsBlob(input.path), options);
+    case "blob":
+      return parseBlob(input.blob, options);
+    case "bytes":
+      return parseBuffer(input.bytes, undefined, options);
+  }
 }
 
 function syncsafe(bytes: Uint8Array, at: number): number {
@@ -85,19 +101,20 @@ function unreadable(cause?: unknown): UnsupportedMediaError {
  * Ogg, whose headers carry no length.
  */
 export async function probeDuration(source: Source): Promise<number> {
-  if (source.sequential) throw unreadable();
+  const input = source.probeInput;
+  if (input === null) throw unreadable();
   let duration: number | undefined;
   try {
-    let meta = await parse(source, false);
+    let meta = await parse(input, false);
     if (
       meta.format.duration === undefined ||
       (meta.format.container === "MPEG" && !(await hasDurationHeader(source)))
     ) {
-      meta = await parse(source, true);
+      meta = await parse(input, true);
     }
     duration = meta.format.duration;
     if (duration !== undefined && /opus/i.test(meta.format.codec ?? "")) {
-      duration += OPUS_PRE_SKIP_SECONDS;
+      duration += await opusPreSkipSeconds(source);
     }
   } catch (error) {
     throw unreadable(error);

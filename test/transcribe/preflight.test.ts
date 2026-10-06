@@ -70,16 +70,17 @@ describe("preflight", () => {
     expect(f.calls).toBe(0);
   });
 
-  it("refuses a duration over 10 hours and a duration that is not a number", async () => {
+  it("refuses a duration outside 15 s to 10 hours, and a duration that is not a positive number", async () => {
     const { hs } = client();
     stubFetch([{ status: 500 }]);
     const bytes = await fixtureBytes("cbr-20s.mp3");
     expect(await refusal(hs.transcribe(bytes, { durationSeconds: 36_001 }))).toBeInstanceOf(
       FileLimitError,
     );
-    expect(await refusal(hs.transcribe(bytes, { durationSeconds: Number.NaN }))).toBeInstanceOf(
-      FileLimitError,
-    );
+    const notANumber = await refusal(hs.transcribe(bytes, { durationSeconds: Number.NaN }));
+    expect(notANumber).toBeInstanceOf(PreflightError);
+    expect(notANumber).not.toBeInstanceOf(FileLimitError);
+    expect((notANumber as PreflightError).code).toBe("invalid_option");
     expect(await refusal(hs.transcribe(bytes, { durationSeconds: 14.5 }))).toBeInstanceOf(
       FileLimitError,
     );

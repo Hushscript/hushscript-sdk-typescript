@@ -82,6 +82,56 @@ describe("stream source", () => {
     await source.close();
   });
 
+  it("keeps a part and the leftover apart: neither pins the other's memory", async () => {
+    const source = await openSource(streamOf(DATA.subarray(0, 90), DATA.subarray(90)), 100);
+    const first = await source.read(0, 40);
+    expect(first.buffer.byteLength).toBe(40);
+    const second = await source.read(40, 40);
+    expect(second.buffer.byteLength).toBe(40);
+    expect([...first]).toEqual([...DATA.subarray(0, 40)]);
+    expect([...second]).toEqual([...DATA.subarray(40, 80)]);
+    expect([...(await source.read(80, 40))]).toEqual([...DATA.subarray(80)]);
+    await source.close();
+  });
+
+  it("does not consume what head() looked at", async () => {
+    const source = await openSource(streamOf(DATA.subarray(0, 10), DATA.subarray(10)), 100);
+    expect([...(await source.head(30))]).toEqual([...DATA.subarray(0, 30)]);
+    expect([...(await source.head(30))]).toEqual([...DATA.subarray(0, 30)]);
+    expect([...(await source.read(0, 100))]).toEqual([...DATA]);
+    await source.close();
+  });
+
+  it("fails after the last part when the stream has more than size", async () => {
+    const source = await openSource(streamOf(DATA, DATA.subarray(0, 5)), 100);
+    const error = await source.read(0, 100).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(UploadError);
+    expect((error as UploadError).code).toBe("stream_size_mismatch");
+    await source.close();
+  });
+
+  it("fails on a trailing chunk that arrives after the last part was already buffered", async () => {
+    const source = await openSource(streamOf(DATA.subarray(0, 60), DATA.subarray(60), DATA), 100);
+    await source.read(0, 50);
+    await expect(source.read(50, 50)).rejects.toMatchObject({ code: "stream_size_mismatch" });
+    await source.close();
+  });
+
+  it("accepts a stream that is exactly size, with empty chunks around the data", async () => {
+    const source = await openSource(streamOf(new Uint8Array(), DATA, new Uint8Array()), 100);
+    expect((await source.read(0, 100)).byteLength).toBe(100);
+    await source.close();
+  });
+
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses a stream size of %s as invalid_option",
+    async (size) => {
+      await expect(openSource(streamOf(DATA), size)).rejects.toMatchObject({
+        code: "invalid_option",
+      });
+    },
+  );
+
   it("fails when the stream ends before size", async () => {
     const source = await openSource(streamOf(DATA.subarray(0, 50)), 100);
     const error = await source.read(0, 100).catch((e: unknown) => e);

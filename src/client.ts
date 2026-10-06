@@ -30,10 +30,15 @@ export class Hushscript {
     Object.defineProperty(this, inspect.custom, { value: () => this.toString() });
     // The class comes from the request's method and real URL, so a path a caller spelled out or a
     // middleware that swapped the Request still gets the right policy.
-    const transport: typeof fetch = (input, init) => {
+    const transport: typeof fetch = async (input, init) => {
       const request = new Request(input, init);
-      const retryClass = retryClassForRequest(request.method, new URL(request.url).pathname);
-      return hardenedFetch(config, retryClass)(request);
+      const pathname = new URL(request.url).pathname;
+      // Only an upload create needs its body looked at: its retry class depends on the key.
+      const body =
+        request.method.toUpperCase() === "POST" && pathname === "/v1/uploads"
+          ? await request.clone().text()
+          : null;
+      return hardenedFetch(config, retryClassForRequest(request.method, pathname, body))(request);
     };
     this.api = createClient<paths>({ baseUrl: config.baseUrl, fetch: transport });
     this.api.use({

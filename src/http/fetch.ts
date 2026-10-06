@@ -119,7 +119,6 @@ async function attempt(
     method: string;
     headers: Headers;
     bytes: Uint8Array | null;
-    redirect: NonNullable<RequestInit["redirect"]>;
   },
   callerSignal: AbortSignal,
 ): Promise<Outcome> {
@@ -146,7 +145,8 @@ async function attempt(
       headers: request.headers,
       body: request.bytes === null ? null : bodyStream(request.bytes, progress),
       duplex: "half",
-      redirect: request.redirect,
+      // Never followed (spec 7.2): a 3xx is an error, and credentials never leave the API origin.
+      redirect: "manual",
       signal: controller.signal,
     });
     headersArrived = true;
@@ -211,23 +211,28 @@ export function hardenedFetch(
 ): typeof fetch {
   const timeoutMs = options.timeoutMs ?? cfg.timeoutMs;
   return async (input, init) => {
-    const request = new Request(input, init);
+    // Bytes are used where they are: building a Request from them would copy every part (spec 8.4).
+    const direct = init?.body instanceof Uint8Array ? init.body : null;
+    const request = new Request(input, direct === null ? init : { ...init, body: null });
     const url = new URL(request.url);
     const method = request.method.toUpperCase();
     const operation = operationFor(method, url.pathname);
-    const target = describeTarget(url, new URL(cfg.baseUrl).origin);
+    const apiOrigin = new URL(cfg.baseUrl).origin;
+    const target = describeTarget(url, apiOrigin);
     const signal = request.signal;
-    const buffer = request.body === null ? null : new Uint8Array(await request.arrayBuffer());
+    const buffer =
+      direct ?? (request.body === null ? null : new Uint8Array(await request.arrayBuffer()));
     const bytes = buffer !== null && buffer.byteLength > 0 ? buffer : null;
     const headers = new Headers(request.headers);
+    if (url.origin !== apiOrigin) headers.delete("authorization");
     if (bytes !== null) headers.set("content-length", String(bytes.byteLength));
-    const prepared = { url: request.url, method, headers, bytes, redirect: request.redirect };
+    const prepared = { url: request.url, method, headers, bytes };
 
     let rateLimitsDone = 0;
     let activeJobsDone = 0;
     for (let retriesDone = 0; ; retriesDone += 1) {
       if (signal.aborted) throw aborted(signal);
-      if (retryClass === "upload-create")
+      if (operation === "POST /v1/uploads")
         await cfg.createPacer.acquire(signal).catch(() => {
           throw aborted(signal);
         });

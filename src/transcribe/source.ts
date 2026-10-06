@@ -4,9 +4,17 @@ import { PreflightError, UploadError } from "../errors.ts";
 
 export type FileInput = string | Blob | Uint8Array | ReadableStream<Uint8Array>;
 
+/** What the duration probe reads: the file itself, so the parser sees the real thing and detects the format by content. */
+export type ProbeInput =
+  | { kind: "path"; path: string }
+  | { kind: "blob"; blob: Blob }
+  | { kind: "bytes"; bytes: Uint8Array };
+
 /** Byte ranges of the upload's file, read one part at a time so memory stays bounded. */
 export interface Source {
   readonly size: number;
+  /** Null for a stream, which is read once and cannot be probed. */
+  readonly probeInput: ProbeInput | null;
   /** A stream is read once, in order, one part at a time. */
   readonly sequential: boolean;
   /** The first `length` bytes (fewer when the file is shorter), without consuming them. */
@@ -22,11 +30,13 @@ function clampLength(size: number, offset: number, length: number): number {
 class MemorySource implements Source {
   readonly size: number;
   readonly sequential = false;
+  readonly probeInput: ProbeInput;
   readonly #bytes: Uint8Array;
 
   constructor(bytes: Uint8Array) {
     this.#bytes = bytes;
     this.size = bytes.byteLength;
+    this.probeInput = { kind: "bytes", bytes };
   }
 
   head(length: number): Promise<Uint8Array> {
@@ -47,11 +57,14 @@ class MemorySource implements Source {
 class BlobSource implements Source {
   readonly size: number;
   readonly sequential = false;
+  readonly probeInput: ProbeInput;
   readonly #blob: Blob;
 
   constructor(blob: Blob) {
     this.#blob = blob;
     this.size = blob.size;
+    // A Blob's own type (or a file's extension) must not pick the parser.
+    this.probeInput = { kind: "blob", blob: blob.slice(0, blob.size, "") };
   }
 
   head(length: number): Promise<Uint8Array> {
@@ -71,11 +84,13 @@ class BlobSource implements Source {
 class FileSource implements Source {
   readonly size: number;
   readonly sequential = false;
+  readonly probeInput: ProbeInput;
   readonly #handle: FileHandle;
 
-  constructor(handle: FileHandle, size: number) {
+  constructor(handle: FileHandle, path: string, size: number) {
     this.#handle = handle;
     this.size = size;
+    this.probeInput = { kind: "path", path };
   }
 
   head(length: number): Promise<Uint8Array> {
@@ -104,19 +119,14 @@ class FileSource implements Source {
   }
 }
 
-function concat(chunks: readonly Uint8Array[], total: number): Uint8Array {
-  const out = new Uint8Array(total);
-  let at = 0;
-  for (const chunk of chunks) {
-    out.set(chunk, at);
-    at += chunk.byteLength;
-  }
-  return out;
+function streamSizeMismatch(message: string): UploadError {
+  return new UploadError({ code: "stream_size_mismatch", message });
 }
 
 class StreamSource implements Source {
   readonly size: number;
   readonly sequential = true;
+  readonly probeInput = null;
   readonly #reader: ReadableStreamDefaultReader<Uint8Array>;
   #chunks: Uint8Array[] = [];
   #buffered = 0;
@@ -140,11 +150,36 @@ class StreamSource implements Source {
     }
   }
 
+  /**
+   * The first `length` buffered bytes in one fresh array. A chunk that is only partly taken keeps a
+   * copy of its rest, so the returned part and the leftover never share (or pin) each other's memory.
+   */
+  #take(length: number, consume: boolean): Uint8Array {
+    const out = new Uint8Array(Math.min(length, this.#buffered));
+    let at = 0;
+    let used = 0;
+    while (at < out.byteLength) {
+      const chunk = this.#chunks[used];
+      if (chunk === undefined) break;
+      const n = Math.min(chunk.byteLength, out.byteLength - at);
+      out.set(chunk.subarray(0, n), at);
+      at += n;
+      if (n < chunk.byteLength) {
+        if (consume) this.#chunks[used] = chunk.slice(n);
+        break;
+      }
+      used += 1;
+    }
+    if (consume) {
+      this.#chunks.splice(0, used);
+      this.#buffered -= out.byteLength;
+    }
+    return out;
+  }
+
   async head(length: number): Promise<Uint8Array> {
     await this.#fill(length);
-    const all = concat(this.#chunks, this.#buffered);
-    this.#chunks = [all];
-    return all.subarray(0, length);
+    return this.#take(length, false);
   }
 
   async read(offset: number, length: number): Promise<Uint8Array> {
@@ -156,17 +191,23 @@ class StreamSource implements Source {
     }
     const wanted = clampLength(this.size, offset, length);
     await this.#fill(wanted);
-    const all = concat(this.#chunks, this.#buffered);
-    if (all.byteLength < wanted) {
-      throw new UploadError({
-        code: "stream_size_mismatch",
-        message: `The stream ended after ${String(offset + all.byteLength)} bytes; size says ${String(this.size)}.`,
-      });
+    if (this.#buffered < wanted) {
+      throw streamSizeMismatch(
+        `The stream ended after ${String(offset + this.#buffered)} bytes; size says ${String(this.size)}.`,
+      );
     }
-    this.#chunks = all.byteLength > wanted ? [all.subarray(wanted)] : [];
-    this.#buffered = all.byteLength - wanted;
+    const part = this.#take(wanted, true);
     this.#position += wanted;
-    return all.subarray(0, wanted);
+    if (this.#position === this.size) {
+      // The size is what gets billed and completed: a longer stream would be cut off silently.
+      await this.#fill(1);
+      if (this.#buffered > 0) {
+        throw streamSizeMismatch(
+          `The stream has more than the ${String(this.size)} bytes size says.`,
+        );
+      }
+    }
+    return part;
   }
 
   async close(): Promise<void> {
@@ -186,7 +227,7 @@ export async function openSource(file: FileInput, size?: number): Promise<Source
       const info = await handle.stat();
       if (!info.isFile())
         throw new PreflightError({ code: "invalid_option", message: `${file} is not a file.` });
-      return new FileSource(handle, info.size);
+      return new FileSource(handle, file, info.size);
     } catch (error) {
       await handle.close();
       throw error;
@@ -200,6 +241,12 @@ export async function openSource(file: FileInput, size?: number): Promise<Source
         code: "invalid_option",
         message:
           "A stream input needs size (and durationSeconds); the SDK will not buffer an unbounded stream.",
+      });
+    }
+    if (!Number.isSafeInteger(size) || size < 1) {
+      throw new PreflightError({
+        code: "invalid_option",
+        message: "size must be a whole number of bytes, 1 or more.",
       });
     }
     return new StreamSource(file, size);
