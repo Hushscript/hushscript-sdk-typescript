@@ -18,7 +18,7 @@ jobs:
     environment: release
     permissions:
       contents: read
-      id-token: write # npm provenance and build attestation
+      id-token: write # npm trusted publishing (OIDC), npm provenance and build attestation
       attestations: write # attest-build-provenance
     steps:
       - name: Harden runner
@@ -39,12 +39,33 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.release.tag_name }}
+          fetch-depth: 0
+      - name: Check the tag against package.json and main
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: |
+          version="$(jq -r .version package.json)"
+          if [ "$TAG" != "v$version" ]; then
+            echo "release tag $TAG does not match package.json version v$version" >&2
+            exit 1
+          fi
+          if ! git merge-base --is-ancestor HEAD origin/main; then
+            echo "the commit tagged $TAG is not on main" >&2
+            exit 1
+          fi
       - name: Set up Node
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
-          node-version: "22"
-          registry-url: https://registry.npmjs.org
+          # Node 24 bundles npm 11, which trusted publishing needs (npm 11.5.1 or newer).
+          node-version: "24"
           package-manager-cache: false
+      - name: Check the npm version
+        run: |
+          npm_version="$(npm --version)"
+          if [ "$(printf '%s\n11.5.1\n' "$npm_version" | sort -V | head -n1)" != "11.5.1" ]; then
+            echo "npm $npm_version is older than 11.5.1, which trusted publishing needs" >&2
+            exit 1
+          fi
       - name: Install and build
         run: npm ci --ignore-scripts && npm run build
       - name: Pack the tarball and write the SBOM
@@ -66,7 +87,8 @@ jobs:
             sbom.cdx.json
           retention-days: 90
       - name: Publish with provenance
+        # No registry secret: npm exchanges the job's OIDC token for a short-lived publish token
+        # through the trusted publisher attached to the package.
         env:
           TARBALL: ${{ steps.pack.outputs.tarball }}
-          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
         run: npm publish "$TARBALL" --provenance --access public
