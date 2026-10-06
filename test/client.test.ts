@@ -114,6 +114,43 @@ describe("hs.api", () => {
     expect(clock.sleeps).toEqual([60_000]);
   });
 
+  it("retries a create only when its body carries an idempotency key (spec 7.2)", async () => {
+    const keyed = stubFetch([
+      { status: 503, text: "x" },
+      { status: 200, body: { job_id: "j" } },
+    ]);
+    await client().api.POST("/v1/uploads", {
+      body: { size_bytes: 1, duration_seconds: 20, idempotency_key: "0123456789abcdef0123" },
+    });
+    expect(keyed.calls).toBe(2);
+
+    const keyless = stubFetch([
+      { status: 503, text: "x" },
+      { status: 200, body: { job_id: "j" } },
+    ]);
+    await expect(
+      client().api.POST("/v1/uploads", { body: { size_bytes: 1, duration_seconds: 20 } }),
+    ).rejects.toMatchObject({ status: 503 });
+    expect(keyless.calls).toBe(1);
+
+    const dropped = stubFetch([{ error: networkError("ECONNRESET") }]);
+    await expect(
+      client().api.POST("/v1/uploads", { body: { size_bytes: 1, duration_seconds: 20 } }),
+    ).rejects.toThrow();
+    expect(dropped.calls).toBe(1);
+  });
+
+  it("still paces a create that has no key", async () => {
+    const clock = fakeClock();
+    const f = stubFetch([{ status: 200, body: { job_id: "j" } }]);
+    const hs = client(clock);
+    for (let i = 0; i < 5; i += 1) {
+      await hs.api.POST("/v1/uploads", { body: { size_bytes: 1, duration_seconds: 20 } });
+    }
+    expect(f.calls).toBe(5);
+    expect(clock.sleeps).toEqual([60_000]);
+  });
+
   it("keeps the caller's abort signal", async () => {
     stubFetch([{ status: 200, body: {} }]);
     const controller = new AbortController();

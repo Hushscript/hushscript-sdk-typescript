@@ -68,3 +68,10 @@ export function fileRequired(): ResumeMismatchError {
     message: "The upload is not finished, so resuming needs the original file.",
   });
 }
+
+export function jobMissing(): ResumeMismatchError {
+  return new ResumeMismatchError({
+    code: "resume_job_missing",
+    message: "The job behind this resume token no longer exists, so it cannot be resumed.",
+  });
+}

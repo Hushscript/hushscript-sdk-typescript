@@ -47,10 +47,12 @@ describe("generated tables", () => {
       "wrong_state",
       "resume_file_mismatch",
       "resume_file_required",
-      "config_invalid",
+      "resume_job_missing",
+      "stream_size_mismatch",
     ];
     expect(Object.keys(HINTS).sort()).toEqual([...slugs].sort());
     expect(HINTS["resume_file_mismatch"]).toContain("not the file the upload started with");
     expect(HINTS["resume_file_required"]).toContain("Pass the original file to resume it");
+    expect(HINTS["config_invalid"]).toBeUndefined();
   });
 });

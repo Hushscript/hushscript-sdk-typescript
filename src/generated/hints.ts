@@ -20,5 +20,6 @@ export const HINTS: Record<string, string> = {
   "wrong_state": "The job has already moved on. Call hs.jobs.get(id) to see where it is.",
   "resume_file_mismatch": "This is not the file the upload started with. Pass the original file, or start a new transcription.",
   "resume_file_required": "The upload was not finished. Pass the original file to resume it.",
-  "config_invalid": "(message carries the specific reason)",
+  "resume_job_missing": "This job no longer exists. Start a new transcription.",
+  "stream_size_mismatch": "The stream did not match the size you passed. Pass the exact size in bytes.",
 };

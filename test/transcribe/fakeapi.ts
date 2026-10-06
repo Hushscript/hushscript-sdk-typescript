@@ -36,6 +36,10 @@ export interface FakeConfig {
   plan?: { part_size_bytes?: number; total_parts?: number };
   /** Job reads: each phase answers `polls` reads (default 1); the last one is sticky. */
   jobFlow?: { state: string; polls?: number; error?: string; failure_kind?: string }[];
+  /** Job reads for an id the create never minted answer 404 (default: they follow `jobFlow`). */
+  strictJobs?: boolean;
+  /** What an idempotent replay of the create reports as its job id (a job that was pruned and re-minted). */
+  replayAs?: string;
   /** A hook that returns a Response replaces the default answer for that call. */
   hooks?: Partial<
     Record<Route, (call: Call, fake: Fake) => Response | undefined | Promise<Response | undefined>>
@@ -52,9 +56,35 @@ export interface Fake {
   partNumbers: (route: "r2" | "part") => number[];
   routes: (route: Route) => Call[];
   count: (route: Route) => number;
+  /** Distinct jobs the create has minted. */
+  jobCount: () => number;
 }
 
 const PAGE = 16;
+
+function jobView(
+  id: string,
+  state: string,
+  current: { error?: string; failure_kind?: string } | null,
+): Record<string, unknown> {
+  return {
+    id,
+    state,
+    mode: "standard",
+    declared_seconds: 21,
+    verified_seconds: 20,
+    actual_seconds: null,
+    billable_seconds: 0,
+    error: current?.error ?? null,
+    failure_kind: current?.failure_kind ?? null,
+    retry_of: null,
+    created_at: 1,
+    transcript_id: state === "done" ? "tr_1" : null,
+    private_result_expires_at: null,
+    private_result_available: false,
+    options: {},
+  };
+}
 
 function json(body: unknown, status = 200, headers: Record<string, string> = {}): Response {
   return new Response(JSON.stringify(body), {
@@ -126,6 +156,7 @@ export function fakeApi(config: FakeConfig = {}): Fake {
     routes: (route) =>
       fake.calls.filter((entry) => entry.route === route).map((entry) => entry.call),
     count: (route) => fake.routes(route).length,
+    jobCount: () => jobs.size,
   };
 
   const page = (jobId: string, start: number): Record<string, unknown> | null => {
@@ -169,6 +200,7 @@ export function fakeApi(config: FakeConfig = {}): Fake {
         fake.creates.push(body);
         const key = typeof body["idempotency_key"] === "string" ? body["idempotency_key"] : null;
         let id = key === null ? undefined : keys.get(key);
+        const replayed = id !== undefined;
         if (id === undefined) {
           id = `job_${String(jobs.size + 1)}`;
           const size = body["size_bytes"] as number;
@@ -179,7 +211,7 @@ export function fakeApi(config: FakeConfig = {}): Fake {
         const direct = config.proxied !== true;
         const stateNow = jobs.get(id)?.completed === true ? "processing" : "uploading";
         return json({
-          job_id: id,
+          job_id: replayed && config.replayAs !== undefined ? config.replayAs : id,
           balance_seconds: 1,
           held_seconds: 1,
           limits: {
@@ -218,26 +250,14 @@ export function fakeApi(config: FakeConfig = {}): Fake {
         });
       }
       case "job": {
+        const known = jobs.get(jobId);
+        if (known === undefined && config.strictJobs === true)
+          return apiError("not_found", 1002, 404);
+        if (known !== undefined && !known.completed) return json(jobView(jobId, "uploading", null));
         const current = flow[Math.min(phase, flow.length - 1)];
         if (current === undefined) throw new Error("empty job flow");
         polls += 1;
-        const view = {
-          id: jobId,
-          state: current.state,
-          mode: "standard",
-          declared_seconds: 21,
-          verified_seconds: 20,
-          actual_seconds: null,
-          billable_seconds: 0,
-          error: current.error ?? null,
-          failure_kind: current.failure_kind ?? null,
-          retry_of: null,
-          created_at: 1,
-          transcript_id: current.state === "done" ? "tr_1" : null,
-          private_result_expires_at: null,
-          private_result_available: false,
-          options: {},
-        };
+        const view = jobView(jobId, current.state, current);
         if (current.polls !== undefined && polls >= current.polls && phase < flow.length - 1) {
           phase += 1;
           polls = 0;

@@ -201,10 +201,8 @@ async function drive(call: Promise<unknown>, clock: VirtualClock): Promise<Outco
       continue;
     }
     if (target > clock.nowMs) {
-      // Whole seconds only: the mock signs part URLs with an integer expiry and refuses a fractional one.
-      const stop = Math.ceil(target / 1000) * 1000;
-      await control("POST", "/__clock", { advance: (stop - clock.nowMs) / 1000 });
-      clock.nowMs = stop;
+      await control("POST", "/__clock", { advance: (target - clock.nowMs) / 1000 });
+      clock.nowMs = target;
     }
     // Held responses go out first; SDK timers due at the same instant fire after them.
     if (!(await quiet(SETTLE_MS))) break;

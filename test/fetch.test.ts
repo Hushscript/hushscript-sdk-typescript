@@ -1,7 +1,7 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AbortError, NetworkError, OutcomeUnknownError } from "../src/errors";
+import { AbortError, ApiError, NetworkError, OutcomeUnknownError } from "../src/errors";
 import { hardenedFetch } from "../src/http/fetch";
 import {
   BASE,
@@ -601,6 +601,81 @@ describe("request shaping", () => {
   });
 });
 
+describe("request bodies and redirects", () => {
+  async function bodyChunks(body: unknown): Promise<Uint8Array[]> {
+    const chunks: Uint8Array[] = [];
+    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- stable in every Node 22 release we test
+    const reader = (body as ReadableStream<Uint8Array>).getReader();
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return chunks;
+      chunks.push(value);
+    }
+  }
+
+  it("hands a Uint8Array body to the transport without copying it (spec 8.4 memory bound)", async () => {
+    const bytes = new Uint8Array(600_000).fill(7);
+    const seen: Uint8Array[] = [];
+    vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
+      seen.push(...(await bodyChunks(init?.body)));
+      return new Response("{}", { status: 200 });
+    });
+    await hardenedFetch(config(), "idempotent")(`${BASE}/v1/uploads/j/parts/1`, {
+      method: "PUT",
+      body: bytes,
+    });
+    expect(seen.length).toBeGreaterThan(1);
+    expect(seen.every((chunk) => chunk.buffer === bytes.buffer)).toBe(true);
+    expect(seen.reduce((sum, chunk) => sum + chunk.byteLength, 0)).toBe(bytes.byteLength);
+  });
+
+  it("sends the same bytes again on a retry, still without a copy", async () => {
+    const bytes = Uint8Array.from({ length: 1000 }, (_, i) => i % 251);
+    const sent: Uint8Array[][] = [];
+    vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
+      sent.push(await bodyChunks(init?.body));
+      return new Response("{}", { status: sent.length === 1 ? 503 : 200 });
+    });
+    await hardenedFetch(config(), "idempotent")(`${BASE}/v1/uploads/j/parts/1`, {
+      method: "PUT",
+      body: bytes,
+    });
+    expect(sent).toHaveLength(2);
+    for (const chunks of sent) {
+      expect(chunks.every((chunk) => chunk.buffer === bytes.buffer)).toBe(true);
+      expect(Buffer.concat(chunks).equals(bytes)).toBe(true);
+    }
+  });
+
+  it("never follows a redirect, and turns a 3xx into an error (spec 7.2)", async () => {
+    const f = stubFetch([{ status: 302, headers: { location: "https://evil.example/x" } }]);
+    const error = await call("safe").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(302);
+    expect(f.calls).toBe(1);
+  });
+
+  it("asks the transport for manual redirect handling on every request", async () => {
+    const modes: unknown[] = [];
+    vi.stubGlobal("fetch", (_input: unknown, init?: RequestInit) => {
+      modes.push(init?.redirect);
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    await call("safe");
+    await hardenedFetch(config(), "safe")(`${BASE}/v1/account`, { redirect: "follow" });
+    expect(modes).toEqual(["manual", "manual"]);
+  });
+
+  it("sends Authorization only to the API origin", async () => {
+    const f = stubFetch([{ status: 200, body: {} }]);
+    const headers = { authorization: `Bearer ${TOKEN}` };
+    await hardenedFetch(config(), "safe")(`${BASE}/v1/account`, { headers });
+    await hardenedFetch(config(), "safe")("https://storage.example/part", { headers });
+    expect(f.requests[0]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
+    expect(f.requests[1]?.headers.get("authorization")).toBeNull();
+  });
+});
+
 describe("against a real HTTP server", () => {
   let server: Server | undefined;
   afterEach(() => {
@@ -609,7 +684,10 @@ describe("against a real HTTP server", () => {
   });
 
   async function listen(
-    handler: (request: IncomingMessage, count: number) => { status: number; body?: string },
+    handler: (
+      request: IncomingMessage,
+      count: number,
+    ) => { status: number; body?: string; headers?: Record<string, string> },
   ): Promise<{
     url: string;
     seen: { length: string | undefined; chunked: string | undefined; body: string }[];
@@ -625,7 +703,10 @@ describe("against a real HTTP server", () => {
           body: Buffer.concat(chunks).toString(),
         });
         const reply = handler(request, seen.length);
-        response.writeHead(reply.status, { "content-type": "application/json" });
+        response.writeHead(reply.status, {
+          "content-type": "application/json",
+          ...reply.headers,
+        });
         response.end(reply.body ?? "{}");
       });
     });
@@ -651,6 +732,26 @@ describe("against a real HTTP server", () => {
       String(Buffer.byteLength(body)),
     ]);
     expect(seen.every((s) => s.chunked === undefined)).toBe(true);
+  });
+
+  it("does not follow a redirect to another host", async () => {
+    vi.unstubAllGlobals();
+    const target = await listen(() => ({ status: 200 }));
+    const targetServer = server;
+    const origin = await listen(() => ({
+      status: 302,
+      headers: { location: `${target.url}/stolen` },
+    }));
+    const error = await hardenedFetch(
+      config(),
+      "safe",
+    )(`${origin.url}/v1/x`).catch((e: unknown) => e);
+    targetServer?.close();
+    targetServer?.closeAllConnections();
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).status).toBe(302);
+    expect(origin.seen).toHaveLength(1);
+    expect(target.seen).toHaveLength(0);
   });
 
   it("sends a body larger than one chunk intact", async () => {

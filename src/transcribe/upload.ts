@@ -54,11 +54,12 @@ class PartUrls {
   #next: number | null;
   #direct = true;
 
-  constructor(settings: UploadSettings, plan: UploadPlan) {
+  /** `signal` is the caller's and the upload's own failure signal combined, so a page fetch stops with the rest. */
+  constructor(settings: UploadSettings, plan: UploadPlan, signal: AbortSignal) {
     this.#api = settings.api;
     this.#cfg = settings.cfg;
     this.#jobId = settings.jobId;
-    this.#signal = settings.signal;
+    this.#signal = signal;
     this.#next = plan.next_part_number;
     if (plan.part_urls.length > 0) this.#store(plan.part_urls);
   }
@@ -167,17 +168,19 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
       message: `The API planned ${String(plan.total_parts)} parts; the file needs ${String(totalParts)}.`,
     });
   }
-  const urls = plan === null ? null : new PartUrls(settings, plan);
+  const failure = new AbortController();
+  const signal = AbortSignal.any([settings.signal, failure.signal]);
+  const urls = plan === null ? null : new PartUrls(settings, plan, signal);
   const putFetch = hardenedFetch(cfg, "idempotent", { timeoutMs: cfg.partTimeoutMs });
   const proxiedUrl = (n: number): string =>
     `${cfg.baseUrl}/v1/uploads/${encodeURIComponent(jobId)}/parts/${String(n)}`;
 
-  const failure = new AbortController();
-  const signal = AbortSignal.any([settings.signal, failure.signal]);
   const acks = new Map<number, string>();
   let proxied = plan === null;
   // Read through a call: the compiler would otherwise carry a `proxied` check across an await.
   const isProxied = (): boolean => proxied;
+  // Read through a call for the same reason: an await may have moved the signal since the last check.
+  const isAborted = (): boolean => signal.aborted;
   let directSucceeded = false;
   let sent = 0;
   let nextPart = 1;
@@ -205,11 +208,62 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
     });
   };
 
+  /**
+   * A failed direct attempt, whether the PUT or the part-urls fetch behind it (spec 8.4): a 403, or
+   * any failure once a direct PUT has succeeded, gets one fresh page; after that the job falls back
+   * to proxied parts if no direct PUT ever succeeded, and raises `parts_exhausted` if one did.
+   */
+  const recover = async (
+    pages: PartUrls,
+    error: unknown,
+    n: number,
+    url: string | null,
+    state: { refetched: boolean },
+  ): Promise<void> => {
+    const retryable =
+      error instanceof HushscriptError &&
+      !(error instanceof AbortError) &&
+      !(error instanceof UploadError && error.code === "part_url_missing");
+    if (!retryable || isAborted()) throw error;
+    let cause: HushscriptError = error;
+    const forbidden = error instanceof ApiError && error.status === 403;
+    if (url !== null && !state.refetched && (forbidden || directSucceeded)) {
+      state.refetched = true;
+      try {
+        await pages.refresh(n, url);
+        return;
+      } catch (refreshError) {
+        if (
+          !(refreshError instanceof HushscriptError) ||
+          refreshError instanceof AbortError ||
+          isAborted()
+        )
+          throw refreshError;
+        cause = refreshError;
+      }
+    }
+    if (!directSucceeded) {
+      proxied = true;
+      return;
+    }
+    throw new UploadError({
+      code: "parts_exhausted",
+      message: `Part ${String(n)} failed after retries and a fresh URL.`,
+      cause,
+    });
+  };
+
   /** Direct first; a part that fails keeps the fallback rules of spec 8.4. */
   const sendDirect = async (n: number, bytes: Uint8Array): Promise<void> => {
-    let refetched = false;
+    const state = { refetched: false };
     while (!isProxied() && urls !== null) {
-      const url = await urls.urlFor(n);
+      let url: string | null;
+      try {
+        url = await urls.urlFor(n);
+      } catch (error) {
+        await recover(urls, error, n, null, state);
+        continue;
+      }
       if (url === null) {
         if (directSucceeded) {
           throw new UploadError({
@@ -227,21 +281,7 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
         acks.set(n, etag);
         return;
       } catch (error) {
-        if (!(error instanceof HushscriptError) || error instanceof AbortError || signal.aborted)
-          throw error;
-        const forbidden = error instanceof ApiError && error.status === 403;
-        if (!refetched && (forbidden || directSucceeded)) {
-          refetched = true;
-          await urls.refresh(n, url);
-        } else if (directSucceeded) {
-          throw new UploadError({
-            code: "parts_exhausted",
-            message: `Part ${String(n)} failed after retries and a fresh URL.`,
-            cause: error,
-          });
-        } else {
-          proxied = true;
-        }
+        await recover(urls, error, n, url, state);
       }
     }
   };

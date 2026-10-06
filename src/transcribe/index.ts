@@ -1,23 +1,24 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "openapi-fetch";
 import type { ResolvedConfig } from "../config.ts";
-import { AbortError, UploadError } from "../errors.ts";
+import { AbortError, HushscriptError, NotFoundError, UploadError } from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { present } from "./common.ts";
 import { runHeartbeat } from "./heartbeat.ts";
-import { invalidOption, preflight } from "./preflight.ts";
+import { checkDurationOption, invalidOption, preflight } from "./preflight.ts";
 import {
   assertSameFile,
   decodeResumeToken,
   encodeResumeToken,
   fileRequired,
+  jobMissing,
   type ResumeState,
   type ResumeToken,
 } from "./resume.ts";
 import { openSource, type FileInput, type Source } from "./source.ts";
 import { toTranscript, type Transcript } from "./transcript.ts";
 import type { Progress, ResumeOptions, TranscribeOptions } from "./types.ts";
-import { uploadParts, type PartAck } from "./upload.ts";
+import { uploadParts } from "./upload.ts";
 import { DEFAULT_WAIT_TIMEOUT_SECONDS, failureOf, readJob, waitForJob, type Job } from "./wait.ts";
 
 export type { Job } from "./wait.ts";
@@ -51,22 +52,25 @@ function transcriptionOptions(options: TranscribeOptions): CreateBody["transcrip
   return Object.keys(out).length === 0 ? undefined : out;
 }
 
+/** Spec 8.6: bad options are refused before any request, never clamped. */
 function checkRuntimeOptions(options: {
   concurrency?: number | undefined;
   waitTimeout?: number | undefined;
+  durationSeconds?: number | undefined;
 }): {
   concurrency: number;
   waitTimeout: number;
 } {
   const concurrency = options.concurrency ?? DEFAULT_CONCURRENCY;
-  if (!Number.isInteger(concurrency) || concurrency < 1) {
-    throw invalidOption("concurrency must be a whole number, 1 or more.");
+  if (!Number.isInteger(concurrency) || concurrency < 1 || concurrency > MAX_CONCURRENCY) {
+    throw invalidOption(`concurrency must be a whole number from 1 to ${String(MAX_CONCURRENCY)}.`);
   }
   const waitTimeout = options.waitTimeout ?? DEFAULT_WAIT_TIMEOUT_SECONDS;
   if (!Number.isFinite(waitTimeout) || waitTimeout <= 0) {
     throw invalidOption("waitTimeout must be a positive number of seconds.");
   }
-  return { concurrency: Math.min(concurrency, MAX_CONCURRENCY), waitTimeout };
+  checkDurationOption(options.durationSeconds);
+  return { concurrency, waitTimeout };
 }
 
 /** Everything the upload and wait stages share, for one transcribe or resume call. */
@@ -94,6 +98,8 @@ export class Pipeline {
     const { concurrency, waitTimeout } = checkRuntimeOptions(options);
     const signal = options.signal ?? new AbortController().signal;
     let token: ResumeToken | null = null;
+    // Set once the create is about to go out: from then on an error carries the key (spec 7.3).
+    let sentKey: string | null = null;
     let source: Source | null = null;
     try {
       source = await openSource(file, options.size);
@@ -117,6 +123,7 @@ export class Pipeline {
       if (options.matterCode !== undefined) body.matter_code = options.matterCode;
       const transcription = transcriptionOptions(options);
       if (transcription !== undefined) body.transcription_options = transcription;
+      sentKey = idempotencyKey;
       const created = present(
         (await this.#api.POST("/v1/uploads", { body, signal })).data,
         "POST /v1/uploads",
@@ -139,7 +146,7 @@ export class Pipeline {
         onProgress: options.onProgress,
       });
     } catch (error) {
-      throw this.#withToken(error, token, signal);
+      throw this.#annotate(error, token, signal, sentKey);
     } finally {
       await source?.close();
     }
@@ -159,6 +166,22 @@ export class Pipeline {
         source = await openSource(file, state.size);
         assertSameFile(state, source.size);
       }
+      const run: Run = {
+        state,
+        token,
+        source,
+        concurrency,
+        waitTimeout,
+        signal,
+        onProgress: options.onProgress,
+      };
+      // A replayed create would mint a new job, and a new hold, for a job that was deleted or pruned.
+      const job = await readJob(this.#api, state.jobId, signal).catch((error: unknown) => {
+        throw error instanceof NotFoundError ? jobMissing() : error;
+      });
+      if (job.state !== "uploading")
+        return await this.#finish({ state: job.state, upload: null }, run, job);
+      if (source === null) throw fileRequired();
       // Replaying the create with the original key returns the same job, with no second hold.
       const created = present(
         (
@@ -173,17 +196,10 @@ export class Pipeline {
         ).data,
         "POST /v1/uploads",
       );
-      return await this.#finish(created, {
-        state,
-        token,
-        source,
-        concurrency,
-        waitTimeout,
-        signal,
-        onProgress: options.onProgress,
-      });
+      if (created.job_id !== state.jobId) throw jobMissing();
+      return await this.#finish(created, run);
     } catch (error) {
-      throw this.#withToken(error, token, signal);
+      throw this.#annotate(error, token, signal, null);
     } finally {
       await source?.close();
     }
@@ -202,32 +218,47 @@ export class Pipeline {
     });
   }
 
-  #withToken(error: unknown, token: ResumeToken | null, signal: AbortSignal): unknown {
+  /** Adds the resume token to a cancellation and, after a create was sent, the key to every error (spec 7.1, 7.3). */
+  #annotate(
+    error: unknown,
+    token: ResumeToken | null,
+    signal: AbortSignal,
+    key: string | null,
+  ): unknown {
     const cancelled = error instanceof AbortError || signal.aborted;
-    if (
-      !cancelled ||
-      token === null ||
-      (error instanceof AbortError && error.resumeToken !== null)
-    ) {
-      return error;
+    const wrap =
+      cancelled && token !== null && !(error instanceof AbortError && error.resumeToken !== null);
+    const out = wrap
+      ? new AbortError({
+          message: error instanceof Error ? error.message : "The request was aborted.",
+          cause: error,
+          resumeToken: token,
+        })
+      : error;
+    if (key !== null && out instanceof HushscriptError) {
+      out.idempotencyKey = key;
+      out.resumeToken ??= token;
     }
-    return new AbortError({
-      message: error instanceof Error ? error.message : "The request was aborted.",
-      cause: error instanceof Error ? error.cause : error,
-      resumeToken: token,
-    });
+    return out;
   }
 
-  async #finish(created: CreateResponse, run: Run): Promise<Transcript> {
+  /** `known` is the job as `resume()` just read it, for a job that is not uploading. */
+  async #finish(
+    created: Pick<CreateResponse, "state" | "upload">,
+    run: Run,
+    known: Job | null = null,
+  ): Promise<Transcript> {
     const { state, signal } = run;
     let jobState = created.state;
+    let finished = known;
     if (created.state === "uploading") {
       if (run.source === null) throw fileRequired();
       jobState = await this.#upload(created, run, run.source);
+      finished = null;
     }
     if (jobState === "done" || jobState === "failed") {
       // The complete response has no transcript id: one job read gives it, with no poll loop.
-      return await this.#fetch(await readJob(this.#api, state.jobId, signal), run);
+      return await this.#fetch(finished ?? (await readJob(this.#api, state.jobId, signal)), run);
     }
     if (jobState === "queued" || jobState === "processing") {
       run.onProgress?.({ stage: "processing", state: jobState });
@@ -244,7 +275,11 @@ export class Pipeline {
     return await this.#fetch(job, run);
   }
 
-  async #upload(created: CreateResponse, run: Run, source: Source): Promise<string> {
+  async #upload(
+    created: Pick<CreateResponse, "upload">,
+    run: Run,
+    source: Source,
+  ): Promise<string> {
     const { state } = run;
     const stop = new AbortController();
     const signal = AbortSignal.any([run.signal, stop.signal]);
@@ -263,28 +298,23 @@ export class Pipeline {
       stop.abort();
     });
     try {
-      let acks: PartAck[] | null = null;
-      try {
-        acks = await uploadParts({
-          cfg: this.#cfg,
-          api: this.#api,
-          jobId: state.jobId,
-          source,
-          plan: created.upload,
-          concurrency: run.concurrency,
-          signal,
-          onAcked: (bytesSent) => {
-            run.onProgress?.({
-              stage: "uploading",
-              percent: Math.floor((bytesSent * 100) / source.size),
-              bytesSent,
-              bytesTotal: source.size,
-            });
-          },
-        });
-      } catch (error) {
-        throw failure.failed ? failure.error : error;
-      }
+      const acks = await uploadParts({
+        cfg: this.#cfg,
+        api: this.#api,
+        jobId: state.jobId,
+        source,
+        plan: created.upload,
+        concurrency: run.concurrency,
+        signal,
+        onAcked: (bytesSent) => {
+          run.onProgress?.({
+            stage: "uploading",
+            percent: Math.floor((bytesSent * 100) / source.size),
+            bytesSent,
+            bytesTotal: source.size,
+          });
+        },
+      });
       if (failure.failed) throw failure.error;
       const completed = await this.#api.POST("/v1/uploads/{job}/complete", {
         params: { path: { job: state.jobId } },
@@ -292,6 +322,9 @@ export class Pipeline {
         signal,
       });
       return present(completed.data, "POST /v1/uploads/{job}/complete").state;
+    } catch (error) {
+      // A heartbeat that stopped the upload (a 401) is the real cause of whatever abort followed.
+      throw failure.failed ? failure.error : error;
     } finally {
       stop.abort();
       await heartbeat;

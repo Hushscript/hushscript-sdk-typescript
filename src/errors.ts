@@ -86,6 +86,10 @@ export class HushscriptError extends Error {
   hint: string | null;
   details: Record<string, unknown>;
   retryAfter: number | null;
+  /** Set on an error `transcribe()` raised after its create was sent: passing it back replays the same job (spec 7.3). */
+  idempotencyKey: string | null = null;
+  /** Set once the job id is known; `resume()` takes it. */
+  resumeToken: string | null = null;
 
   constructor(init: ErrorInit) {
     super(
@@ -163,9 +167,7 @@ export class JobFailedError extends HushscriptError {
 }
 
 export class WaitTimeoutError extends HushscriptError {
-  /** Null only for `jobs.wait`, which has no idempotency key to build a token from. */
-  resumeToken: string | null;
-
+  /** `resumeToken` is null only for `jobs.wait`, which has no idempotency key to build a token from. */
   constructor(init: WithDefaultCode & { resumeToken: string | null }) {
     super({ ...init, code: init.code ?? "wait_timeout" });
     this.resumeToken = init.resumeToken;
@@ -173,8 +175,6 @@ export class WaitTimeoutError extends HushscriptError {
 }
 
 export class AbortError extends HushscriptError {
-  resumeToken: string | null;
-
   constructor(init: WithDefaultCode & { resumeToken?: string | null }) {
     super({ ...init, code: init.code ?? "aborted" });
     this.resumeToken = init.resumeToken ?? null;

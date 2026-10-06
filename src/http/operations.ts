@@ -40,8 +40,27 @@ export function resolveOperation(operation: string): string {
   return operationFor(operation.slice(0, space), operation.slice(space + 1));
 }
 
-/** The retry class of a concrete request, from its method and URL path alone (spec 7.4). */
-export function retryClassForRequest(method: string, pathname: string): RetryClass {
+function hasIdempotencyKey(body: string | null): boolean {
+  if (body === null) return false;
+  try {
+    const key = (JSON.parse(body) as { idempotency_key?: unknown } | null)?.idempotency_key;
+    return typeof key === "string" && key !== "";
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The retry class of a concrete request, from its method, URL path and, for an upload create, its
+ * body (spec 7.2, 7.4). A create replays safely only with an idempotency key; without one it is
+ * an ordinary mutation.
+ */
+export function retryClassForRequest(
+  method: string,
+  pathname: string,
+  body: string | null = null,
+): RetryClass {
   const operation = operationFor(method, pathname);
-  return retryClassFor(method, operation.slice(operation.indexOf(" ") + 1));
+  const retryClass = retryClassFor(method, operation.slice(operation.indexOf(" ") + 1));
+  return retryClass === "upload-create" && !hasIdempotencyKey(body) ? "mutate" : retryClass;
 }

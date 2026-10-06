@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { operationFor } from "../src/http/operations";
+import { operationFor, retryClassForRequest } from "../src/http/operations";
 
 describe("operationFor", () => {
   it.each([
@@ -18,5 +18,29 @@ describe("operationFor", () => {
 
   it("does not let a trailing slash or extra segment match a template", () => {
     expect(operationFor("GET", "/v1/jobs/a/b")).toBe("GET /v1/jobs/a/b");
+  });
+});
+
+describe("retryClassForRequest (spec 7.2)", () => {
+  it.each<[string, string | null, string]>([
+    [
+      "a create with an idempotency key",
+      '{"size_bytes":1,"idempotency_key":"0123456789abcdef"}',
+      "upload-create",
+    ],
+    ["a create with an empty key", '{"size_bytes":1,"idempotency_key":""}', "mutate"],
+    ["a create with a non-string key", '{"idempotency_key":7}', "mutate"],
+    ["a create with no key", '{"size_bytes":1}', "mutate"],
+    ["a create with a body that is not JSON", "not json", "mutate"],
+    ["a create with a null body", "null", "mutate"],
+    ["a create with no body", null, "mutate"],
+  ])("%s is %s", (_name, body, expected) => {
+    expect(retryClassForRequest("POST", "/v1/uploads", body)).toBe(expected);
+  });
+
+  it("leaves every other operation to its method and path", () => {
+    expect(retryClassForRequest("GET", "/v1/account")).toBe("safe");
+    expect(retryClassForRequest("POST", "/v1/uploads/job_1/complete")).toBe("idempotent");
+    expect(retryClassForRequest("POST", "/v1/billing/purchase", "{}")).toBe("purchase");
   });
 });

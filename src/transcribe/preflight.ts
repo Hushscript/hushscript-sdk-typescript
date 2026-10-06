@@ -27,6 +27,13 @@ export function invalidOption(message: string): PreflightError {
   return new PreflightError({ code: "invalid_option", message });
 }
 
+/** Spec 7.3: a supplied duration that is not a finite positive number is an invalid option, not an out-of-range file. */
+export function checkDurationOption(seconds: number | undefined): void {
+  if (seconds !== undefined && !(Number.isFinite(seconds) && seconds > 0)) {
+    throw invalidOption("durationSeconds must be a finite number of seconds, above 0.");
+  }
+}
+
 /** Spec 7.3: uploads accept 16 to 128 printable ASCII characters. */
 function checkIdempotencyKey(key: string): void {
   let printable = key.length >= 16 && key.length <= 128;
@@ -86,11 +93,7 @@ export async function preflight(
     });
   }
   const seconds = options.durationSeconds ?? (await probeDuration(source));
-  if (
-    !Number.isFinite(seconds) ||
-    seconds < MIN_DURATION_SECONDS ||
-    Math.ceil(seconds) > MAX_DURATION_SECONDS
-  ) {
+  if (seconds < MIN_DURATION_SECONDS || Math.ceil(seconds) > MAX_DURATION_SECONDS) {
     throw new FileLimitError({
       code: "duration_out_of_range",
       message: `The duration is ${String(seconds)} s; it must be 15 s to 10 hours.`,

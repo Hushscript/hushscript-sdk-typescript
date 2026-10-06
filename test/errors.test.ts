@@ -89,6 +89,8 @@ describe("class tree (spec 9.2)", () => {
   it("gives SDK-side classes their own slug and hint", () => {
     const config = new ConfigurationError({ message: "m" });
     expect(config.code).toBe("config_invalid");
+    expect(config.hint).toBeNull();
+    expect(ConfigurationError.missingToken().hint).toContain("HUSHSCRIPT_TOKEN");
     expect(config.numericCode).toBeNull();
     expect(config.status).toBeNull();
     expect(new PaymentMethodRequiredError({ message: "m" }).code).toBe("no_default_card");
