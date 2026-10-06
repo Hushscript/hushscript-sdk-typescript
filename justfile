@@ -103,15 +103,28 @@ build version=floor:
         && tar -xzf /out/hushscript-sdk-*.tgz -C /out/consumer/node_modules/@hushscript/sdk --strip-components=1'
     docker run {{sandbox}} --network none --user "$user" -v "$out":/out "hushscript-typescript-proddeps:node{{version}}" \
       sh -c 'cp -r /work/node_modules/. /out/consumer/node_modules/ && printf "{\"type\":\"module\",\"dependencies\":{\"@hushscript/sdk\":\"*\"}}\n" > /out/consumer/package.json'
+    printf '%s\n' \
+      'import { ERROR_CATALOG, HINTS, OPERATION_SCOPES } from "@hushscript/sdk";' \
+      'import type { ErrorCatalogEntry, paths } from "@hushscript/sdk";' \
+      'export const entry: ErrorCatalogEntry | undefined = ERROR_CATALOG["insufficient_balance"];' \
+      'export type Account = paths["/v1/account"]["get"];' \
+      'export const sizes = [Object.keys(HINTS).length, Object.keys(OPERATION_SCOPES).length];' > "$out/consumer/index.ts"
+    printf '%s\n' '{"compilerOptions":{"target":"ES2022","module":"NodeNext","moduleResolution":"NodeNext","strict":true,"noUncheckedIndexedAccess":true,"exactOptionalPropertyTypes":true,"verbatimModuleSyntax":true,"skipLibCheck":false,"types":[],"noEmit":true},"files":["index.ts"]}' > "$out/consumer/tsconfig.json"
+    # The oldest TypeScript a consumer may use (typescript-floor in package.json) must accept the packed d.ts.
+    docker run {{sandbox}} --network none --user "$user" -v "$out/consumer":/consumer:ro "hushscript-typescript-dev:node{{version}}" \
+      timeout 120 node /work/node_modules/typescript-floor/bin/tsc -p /consumer/tsconfig.json
     check='const sdk = await import("@hushscript/sdk"); if (Object.keys(sdk.ERROR_CATALOG).length === 0) throw new Error("tables missing"); console.log("import ok");'
     docker run {{sandbox}} --network none --user "$user" -v "$out/consumer":/consumer:ro -w /consumer "$node_image" \
       timeout 60 node --input-type=module -e "$check"
+    # require(esm) works through the "default" export condition (Node 22.12 and newer).
+    docker run {{sandbox}} --network none --user "$user" -v "$out/consumer":/consumer:ro -w /consumer "$node_image" \
+      timeout 60 node --disable-warning=ExperimentalWarning -e 'const sdk = require("@hushscript/sdk"); if (Object.keys(sdk.ERROR_CATALOG).length === 0) throw new Error("tables missing"); console.log("require ok");'
     docker run {{sandbox}} --network none --user "$user" -v "$out/consumer":/consumer:ro -w /consumer {{bun_image}} \
       timeout 60 bun --eval "$check"
     docker run {{sandbox}} --network none --user "$user" -e DENO_DIR=/tmp/deno -v "$out/consumer":/consumer:ro -w /consumer --entrypoint timeout {{deno_image}} \
       60 deno eval --node-modules-dir=manual "$check"
 
-# regenerate openapi.json and src/generated from the production spec (outbound network)
+# regenerate openapi.json and src/generated from the production spec, or from a local spec file (outbound network)
 regen spec="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -121,8 +134,14 @@ regen spec="":
     if [ -n "${CONFORMANCE_DIR:-}" ]; then
       extra=(-v "$(realpath "$CONFORMANCE_DIR")":/conformance:ro -e CONFORMANCE_DIR=/conformance)
     fi
+    spec="{{spec}}"
+    # A local file is bind-mounted, so the generator reads exactly the bytes that were diffed.
+    if [ -n "$spec" ] && [ -f "$spec" ]; then
+      extra+=(-v "$(realpath "$spec")":/spec/openapi.json:ro)
+      spec=/spec/openapi.json
+    fi
     docker compose build regen
-    docker compose run --rm ${extra[@]+"${extra[@]}"} regen timeout 600 node scripts/generate.mjs {{spec}}
+    docker compose run --rm ${extra[@]+"${extra[@]}"} regen timeout 600 node scripts/generate.mjs ${spec:+"$spec"}
 
 # lint, then test and conformance, then examples and build; no argument runs Node 22 and 24
 ci version="":

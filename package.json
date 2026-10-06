@@ -24,7 +24,8 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./package.json": "./package.json"
   },
@@ -60,6 +61,7 @@
     "publint": "0.3.25",
     "tsup": "8.5.1",
     "typescript": "6.0.3",
+    "typescript-floor": "npm:typescript@5.5.4",
     "typescript-eslint": "8.71.1",
     "vitest": "5.0.3"
   },
