@@ -1,3 +1,4 @@
+import { camelize } from "./camel.ts";
 import { ERROR_CATALOG } from "./generated/catalog.ts";
 import { HINTS } from "./generated/hints.ts";
 import { OPERATION_SCOPES } from "./generated/scopes.ts";
@@ -245,20 +246,6 @@ function classFor(status: number, slug: string): ErrorClass {
     default:
       return ApiError;
   }
-}
-
-function camelKey(key: string): string {
-  return key.replace(/_([a-z0-9])/g, (_whole, char: string) => char.toUpperCase());
-}
-
-function camelize(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(camelize);
-  if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(
-      Object.entries(value).map(([key, item]) => [camelKey(key), camelize(item)]),
-    );
-  }
-  return value;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

@@ -167,4 +167,21 @@ describe("stream source", () => {
     );
     await source.close();
   });
+
+  it("stops head() waiting on a stream that has stopped producing when the call is aborted", async () => {
+    const source = await openSource(
+      new ReadableStream<Uint8Array>({
+        start(controller): void {
+          controller.enqueue(DATA.subarray(0, 4));
+        },
+      }),
+      100,
+    );
+    const stop = new AbortController();
+    const head = source.head(30, stop.signal).catch((e: unknown) => e);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    stop.abort();
+    expect(await head).toBeInstanceOf(AbortError);
+    await source.close();
+  });
 });
