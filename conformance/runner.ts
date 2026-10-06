@@ -4,10 +4,15 @@
 // Ops are mapped one at a time; a scenario whose op (or `prior` op) has no mapping yet is reported
 // as SKIP. The contract forbids skipping, so every later task that adds friendly-layer methods
 // adds the matching entries to OPS until nothing is skipped.
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
 import { inspect } from "node:util";
 import { Hushscript } from "../src/client.ts";
 import type { Clock } from "../src/clock.ts";
 import * as sdk from "../src/index.ts";
+import { probeDuration } from "../src/transcribe/probe.ts";
+import { openSource } from "../src/transcribe/source.ts";
 
 const BASE_URL = "http://127.0.0.1:4010";
 const TEST_TOKEN = `hsr1:eu:pat.${"0123456789abcdef".repeat(2)}.${"fedcba9876543210".repeat(4)}`;
@@ -41,6 +46,11 @@ interface Scenario {
   name: string;
   call: CallSpec;
   expect: { result?: unknown; error?: ErrorExpectation };
+}
+
+interface CallContext {
+  /** The resume token of the `prior` call's error. */
+  resumeToken: string | null;
 }
 
 interface MockState {
@@ -191,8 +201,10 @@ async function drive(call: Promise<unknown>, clock: VirtualClock): Promise<Outco
       continue;
     }
     if (target > clock.nowMs) {
-      await control("POST", "/__clock", { advance: (target - clock.nowMs) / 1000 });
-      clock.nowMs = target;
+      // Whole seconds only: the mock signs part URLs with an integer expiry and refuses a fractional one.
+      const stop = Math.ceil(target / 1000) * 1000;
+      await control("POST", "/__clock", { advance: (stop - clock.nowMs) / 1000 });
+      clock.nowMs = stop;
     }
     // Held responses go out first; SDK timers due at the same instant fire after them.
     if (!(await quiet(SETTLE_MS))) break;
@@ -201,9 +213,57 @@ async function drive(call: Promise<unknown>, clock: VirtualClock): Promise<Outco
   return done.outcome ?? "scenario ran out of real time";
 }
 
-type Op = (hs: Hushscript, args: Obj) => Promise<unknown>;
+let scratch: Promise<string> | undefined;
+const downloaded = new Map<string, Promise<string>>();
+
+/** A file under the mock's `fixtures/` (scenarios write `media/...`), saved once into a scratch directory. */
+function fixtureFile(relative: string): Promise<string> {
+  let found = downloaded.get(relative);
+  if (found === undefined) {
+    scratch ??= mkdtemp(join(tmpdir(), "hs-conformance-"));
+    found = (async () => {
+      const target = join(await scratch, "fixtures", relative);
+      const response = await rawFetch(`${BASE_URL}/__files/fixtures/${relative}`);
+      if (!response.ok)
+        throw new Error(`fixture ${relative}: the mock answered ${String(response.status)}`);
+      await mkdir(dirname(target), { recursive: true });
+      await writeFile(target, new Uint8Array(await response.arrayBuffer()));
+      return target;
+    })();
+    downloaded.set(relative, found);
+  }
+  return found;
+}
+
+type Op = (hs: Hushscript, args: Obj, context: CallContext) => Promise<unknown>;
+
+/** The runner's view of a transcript until the Transcript class exists: the raw body, in the contract's shape. */
+function transcriptResult(transcript: sdk.Transcript): Obj {
+  return {
+    id: transcript.id,
+    title: transcript.title,
+    language: transcript.language_detected,
+    durationSeconds: transcript.duration_seconds,
+    utteranceCount: transcript.body.original.utterances.length,
+    raw: transcript,
+  };
+}
+
+function transcribeOptions(args: Obj): sdk.TranscribeOptions {
+  return isObj(args["options"]) ? args["options"] : {};
+}
 
 const OPS: Record<string, Op> = {
+  transcribe: async (hs, args) => {
+    const file = await fixtureFile(String(args["file"]));
+    return transcriptResult(await hs.transcribe(file, transcribeOptions(args)));
+  },
+  resume: async (hs, args, context) => {
+    if (context.resumeToken === null)
+      throw new Error("resume needs a prior call that raised a resume token");
+    const file = typeof args["file"] === "string" ? await fixtureFile(args["file"]) : undefined;
+    return transcriptResult(await hs.resume(context.resumeToken, file));
+  },
   // hs.balance() arrives with the friendly layer; until then the same read goes through hs.api.
   balance: async (hs) => {
     const { data } = await hs.api.GET("/v1/account");
@@ -309,33 +369,73 @@ function errorMismatches(error: unknown, want: ErrorExpectation): string[] {
 }
 
 function mapped(call: CallSpec): boolean {
-  return call.op in OPS && (call.prior === undefined || mapped(call.prior));
+  return (
+    (call.op in OPS || call.op === "probe") && (call.prior === undefined || mapped(call.prior))
+  );
+}
+
+async function durations(): Promise<Record<string, number>> {
+  return JSON.parse(await readFile(await fixtureFile("media/durations.json"), "utf8")) as Record<
+    string,
+    number
+  >;
+}
+
+/** Probes every media fixture. It needs no virtual time, and its disk reads must not look like a stalled SDK. */
+async function probeAll(args: Obj): Promise<unknown> {
+  const tolerance = Number(args["toleranceSeconds"] ?? 1);
+  const expected = await durations();
+  const failures: Obj[] = [];
+  for (const [name, seconds] of Object.entries(expected)) {
+    const source = await openSource(await fixtureFile(`media/${name}`));
+    try {
+      const got = await probeDuration(source);
+      if (Math.abs(got - seconds) > tolerance)
+        failures.push({ file: name, expected: seconds, got });
+    } catch (error) {
+      failures.push({ file: name, expected: seconds, got: String(error) });
+    } finally {
+      await source.close();
+    }
+  }
+  return { checked: Object.keys(expected).length, failures };
 }
 
 async function runCall(
   hs: Hushscript,
   clock: VirtualClock,
   call: CallSpec,
+  context: CallContext,
 ): Promise<Outcome | string> {
+  if (call.op === "probe") {
+    try {
+      return { ok: true, value: await probeAll(call.args ?? {}) };
+    } catch (error) {
+      return { ok: false, error };
+    }
+  }
   const op = OPS[call.op];
   if (op === undefined) return `op ${call.op} is not mapped`;
-  return drive(op(hs, call.args ?? {}), clock);
+  return drive(op(hs, call.args ?? {}, context), clock);
 }
 
 async function runScenario(scenario: Scenario): Promise<string[]> {
   await control("POST", "/__scenario", { name: scenario.name });
   const clock = new VirtualClock();
   const hs = new Hushscript({ token: TEST_TOKEN, baseUrl: BASE_URL, clock });
+  const context: CallContext = { resumeToken: null };
   if (scenario.call.prior !== undefined) {
     const prior = scenario.call.prior;
-    const outcome = await runCall(hs, clock, prior);
+    const outcome = await runCall(hs, clock, prior, context);
     if (typeof outcome === "string") return [`prior: ${outcome}`];
     if (outcome.ok) return ["prior call was expected to raise"];
     const problems = errorMismatches(outcome.error, prior.expectError ?? {});
     if (problems.length > 0) return problems.map((p) => `prior: ${p}`);
+    const token = (outcome.error as { resumeToken?: unknown }).resumeToken;
+    context.resumeToken = typeof token === "string" ? token : null;
   }
   await control("POST", "/__mark");
-  const outcome = await runCall(hs, clock, scenario.call);
+  const outcome = await runCall(hs, clock, scenario.call, context);
   if (typeof outcome === "string") return [outcome];
   const problems: string[] = [];
   if (scenario.expect.error !== undefined) {
@@ -362,6 +462,8 @@ async function main(): Promise<void> {
     ? listing.scenarios.filter((n): n is string => typeof n === "string")
     : [];
   if (names.length === 0) throw new Error("the mock lists no scenarios");
+  // Downloads and disk reads are invisible to the driver's stall rule, so every fixture is fetched first.
+  for (const name of Object.keys(await durations())) await fixtureFile(`media/${name}`);
   let passed = 0;
   let failed = 0;
   let skipped = 0;

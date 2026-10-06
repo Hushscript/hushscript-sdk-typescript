@@ -163,9 +163,10 @@ export class JobFailedError extends HushscriptError {
 }
 
 export class WaitTimeoutError extends HushscriptError {
-  resumeToken: string;
+  /** Null only for `jobs.wait`, which has no idempotency key to build a token from. */
+  resumeToken: string | null;
 
-  constructor(init: WithDefaultCode & { resumeToken: string }) {
+  constructor(init: WithDefaultCode & { resumeToken: string | null }) {
     super({ ...init, code: init.code ?? "wait_timeout" });
     this.resumeToken = init.resumeToken;
   }

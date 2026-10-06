@@ -30,3 +30,13 @@ export type { ErrorCatalogEntry } from "./generated/catalog.ts";
 export { HINTS } from "./generated/hints.ts";
 export { OPERATION_SCOPES } from "./generated/scopes.ts";
 export type { components, operations, paths } from "./generated/schema";
+export type {
+  Job,
+  JobWaitOptions,
+  Progress,
+  ResumeOptions,
+  ResumeToken,
+  TranscribeOptions,
+  Transcript,
+} from "./transcribe/index.ts";
+export type { FileInput } from "./transcribe/source.ts";
