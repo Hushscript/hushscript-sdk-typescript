@@ -6,7 +6,9 @@ const BASE_URL = "http://127.0.0.1:4010";
 const response = await fetch(`${BASE_URL}/__scenarios`, { signal: AbortSignal.timeout(10_000) });
 if (!response.ok) throw new Error(`GET /__scenarios answered ${String(response.status)}`);
 const body = (await response.json()) as { scenarios?: unknown };
-const scenarios = Array.isArray(body.scenarios) ? body.scenarios.filter((s) => typeof s === "string") : [];
+const scenarios = Array.isArray(body.scenarios)
+  ? body.scenarios.filter((s) => typeof s === "string")
+  : [];
 if (scenarios.length === 0) throw new Error("the mock lists no scenarios");
 
 for (const name of scenarios) console.log(`SKIP ${name}`);

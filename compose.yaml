@@ -73,6 +73,7 @@ services:
       - -c
       - >-
         timeout 600 tsc --noEmit
+        && timeout 600 tsc --noEmit -p tsconfig.scripts.json
         && timeout 600 eslint --max-warnings 0 .
         && timeout 300 prettier --check .
         && timeout 300 knip

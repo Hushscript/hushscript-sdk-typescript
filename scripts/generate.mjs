@@ -35,7 +35,8 @@ export function asRecord(value, what) {
  * @returns {string}
  */
 function asString(value, what) {
-  if (typeof value !== "string" || value === "") throw new Error(`${what} must be a non-empty string`);
+  if (typeof value !== "string" || value === "")
+    throw new Error(`${what} must be a non-empty string`);
   return value;
 }
 
@@ -45,7 +46,8 @@ function asString(value, what) {
  * @returns {number}
  */
 function asInteger(value, what) {
-  if (typeof value !== "number" || !Number.isInteger(value)) throw new Error(`${what} must be an integer`);
+  if (typeof value !== "number" || !Number.isInteger(value))
+    throw new Error(`${what} must be an integer`);
   return value;
 }
 
@@ -56,7 +58,8 @@ function asInteger(value, what) {
  */
 export function emitCatalog(spec) {
   const catalog = asRecord(spec, "spec")["x-error-catalog"];
-  if (!Array.isArray(catalog) || catalog.length === 0) throw new Error("spec has no x-error-catalog");
+  if (!Array.isArray(catalog) || catalog.length === 0)
+    throw new Error("spec has no x-error-catalog");
   const seen = new Set();
   const lines = catalog.map((/** @type {unknown} */ raw, /** @type {number} */ index) => {
     const entry = asRecord(raw, `x-error-catalog[${String(index)}]`);
@@ -97,11 +100,16 @@ export function emitScopes(spec) {
       if (operation === undefined) continue;
       const scope = asRecord(operation, `${method} ${path}`)["x-required-scope"];
       if (scope === undefined) continue;
-      entries.push([`${method.toUpperCase()} ${path}`, asString(scope, `${method} ${path} x-required-scope`)]);
+      entries.push([
+        `${method.toUpperCase()} ${path}`,
+        asString(scope, `${method} ${path} x-required-scope`),
+      ]);
     }
   }
   entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  const lines = entries.map(([key, scope]) => `  ${JSON.stringify(key)}: ${JSON.stringify(scope)},`);
+  const lines = entries.map(
+    ([key, scope]) => `  ${JSON.stringify(key)}: ${JSON.stringify(scope)},`,
+  );
   return `${HEADER}
 export const OPERATION_SCOPES: Record<string, string> = {
 ${lines.join("\n")}
@@ -117,7 +125,8 @@ ${lines.join("\n")}
 export function emitHints(hints) {
   const table = asRecord(hints, "hints.json");
   const lines = Object.entries(table).map(
-    ([slug, text]) => `  ${JSON.stringify(slug)}: ${JSON.stringify(asString(text, `hints.${slug}`))},`,
+    ([slug, text]) =>
+      `  ${JSON.stringify(slug)}: ${JSON.stringify(asString(text, `hints.${slug}`))},`,
   );
   if (lines.length === 0) throw new Error("hints.json is empty");
   return `${HEADER}
@@ -137,16 +146,27 @@ async function fetchText(url) {
   return response.text();
 }
 
+/**
+ * @param {string} text
+ * @returns {unknown}
+ */
+function parseJson(text) {
+  return JSON.parse(text);
+}
+
 /** @returns {Promise<unknown>} */
 async function loadHints() {
   const dir = process.env["CONFORMANCE_DIR"];
   if (dir !== undefined && dir !== "") {
-    return /** @type {unknown} */ (JSON.parse(readFileSync(`${dir}/hints.json`, "utf8")));
+    return parseJson(readFileSync(`${dir}/hints.json`, "utf8"));
   }
-  const pkg = asRecord(JSON.parse(readFileSync(rootPath("package.json"), "utf8")), "package.json");
-  const ref = asString(asRecord(pkg["config"], "package.json config")["conformanceRef"], "config.conformanceRef");
+  const pkg = asRecord(parseJson(readFileSync(rootPath("package.json"), "utf8")), "package.json");
+  const ref = asString(
+    asRecord(pkg["config"], "package.json config")["conformanceRef"],
+    "config.conformanceRef",
+  );
   const url = `https://raw.githubusercontent.com/Hushscript/hushscript-sdk-conformance/${ref}/hints.json`;
-  return /** @type {unknown} */ (JSON.parse(await fetchText(url)));
+  return parseJson(await fetchText(url));
 }
 
 /**
@@ -162,7 +182,7 @@ function loadSpecText(source) {
 /** @param {string | undefined} source */
 export async function generate(source = DEFAULT_SPEC) {
   const specText = await loadSpecText(source);
-  const spec = /** @type {unknown} */ (JSON.parse(specText));
+  const spec = parseJson(specText);
   const hints = await loadHints();
   const catalog = emitCatalog(spec);
   const scopes = emitScopes(spec);

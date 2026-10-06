@@ -9,7 +9,14 @@ import tseslint from "typescript-eslint";
 
 export default defineConfig(
   {
-    ignores: ["dist/**", "coverage/**", "reports/**", ".stryker-tmp/**", "node_modules/**", "src/generated/**"],
+    ignores: [
+      "dist/**",
+      "coverage/**",
+      "reports/**",
+      ".stryker-tmp/**",
+      "node_modules/**",
+      "src/generated/**",
+    ],
   },
   eslint.configs.recommended,
   tseslint.configs.strictTypeChecked,
@@ -31,6 +38,14 @@ export default defineConfig(
       "@typescript-eslint/restrict-template-expressions": ["error", { allowNumber: true }],
       // TypeScript resolves imports (bundler resolution, .ts extensions); the plugin cannot.
       "n/no-missing-import": "off",
+    },
+  },
+  {
+    // JavaScript files are type-checked by their own project: allowJs cannot coexist with
+    // isolatedDeclarations in the main one.
+    files: ["**/*.{js,mjs}"],
+    languageOptions: {
+      parserOptions: { projectService: false, project: ["./tsconfig.scripts.json"] },
     },
   },
 );

@@ -25,23 +25,27 @@ describe("generator", () => {
   });
   it("rejects a catalog with a duplicate slug", () => {
     const entry = { code: 1000, slug: "bad_request", status: 400, meaning: "m" };
-    expect(() => emitCatalog({ "x-error-catalog": [entry, entry] })).toThrow(/duplicate error slug/);
+    expect(() => emitCatalog({ "x-error-catalog": [entry, entry] })).toThrow(
+      /duplicate error slug/,
+    );
   });
   it("rejects malformed catalog entries and missing catalogs", () => {
     expect(() => emitCatalog({})).toThrow(/no x-error-catalog/);
-    expect(() => emitCatalog({ "x-error-catalog": [{ slug: "a", code: "1", status: 400, meaning: "m" }] })).toThrow(
-      /a\.code must be an integer/,
-    );
-    expect(() => emitCatalog({ "x-error-catalog": [{ slug: "", code: 1, status: 400, meaning: "m" }] })).toThrow(
-      /slug must be a non-empty string/,
-    );
+    expect(() =>
+      emitCatalog({ "x-error-catalog": [{ slug: "a", code: "1", status: 400, meaning: "m" }] }),
+    ).toThrow(/a\.code must be an integer/);
+    expect(() =>
+      emitCatalog({ "x-error-catalog": [{ slug: "", code: 1, status: 400, meaning: "m" }] }),
+    ).toThrow(/slug must be a non-empty string/);
     expect(() => emitCatalog({ "x-error-catalog": [null] })).toThrow(/must be an object/);
   });
   it("skips operations without a scope and rejects an empty one", () => {
     const paths = { "/a": { get: { "x-required-scope": "s" }, post: {}, parameters: [] } };
     expect(emitScopes({ paths })).toContain('"GET /a": "s",');
     expect(emitScopes({ paths })).not.toContain("POST /a");
-    expect(() => emitScopes({ paths: { "/a": { get: { "x-required-scope": "" } } } })).toThrow(/non-empty string/);
+    expect(() => emitScopes({ paths: { "/a": { get: { "x-required-scope": "" } } } })).toThrow(
+      /non-empty string/,
+    );
   });
   it("rejects an empty hints table", () => {
     expect(() => emitHints({})).toThrow(/empty/);

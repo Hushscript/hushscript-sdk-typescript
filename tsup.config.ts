@@ -1,6 +1,6 @@
-import { defineConfig } from "tsup";
+import type { Options } from "tsup";
 
-export default defineConfig({
+const config: Options = {
   entry: ["src/index.ts"],
   format: ["esm"],
   dts: true,
@@ -8,4 +8,6 @@ export default defineConfig({
   platform: "node",
   clean: true,
   treeshake: true,
-});
+};
+
+export default config;
