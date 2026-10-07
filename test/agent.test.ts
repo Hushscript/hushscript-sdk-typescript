@@ -344,6 +344,52 @@ describe("hs.agent.rotateToken", () => {
     }
   });
 
+  it("registers the trimmed token for redaction when the answer pads it with whitespace", async () => {
+    const padded = "hsr1:eu:padded-token-not-in-the-usual-shape-0123456789";
+    stubFetch([{ status: 200, body: { pat: `  ${padded}\n`, pat_id: "pat_4", scopes: [] } }]);
+    expect((await client().agent.rotateToken()).token).toBe(padded);
+    expect(redact(`leaked ${padded}`)).toBe(`leaked ${REDACTED}`);
+  });
+
+  it.each([
+    ["claim", true],
+    ["rotate", false],
+  ])("registers a padded %s token that fails the format check", async (name, isClaim) => {
+    const odd = `xyz-padded-${name}-token-0123456789`;
+    stubFetch([{ status: 200, body: { pat: ` ${odd} `, pat_id: "pat_5" } }]);
+    const attempt = isClaim
+      ? Hushscript.agent.claim("sg_1", "cs_secret", { baseUrl: BASE })
+      : client().agent.rotateToken();
+    expect(await attempt.catch((e: unknown) => e)).toBeInstanceOf(OutcomeUnknownError);
+    expect(redact(`leaked ${odd}`)).toBe(`leaked ${REDACTED}`);
+  });
+
+  it.each([
+    ["a number out of the range of a date", 1e15],
+    ["a string", "soon"],
+  ])("keeps the old token for an expiry that is %s", async (_n, expires) => {
+    const stub = stubFetch([
+      { status: 200, body: { pat: NEW_TOKEN, pat_id: "pat_6", scopes: [], expires_at: expires } },
+      { status: 200, body: ACCOUNT_BODY },
+    ]);
+    const hs = client();
+    const error = (await hs.agent.rotateToken().catch((e: unknown) => e)) as OutcomeUnknownError;
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error.cause).toMatchObject({ code: "bad_response" });
+    expect(error.receivedToken).toBe(NEW_TOKEN);
+    await hs.balance();
+    expect(stub.requests[1]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it.each(["", "   "])("keeps no received token when the answer's token is %j", async (pat) => {
+    stubFetch([{ status: 200, body: { pat, pat_id: "pat_7", scopes: [] } }]);
+    const error = (await client()
+      .agent.rotateToken()
+      .catch((e: unknown) => e)) as OutcomeUnknownError;
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error.receivedToken).toBeNull();
+  });
+
   it("gives a claim no received token to keep", async () => {
     stubFetch([{ status: 200, body: { pat: "xyz-not-hsr-0123456789" } }]);
     const error = (await Hushscript.agent

@@ -5,6 +5,7 @@ import type { components, paths } from "../generated/schema";
 import { createTransport } from "../http/transport.ts";
 import { toMoney, type Money } from "../money.ts";
 import { registerSecret } from "../redact.ts";
+import { describeProblem, timestamp } from "../shape.ts";
 import { AGENT_SIGNUP } from "../shapes.ts";
 import { badResponse, readBody, readObject } from "../transcribe/common.ts";
 import type { Balance } from "./account.ts";
@@ -90,11 +91,12 @@ function tokenOf(
   const pat = body?.["pat"];
   if (typeof pat !== "string") throw lostCredential(route, status);
   // Remembered so it is redacted from whatever is printed, even when it is not a valid token.
-  if (!/\s/u.test(pat)) registerSecret(pat);
+  registerSecret(pat.trim());
   try {
     return checkToken(pat);
   } catch (error) {
-    throw lostCredential(route, status, keepReceived ? pat : undefined, error);
+    const received = keepReceived && pat.trim() !== "" ? pat : undefined;
+    throw lostCredential(route, status, received, error);
   }
 }
 
@@ -210,9 +212,17 @@ export class AgentResource {
       ROTATE_ROUTE,
     );
     const pat = tokenOf(body, ROTATE_ROUTE, status, true);
+    const expiresAt = body?.["expires_at"];
+    // Checked before the client swaps tokens: an unusable answer keeps the old one, like any other.
+    if (expiresAt !== undefined && expiresAt !== null) {
+      const found = timestamp(expiresAt);
+      if (found !== null) {
+        const problem = describeProblem({ path: ["expires_at"], expected: found.expected });
+        throw lostCredential(ROTATE_ROUTE, status, pat, new Error(problem));
+      }
+    }
     this.#config.setToken(pat);
     const tokenId = body?.["pat_id"];
-    const expiresAt = body?.["expires_at"];
     return {
       token: pat,
       tokenId: typeof tokenId === "string" ? tokenId : "",
