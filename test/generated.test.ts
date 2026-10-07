@@ -49,6 +49,7 @@ describe("generated tables", () => {
       "resume_file_required",
       "resume_job_missing",
       "stream_size_mismatch",
+      "default_card_required",
     ];
     expect(Object.keys(HINTS).sort()).toEqual([...slugs].sort());
     expect(HINTS["resume_file_mismatch"]).toContain("not the file the upload started with");

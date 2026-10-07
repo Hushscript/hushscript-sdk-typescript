@@ -280,13 +280,8 @@ const OPS: Record<string, Op> = {
   },
   getTranscript: async (hs, args) => transcriptResult(await hs.transcripts.get(String(args["id"]))),
   buy: async (hs, args) => {
-    const balance = await hs.buy(String(args["pack"]));
-    return {
-      seconds: balance.seconds,
-      minutes: balance.minutes,
-      heldSeconds: balance.heldSeconds,
-      expiresAt: balance.expiresAt,
-    };
+    const purchase = await hs.buy(String(args["pack"]));
+    return { seconds: purchase.seconds, minutes: purchase.minutes };
   },
   claim: async (_hs, args) => {
     const claimed = await Hushscript.agent.claim(

@@ -106,7 +106,7 @@ function unreadable(cause?: unknown): UnsupportedMediaError {
 
 /**
  * The file's duration in seconds (float). Header reads are enough for most formats; the frames are
- * counted for an MP3 with no Xing, VBRI or Info header (spec 8.2), and the last page is read for
+ * counted for an MP3 with no Xing, VBRI or Info header, and the last page is read for
  * Ogg, whose headers carry no length.
  */
 export async function probeDuration(source: Source, signal?: AbortSignal): Promise<number> {

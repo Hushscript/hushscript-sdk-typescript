@@ -47,6 +47,7 @@ export type {
   Hold,
   LedgerEntry,
   Pack,
+  Purchase,
   Transaction,
 } from "./resources/billing.ts";
 export type { Job, JobOptions, JobState } from "./resources/jobs.ts";

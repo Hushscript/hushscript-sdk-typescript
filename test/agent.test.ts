@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
+import type { Clock } from "../src/clock";
 import { resolveTokenlessConfig } from "../src/config";
 import {
   ConfigurationError,
@@ -23,6 +24,15 @@ const SIGNUP = {
   acceptTerms: "2026-10-01",
   agent: { name: "Scribe", platform: "custom" },
 } as const;
+
+const ACCOUNT_BODY = {
+  balance_seconds: 60,
+  held_seconds: 0,
+  credits_expire_at: null,
+  card_on_file: false,
+  data_region: "eu",
+  limits: { max_daily_seconds: 1 },
+};
 
 function client(): Hushscript {
   return new Hushscript({
@@ -202,6 +212,44 @@ describe("Hushscript.agent.claim", () => {
   });
 });
 
+describe("an unusable claim answer", () => {
+  it.each([
+    ["an empty body", { status: 200, text: "" }],
+    ["a body that is not JSON", { status: 200, text: "<html>ok</html>" }],
+    ["no token", { status: 200, body: { user_id: "usr_1", scopes: [], balance_seconds: 2700 } }],
+    ["a token that is not a string", { status: 200, body: { pat: 7, user_id: "usr_1" } }],
+  ])(
+    "is an unknown outcome with the claim hint, never a plain error, for %s",
+    async (_n, answer) => {
+      const stub = stubFetch([answer]);
+      const error: unknown = await Hushscript.agent
+        .claim("sg_1", "cs_secret", { baseUrl: BASE })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(OutcomeUnknownError);
+      expect((error as OutcomeUnknownError).hint).toContain("The claim may have succeeded.");
+      const cause = (error as OutcomeUnknownError).cause;
+      expect(cause).toMatchObject({ name: "ApiError", code: "bad_response" });
+      expect(stub.calls).toBe(1);
+    },
+  );
+
+  it("still returns the token when the rest of the answer is thin", async () => {
+    stubFetch([{ status: 200, body: { pat: CLAIMED_TOKEN } }]);
+    const claimed = await Hushscript.agent.claim("sg_1", "cs_secret", { baseUrl: BASE });
+    expect(claimed).toMatchObject({ token: CLAIMED_TOKEN, userId: "", scopes: [] });
+    expect(claimed.balance.seconds).toBe(0);
+  });
+
+  it("carries no job hint when the checkout is not paid yet", async () => {
+    stubFetch([{ status: 409, body: { error: "wrong_state", code: 4001 } }]);
+    const error: unknown = await Hushscript.agent
+      .claim("sg_1", "cs_secret", { baseUrl: BASE })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ConflictError);
+    expect(error).toMatchObject({ code: "wrong_state", hint: null });
+  });
+});
+
 describe("hs.agent.rotateToken", () => {
   it("swaps the client's token in place, so the next request uses the new one", async () => {
     const stub = stubFetch([
@@ -268,5 +316,52 @@ describe("hs.agent.rotateToken", () => {
     await hs.balance();
     expect(stub.calls).toBe(2);
     expect(stub.requests[1]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it.each([
+    ["an empty body", { status: 200, text: "" }],
+    ["no token", { status: 200, body: { pat_id: "pat_9", scopes: [] } }],
+    ["a token that is not one", { status: 200, body: { pat: "not a token", pat_id: "pat_9" } }],
+  ])("is an unknown outcome and keeps the old token for %s", async (_n, answer) => {
+    const stub = stubFetch([answer, { status: 200, body: ACCOUNT_BODY }]);
+    const hs = client();
+    const error: unknown = await hs.agent.rotateToken().catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).hint).toContain("The old token may already be revoked.");
+    expect((error as OutcomeUnknownError).cause).toMatchObject({ code: "bad_response" });
+    await hs.balance();
+    expect(stub.requests[1]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("is used by a request that was waiting out a 503 when the rotation landed", async () => {
+    const base = fakeClock();
+    const box: { hs: Hushscript | undefined } = { hs: undefined };
+    let rotating: Promise<unknown> | undefined;
+    const clock: Clock = {
+      now: () => base.now(),
+      sleep: (ms, signal) => {
+        if (ms === TEST_TIMEOUT_SECONDS * 1000) return base.sleep(ms, signal);
+        rotating ??= box.hs?.agent.rotateToken() ?? Promise.resolve();
+        return rotating.then(() => base.sleep(ms, signal));
+      },
+    };
+    const stub = stubFetch([
+      (request) => {
+        const path = new URL(request.url).pathname;
+        if (path === "/v1/agent/credentials/rotate") {
+          return Response.json({ pat: NEW_TOKEN, pat_id: "pat_2", scopes: [] });
+        }
+        return stub.calls === 1
+          ? new Response("unavailable", { status: 503 })
+          : Response.json(ACCOUNT_BODY);
+      },
+    ]);
+    box.hs = new Hushscript({ token: TOKEN, baseUrl: BASE, clock, timeout: TEST_TIMEOUT_SECONDS });
+    await box.hs.balance();
+    expect(stub.requests.map((r) => r.headers.get("authorization"))).toEqual([
+      `Bearer ${TOKEN}`,
+      `Bearer ${TOKEN}`,
+      `Bearer ${NEW_TOKEN}`,
+    ]);
   });
 });

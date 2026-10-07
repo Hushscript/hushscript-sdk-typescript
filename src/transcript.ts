@@ -55,7 +55,7 @@ function utterancesOf(
   }));
 }
 
-/** A finished transcript with its formatters (spec 6.2). */
+/** A finished transcript with its formatters. */
 export class Transcript {
   readonly id: string;
   readonly title: string;

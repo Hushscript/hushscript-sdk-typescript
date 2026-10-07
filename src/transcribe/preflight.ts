@@ -27,14 +27,14 @@ export function invalidOption(message: string): PreflightError {
   return new PreflightError({ code: "invalid_option", message });
 }
 
-/** Spec 7.3: a supplied duration that is not a finite positive number is an invalid option, not an out-of-range file. */
+/** A supplied duration that is not a finite positive number is an invalid option, not an out-of-range file. */
 export function checkDurationOption(seconds: number | undefined): void {
   if (seconds !== undefined && !(Number.isFinite(seconds) && seconds > 0)) {
     throw invalidOption("durationSeconds must be a finite number of seconds, above 0.");
   }
 }
 
-/** Spec 7.3: uploads accept 16 to 128 printable ASCII characters. */
+/** Uploads accept 16 to 128 printable ASCII characters. */
 function checkIdempotencyKey(key: string): void {
   let printable = key.length >= 16 && key.length <= 128;
   for (let i = 0; printable && i < key.length; i += 1) {
@@ -63,7 +63,7 @@ function checkOptions(options: TranscribeOptions): void {
   if (options.idempotencyKey !== undefined) checkIdempotencyKey(options.idempotencyKey);
 }
 
-/** Duration times the multipliers a hold would carry (spec 8.1); multichannel counts once, the channel count being unknown. */
+/** Duration times the multipliers a hold would carry; multichannel counts once, the channel count being unknown. */
 function billableEstimate(seconds: number, options: TranscribeOptions): number {
   const medical = options.medical === true ? 1 : 0;
   const translations = 0.25 * (options.translateTo?.length ?? 0);
@@ -71,7 +71,7 @@ function billableEstimate(seconds: number, options: TranscribeOptions): number {
 }
 
 /**
- * Everything the SDK can refuse before a hold is placed (spec 8.1), in the spec's order. Returns
+ * Everything the SDK can refuse before a hold is placed, in a fixed order. Returns
  * the duration to declare: the probed or supplied seconds, rounded up.
  */
 export async function preflight(

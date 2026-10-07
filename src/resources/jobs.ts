@@ -24,7 +24,7 @@ export interface JobOptions {
   autoGenerateInsights: boolean | null;
 }
 
-/** A job as spec 6.4 defines it. Private-result and from-url fetch fields are left out; `hs.api` still returns them. */
+/** A job: camelCase fields and options. Private-result and from-url fetch fields are left out; `hs.api` still returns them. */
 export interface Job {
   id: string;
   /** A state the SDK does not know yet passes through as the API's own string. */
