@@ -274,6 +274,22 @@ anything else, convert it first:
 ffmpeg -i input -vn -c:a libopus output.opus
 ```
 
+## Configuration
+
+| Option                    | Env var               | Default                                                              |
+| ------------------------- | --------------------- | -------------------------------------------------------------------- |
+| `token`                   | `HUSHSCRIPT_TOKEN`    | none                                                                 |
+| `baseUrl`                 | `HUSHSCRIPT_BASE_URL` | `https://api.hushscript.com`                                         |
+| `timeout`                 | none                  | 60 s per request, at most 3600                                       |
+| `maxRetries`              | none                  | 3                                                                    |
+| `logLevel`                | `HUSHSCRIPT_LOG`      | `off` (`debug` logs one metadata line per request to standard error) |
+| `clock`                   | none                  | the system clock; pass a `Clock` in tests                            |
+| `dangerouslyAllowBrowser` | none                  | `false`; for tests only                                              |
+
+An explicit option beats its environment variable. The base URL must be `https://`, or `http://` to
+`localhost`, `127.0.0.1` or `[::1]`. Each upload part has its own 300 s timeout, which you cannot
+change.
+
 ## Privacy
 
 The SDK sends no telemetry. The only client identification is the `User-Agent` header
