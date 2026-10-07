@@ -1,10 +1,11 @@
 import type { ResolvedConfig } from "../config.ts";
 import {
   AbortError,
+  HushscriptError,
   NetworkError,
   OutcomeUnknownError,
+  asHushscriptError,
   errorFromResponse,
-  type HushscriptError,
 } from "../errors.ts";
 import { describeTarget } from "../log.ts";
 import { operationFor } from "./operations.ts";
@@ -79,9 +80,26 @@ function whenAborted(signal: AbortSignal): Promise<never> {
   });
 }
 
+// Real error bodies are a few levels deep. A deeper one is hostile or broken, and the recursive
+// walks that build an error from it (camelCasing, redaction) would overflow the stack.
+const MAX_BODY_DEPTH = 64;
+
+function nestsDeeperThan(root: unknown, limit: number): boolean {
+  const pending: { value: unknown; depth: number }[] = [{ value: root, depth: 0 }];
+  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
+    const { value, depth } = next;
+    if (typeof value !== "object" || value === null) continue;
+    if (depth >= limit) return true;
+    for (const child of Object.values(value)) pending.push({ value: child, depth: depth + 1 });
+  }
+  return false;
+}
+
+/** The parsed JSON, or the raw text when it does not parse or nests too deeply to be an error body. */
 function parseBody(text: string): unknown {
   try {
-    return JSON.parse(text) as unknown;
+    const parsed = JSON.parse(text) as unknown;
+    return nestsDeeperThan(parsed, MAX_BODY_DEPTH) ? text : parsed;
   } catch {
     return text;
   }
@@ -210,7 +228,7 @@ export function hardenedFetch(
   options: { timeoutMs?: number } = {},
 ): typeof fetch {
   const timeoutMs = options.timeoutMs ?? cfg.timeoutMs;
-  return async (input, init) => {
+  const guarded: typeof fetch = async (input, init) => {
     // Bytes are used where they are: building a Request from them would copy every part.
     const direct = init?.body instanceof Uint8Array ? init.body : null;
     const request = new Request(input, direct === null ? init : { ...init, body: null });
@@ -301,6 +319,23 @@ export function hardenedFetch(
       log(failure.timedOut ? "timeout" : "network_error", plan.retry ? plan.delayMs : null);
       if (!plan.retry) throw terminalFailure(timeoutMs, retryClass, operation, failure, signal);
       await pause(cfg, plan.delayMs, signal);
+    }
+  };
+  // Whatever fails in here after a request went out surfaces as an SDK error; for a call the server
+  // cannot repeat it is an unknown outcome, not a plain failure.
+  return async (input, init) => {
+    try {
+      return await guarded(input, init);
+    } catch (error) {
+      if (error instanceof HushscriptError) throw error;
+      if (retryClass === "never") {
+        throw new OutcomeUnknownError({
+          message:
+            "The SDK failed unexpectedly after the request was sent, so its outcome is unknown.",
+          cause: error,
+        });
+      }
+      throw asHushscriptError(error);
     }
   };
 }

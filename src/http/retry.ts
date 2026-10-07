@@ -43,10 +43,12 @@ export function backoffMs(attempt: number, random: () => number): number {
   return random() * Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt);
 }
 
-/** Integer seconds only; HTTP dates and anything else count as absent. */
+/** Whole seconds only; HTTP dates, anything else and a number too big to be exact count as absent. */
 export function parseRetryAfter(header: string | null): number | null {
   const text = header?.trim() ?? "";
-  return /^\d+$/.test(text) ? Number(text) : null;
+  if (!/^\d+$/.test(text)) return null;
+  const seconds = Number(text);
+  return Number.isSafeInteger(seconds) ? seconds : null;
 }
 
 export interface RetryInput {

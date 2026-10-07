@@ -1,10 +1,10 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "openapi-fetch";
 import { camelize } from "../camel.ts";
-import { HushscriptError, PaymentMethodRequiredError } from "../errors.ts";
+import { PaymentMethodRequiredError, asHushscriptError } from "../errors.ts";
 import type { components, paths } from "../generated/schema";
 import { toMoney, type Money } from "../money.ts";
-import { paginate } from "../paginate.ts";
+import { nextCursorOf, paginate } from "../paginate.ts";
 import {
   CARDS,
   HOLDS,
@@ -224,8 +224,9 @@ export class BillingResource {
       }
       return { seconds, minutes: Math.trunc(seconds / 60) + 0 };
     } catch (error) {
-      if (error instanceof HushscriptError) error.idempotencyKey = key;
-      throw error;
+      const failure = asHushscriptError(error);
+      failure.idempotencyKey = key;
+      throw failure;
     }
   }
 
@@ -249,7 +250,7 @@ export class BillingResource {
               createdAt: date(row.created_at),
             }) satisfies Transaction,
         ),
-        nextCursor: page.next_cursor,
+        nextCursor: nextCursorOf(page.next_cursor),
       };
     }, options.signal);
   }
@@ -274,7 +275,7 @@ export class BillingResource {
               createdAt: date(row.created_at),
             }) satisfies LedgerEntry,
         ),
-        nextCursor: page.next_cursor,
+        nextCursor: nextCursorOf(page.next_cursor),
       };
     }, options.signal);
   }
@@ -295,7 +296,7 @@ export class BillingResource {
         items: page.holds.map(
           (row) => ({ ...(camelize(row) as Hold), createdAt: date(row.created_at) }) satisfies Hold,
         ),
-        nextCursor: page.next_cursor,
+        nextCursor: nextCursorOf(page.next_cursor),
       };
     }, options.signal);
   }
