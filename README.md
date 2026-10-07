@@ -21,6 +21,19 @@ console.log(transcript.text);
 await writeFile("meeting.srt", transcript.toSRT());
 ```
 
+## Inputs
+
+`transcribe()` and `resume()` take a path, a `Blob`, a `Uint8Array` or a `ReadableStream<Uint8Array>`.
+A stream is read once, in order, one part at a time, so it needs its exact `size` and `durationSeconds`:
+
+```ts
+const response = await fetch(url);
+const transcript = await hs.transcribe(response.body!, {
+  size: Number(response.headers.get("content-length")),
+  durationSeconds: 1800,
+});
+```
+
 ## Check my balance
 
 ```ts
