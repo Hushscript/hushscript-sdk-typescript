@@ -13,6 +13,11 @@ export function registerSecret(secret: string): void {
   secrets.add(encodeURIComponent(secret));
 }
 
+/** Forgets every remembered token; for tests that push random strings through a token path. */
+export function clearSecrets(): void {
+  secrets.clear();
+}
+
 export function redact(text: string): string {
   let out = text;
   for (const secret of secrets) out = out.replaceAll(secret, REDACTED);

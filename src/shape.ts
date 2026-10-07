@@ -26,8 +26,9 @@ export function describeProblem({ path, expected }: Problem): string {
 export const str: Shape = (value) => (typeof value === "string" ? null : problem("a string"));
 export const num: Shape = (value) =>
   typeof value === "number" && Number.isFinite(value) ? null : problem("a number");
-export const int: Shape = (value) =>
-  Number.isSafeInteger(value) ? null : problem("a whole number");
+/** A count or a 1-based number: a whole number above zero. */
+export const positiveInt: Shape = (value) =>
+  Number.isSafeInteger(value) && (value as number) > 0 ? null : problem("a positive whole number");
 export const bool: Shape = (value) => (typeof value === "boolean" ? null : problem("a boolean"));
 export const anything: Shape = () => null;
 

@@ -1,7 +1,8 @@
 import fc from "fast-check";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
-import { ApiError, HushscriptError, OutcomeUnknownError } from "../src/errors";
+import { ApiError, HushscriptError, OutcomeUnknownError, UploadError } from "../src/errors";
+import { clearSecrets, redact } from "../src/redact";
 import { describeProblem, objectOf, str, timestamp, url } from "../src/shape";
 import {
   BASE,
@@ -12,19 +13,16 @@ import {
   fakeClock,
   stubFetch,
   type Step,
+  type ManualClock,
 } from "./helpers";
+import { driven } from "./transcribe/fakeapi";
 
 afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function client(): Hushscript {
-  return new Hushscript({
-    token: TOKEN,
-    baseUrl: BASE,
-    clock: fakeClock(),
-    timeout: TEST_TIMEOUT_SECONDS,
-  });
+function client(clock: ManualClock = fakeClock()): Hushscript {
+  return new Hushscript({ token: TOKEN, baseUrl: BASE, clock, timeout: TEST_TIMEOUT_SECONDS });
 }
 
 async function drain(items: AsyncIterable<unknown>): Promise<void> {
@@ -86,6 +84,71 @@ interface Case {
   steps?: (answer: Step) => Step[];
   /** The error a call raises for an unusable answer, where it is not a `bad_response` itself. */
   lost?: boolean;
+  /** The call is recovered from, so `bad_response` is the cause of the `parts_exhausted` it raises. */
+  exhausted?: boolean;
+  /** A JSON `null` is a real answer (the job takes proxied parts), not a malformed one. */
+  nullable?: boolean;
+  /** The call heartbeats and sleeps: run it on a manual clock that a driver steps. */
+  driven?: boolean;
+}
+
+const ACCOUNT_BODY = {
+  balance_seconds: 600,
+  held_seconds: 0,
+  credits_expire_at: null,
+  card_on_file: true,
+  data_region: "eu",
+  limits: LIMITS,
+};
+/** Twenty bytes the sniffer takes for an mp3; a part size of one makes twenty parts of it. */
+const MEDIA = Uint8Array.from([0x49, 0x44, 0x33, ...Array.from({ length: 17 }, () => 0)]);
+
+function partUrls(from: number): { n: number; url: string }[] {
+  return Array.from({ length: 21 - from }, (_, index) => ({
+    n: from + index,
+    url: `${BASE}/__r2/job_1/${String(from + index)}`,
+  }));
+}
+
+function createBody(urls: { n: number; url: string }[], next: number | null): unknown {
+  return {
+    job_id: "job_1",
+    state: "uploading",
+    upload: { part_size_bytes: 1, total_parts: 20, part_urls: urls, next_part_number: next },
+  };
+}
+
+/** Every request an upload makes, answered correctly except the one `target`, which gets `answer`. */
+function uploadSteps(
+  target: "create" | "part-urls" | "complete",
+  create: unknown,
+): (answer: Step) => Step[] {
+  const reply = (body: unknown): Response => Response.json(body);
+  return (answer) => [
+    (request) => {
+      const { pathname } = new URL(request.url);
+      const route = pathname.endsWith("/part-urls")
+        ? "part-urls"
+        : pathname.endsWith("/complete")
+          ? "complete"
+          : pathname === "/v1/uploads"
+            ? "create"
+            : null;
+      if (route !== null && route === target && "status" in answer) {
+        return new Response(answer.text ?? JSON.stringify(answer.body), { status: answer.status });
+      }
+      if (pathname === "/v1/account") return reply(ACCOUNT_BODY);
+      if (route === "create") return reply(create);
+      if (route === "part-urls") return reply({ part_urls: partUrls(3), next_part_number: null });
+      if (route === "complete") return reply({ state: "done" });
+      if (pathname.startsWith("/__r2/")) {
+        return new Response("", { status: 200, headers: { etag: `"etag-${pathname}"` } });
+      }
+      if (pathname.endsWith("/heartbeat")) return reply({ ok: true });
+      if (pathname.startsWith("/v1/jobs/")) return reply(JOB);
+      return reply(TRANSCRIPT);
+    },
+  ];
 }
 
 const CASES: Case[] = [
@@ -265,6 +328,32 @@ const CASES: Case[] = [
     run: (hs) => drain(hs.transcripts.deleted()),
   },
   {
+    name: "upload.create",
+    valid: createBody(partUrls(1), null),
+    wrong: ["upload", "part_size_bytes"],
+    driven: true,
+    steps: uploadSteps("create", createBody(partUrls(1), null)),
+    run: (hs) => hs.transcribe(MEDIA, { durationSeconds: 20, concurrency: 1 }),
+  },
+  {
+    name: "upload.part-urls",
+    valid: { part_urls: partUrls(3), next_part_number: null },
+    wrong: ["part_urls", 0, "n"],
+    driven: true,
+    exhausted: true,
+    nullable: true,
+    steps: uploadSteps("part-urls", createBody(partUrls(1).slice(0, 2), 3)),
+    run: (hs) => hs.transcribe(MEDIA, { durationSeconds: 20, concurrency: 1 }),
+  },
+  {
+    name: "upload.complete",
+    valid: { state: "done" },
+    wrong: ["state"],
+    driven: true,
+    steps: uploadSteps("complete", createBody(partUrls(1), null)),
+    run: (hs) => hs.transcribe(MEDIA, { durationSeconds: 20, concurrency: 1 }),
+  },
+  {
     name: "agent.signup",
     valid: {
       signup_id: "hsr1:eu:abc",
@@ -344,7 +433,9 @@ function allPaths(value: unknown, prefix: (string | number)[] = []): (string | n
 
 async function outcome(testCase: Case, answer: Step): Promise<unknown> {
   stubFetch(stepsFor(testCase, answer));
-  return testCase.run(client()).then(
+  const clock = fakeClock({ manual: testCase.driven === true });
+  const running = testCase.run(client(clock));
+  return (testCase.driven === true ? driven(running, clock) : running).then(
     () => null,
     (error: unknown) => error,
   );
@@ -360,8 +451,23 @@ function expectBadResponse(testCase: Case, error: unknown): void {
     });
     return;
   }
+  if (testCase.exhausted === true) {
+    expect(error).toMatchObject({ code: "parts_exhausted" });
+    // The cause is the redacted copy an error carries, which keeps the code and not the status.
+    expect((error as UploadError).cause).toMatchObject({ name: "ApiError", code: "bad_response" });
+    return;
+  }
   expect(error).toBeInstanceOf(ApiError);
   expect(error).toMatchObject({ code: "bad_response", status: 200, numericCode: null });
+}
+
+/** A claim or rotate registers whatever string came back as a secret: forget them once the runs end. */
+async function isolatingSecrets(run: () => Promise<void>): Promise<void> {
+  try {
+    await run();
+  } finally {
+    clearSecrets();
+  }
 }
 
 describe("every body the friendly layer maps", () => {
@@ -383,7 +489,9 @@ describe("every body the friendly layer maps", () => {
   });
 
   it.each(CASES)("$name raises bad_response for JSON null and an array", async (testCase) => {
-    expectBadResponse(testCase, await outcome(testCase, { status: 200, text: "null" }));
+    if (testCase.nullable !== true) {
+      expectBadResponse(testCase, await outcome(testCase, { status: 200, text: "null" }));
+    }
     expectBadResponse(testCase, await outcome(testCase, { status: 200, body: [] }));
   });
 
@@ -398,13 +506,35 @@ describe("every body the friendly layer maps", () => {
     }
   });
 
+  it.each([
+    ["upload.create", ["upload", "part_size_bytes"]],
+    ["upload.create", ["upload", "total_parts"]],
+    ["upload.create", ["upload", "part_urls", 0, "n"]],
+    ["upload.create", ["upload", "next_part_number"]],
+    ["upload.part-urls", ["part_urls", 0, "n"]],
+    ["upload.part-urls", ["next_part_number"]],
+  ] as [string, (string | number)[]][])(
+    "%s refuses a count that is zero, negative or not whole at %j",
+    async (name, path) => {
+      const testCase = CASES.find((candidate) => candidate.name === name);
+      expect(testCase).toBeDefined();
+      if (testCase === undefined) return;
+      for (const count of [0, -1, 1.5]) {
+        const body = withAt(testCase.valid, path, count);
+        expectBadResponse(testCase, await outcome(testCase, { status: 200, body }));
+      }
+    },
+  );
+
   it("raises nothing but SDK errors for a random JSON object, whichever call reads it", async () => {
-    await fc.assert(
-      fc.asyncProperty(fc.constantFrom(...CASES), fc.jsonValue(), async (testCase, body) => {
-        const error = await outcome(testCase, { status: 200, body });
-        if (error !== null) expect(error).toBeInstanceOf(HushscriptError);
-      }),
-      { numRuns: 200 },
+    await isolatingSecrets(() =>
+      fc.assert(
+        fc.asyncProperty(fc.constantFrom(...CASES), fc.jsonValue(), async (testCase, body) => {
+          const error = await outcome(testCase, { status: 200, body });
+          if (error !== null) expect(error).toBeInstanceOf(HushscriptError);
+        }),
+        { numRuns: 200 },
+      ),
     );
   });
 
@@ -417,13 +547,26 @@ describe("every body the friendly layer maps", () => {
           body: drop ? withoutAt(testCase.valid, path) : withAt(testCase.valid, path, junk),
         })),
     );
-    await fc.assert(
-      fc.asyncProperty(mutated, async ({ testCase, body }) => {
-        const error = await outcome(testCase, { status: 200, body });
-        if (error !== null) expect(error).toBeInstanceOf(HushscriptError);
-      }),
-      { numRuns: 600 },
+    await isolatingSecrets(() =>
+      fc.assert(
+        fc.asyncProperty(mutated, async ({ testCase, body }) => {
+          const error = await outcome(testCase, { status: 200, body });
+          if (error !== null) expect(error).toBeInstanceOf(HushscriptError);
+        }),
+        { numRuns: 600 },
+      ),
     );
+  });
+
+  it("leaves no random token registered as a secret once a property run ends", async () => {
+    const rotate = CASES.find((testCase) => testCase.name === "agent.rotateToken");
+    if (rotate === undefined) throw new Error("no rotate case");
+    const random = "random-string-from-a-property-run";
+    await isolatingSecrets(async () => {
+      await outcome(rotate, { status: 200, body: { pat: random } });
+      expect(redact(random)).not.toBe(random);
+    });
+    expect(redact(random)).toBe(random);
   });
 });
 
