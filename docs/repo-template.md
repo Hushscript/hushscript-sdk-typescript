@@ -139,7 +139,8 @@ cp "$d/package-lock.json" .
 ```
 
 Substitute `uv lock`, `go mod tidy` and `composer update --no-plugins --no-scripts` with the matching
-base image. Pin every dependency to an exact version (no ranges) in the manifest.
+base image. Pin every tool and dev dependency to an exact version; library runtime dependencies use
+compatible ranges so applications can dedupe them, and the lockfile pins what CI tests.
 
 ## Static analysis (TypeScript values)
 
