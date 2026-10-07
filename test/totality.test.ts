@@ -170,26 +170,142 @@ describe("R61: nothing but a HushscriptError escapes elsewhere", () => {
     expect(error).toBeInstanceOf(OutcomeUnknownError);
   });
 
-  it("wraps an error a progress callback throws, after the create was sent, with the key and the token", async () => {
-    const MEDIA = Uint8Array.from([0x49, 0x44, 0x33, ...Array.from({ length: 17 }, () => 0)]);
+  it("does not call a failure before the request went out an unknown outcome", async () => {
+    const clock: Clock = {
+      ...fakeClock(),
+      now: () => {
+        throw new TypeError("clock broke");
+      },
+    };
+    const fetchSpy = stubFetch([{ status: 200, body: { pat: TOKEN } }]);
+    const error = await failure(
+      new Hushscript({
+        token: TOKEN,
+        baseUrl: BASE,
+        clock,
+        timeout: TEST_TIMEOUT_SECONDS,
+      }).agent.rotateToken(),
+    );
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).not.toBeInstanceOf(OutcomeUnknownError);
+    expect(error).toMatchObject({ code: "unexpected_error" });
+    expect(fetchSpy.calls).toBe(0);
+  });
+
+  const MEDIA = Uint8Array.from([0x49, 0x44, 0x33, ...Array.from({ length: 17 }, () => 0)]);
+
+  it("hands back, untouched, an error a progress callback throws while waiting", async () => {
     const clock = fakeClock({ manual: true });
     fakeApi({ jobFlow: [{ state: "processing", polls: 2 }, { state: "done" }] });
-    const hs = client(clock);
+    const thrown = new TypeError("callback broke");
     const error = await failure(
       driven(
-        hs.transcribe(MEDIA, {
+        client(clock).transcribe(MEDIA, {
           durationSeconds: 20,
           onProgress: (progress) => {
-            if (progress.stage === "processing") throw new TypeError("callback broke");
+            if (progress.stage === "processing") throw thrown;
           },
         }),
         clock,
       ),
     );
+    expect(error).toBe(thrown);
+  });
+
+  it("hands back, untouched, an error a progress callback throws during the upload", async () => {
+    const clock = fakeClock({ manual: true });
+    fakeApi();
+    const thrown = new RangeError("upload callback broke");
+    const error = await failure(
+      driven(
+        client(clock).transcribe(MEDIA, {
+          durationSeconds: 20,
+          onProgress: (progress) => {
+            if (progress.stage === "uploading" && progress.bytesSent > 0) throw thrown;
+          },
+        }),
+        clock,
+      ),
+    );
+    expect(error).toBe(thrown);
+  });
+
+  it("hands back, untouched, an error onResumeToken throws", async () => {
+    const clock = fakeClock({ manual: true });
+    fakeApi();
+    const thrown = new TypeError("token callback broke");
+    const error = await failure(
+      driven(
+        client(clock).transcribe(MEDIA, {
+          durationSeconds: 20,
+          onResumeToken: () => {
+            throw thrown;
+          },
+        }),
+        clock,
+      ),
+    );
+    expect(error).toBe(thrown);
+  });
+
+  it("hands back a thrown value that is not an Error, untouched", async () => {
+    const clock = fakeClock({ manual: true });
+    fakeApi();
+    const error = await failure(
+      driven(
+        client(clock).transcribe(MEDIA, {
+          durationSeconds: 20,
+          onResumeToken: () => {
+            // eslint-disable-next-line @typescript-eslint/only-throw-error -- the case under test
+            throw "plain string";
+          },
+        }),
+        clock,
+      ),
+    );
+    expect(error).toBe("plain string");
+  });
+
+  it("hands back, untouched, an error a progress callback throws in resume()", async () => {
+    const clock = fakeClock({ manual: true });
+    fakeApi({ jobFlow: [{ state: "processing", polls: 2 }, { state: "done" }] });
+    const hs = client(clock);
+    const tokens: string[] = [];
+    await driven(
+      hs.transcribe(MEDIA, { durationSeconds: 20, onResumeToken: (t) => tokens.push(t) }),
+      clock,
+    );
+    fakeApi({ jobFlow: [{ state: "processing", polls: 2 }, { state: "done" }] });
+    const thrown = new TypeError("resume callback broke");
+    const error = await failure(
+      driven(
+        hs.resume(tokens[0] ?? "", MEDIA, {
+          onProgress: (progress) => {
+            if (progress.stage === "processing") throw thrown;
+          },
+        }),
+        clock,
+      ),
+    );
+    expect(error).toBe(thrown);
+  });
+
+  it("still gives an unexpected failure inside the SDK after the send the key and the token", async () => {
+    const clock = fakeClock({ manual: true });
+    const api = fakeApi({ jobFlow: [{ state: "processing", polls: 2 }, { state: "done" }] });
+    const flaky: Clock = {
+      ...clock,
+      now: () => {
+        if (api.count("job") >= 1) throw new TypeError("clock broke");
+        return clock.now();
+      },
+    };
+    const error = await failure(
+      driven(client(flaky).transcribe(MEDIA, { durationSeconds: 20 }), clock),
+    );
     expect(error).toBeInstanceOf(HushscriptError);
-    const failed = error as HushscriptError;
-    expect(failed.idempotencyKey).not.toBeNull();
-    expect(failed.resumeToken).not.toBeNull();
-    expect((failed.cause as Error).message).toBe("callback broke");
+    expect(error).toMatchObject({ code: "unexpected_error" });
+    expect((error as HushscriptError).idempotencyKey).not.toBeNull();
+    expect((error as HushscriptError).resumeToken).not.toBeNull();
   });
 });

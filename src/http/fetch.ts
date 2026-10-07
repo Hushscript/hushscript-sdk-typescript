@@ -1,4 +1,5 @@
 import type { ResolvedConfig } from "../config.ts";
+import { MAX_BODY_DEPTH, nestsDeeperThan } from "../depth.ts";
 import {
   AbortError,
   HushscriptError,
@@ -78,21 +79,6 @@ function whenAborted(signal: AbortSignal): Promise<never> {
         { once: true },
       );
   });
-}
-
-// Real error bodies are a few levels deep. A deeper one is hostile or broken, and the recursive
-// walks that build an error from it (camelCasing, redaction) would overflow the stack.
-const MAX_BODY_DEPTH = 64;
-
-function nestsDeeperThan(root: unknown, limit: number): boolean {
-  const pending: { value: unknown; depth: number }[] = [{ value: root, depth: 0 }];
-  for (let next = pending.pop(); next !== undefined; next = pending.pop()) {
-    const { value, depth } = next;
-    if (typeof value !== "object" || value === null) continue;
-    if (depth >= limit) return true;
-    for (const child of Object.values(value)) pending.push({ value: child, depth: depth + 1 });
-  }
-  return false;
 }
 
 /** The parsed JSON, or the raw text when it does not parse or nests too deeply to be an error body. */
@@ -228,7 +214,11 @@ export function hardenedFetch(
   options: { timeoutMs?: number } = {},
 ): typeof fetch {
   const timeoutMs = options.timeoutMs ?? cfg.timeoutMs;
-  const guarded: typeof fetch = async (input, init) => {
+  const guarded = async (
+    input: Parameters<typeof fetch>[0],
+    init: Parameters<typeof fetch>[1],
+    wire: { sent: boolean },
+  ): Promise<Response> => {
     // Bytes are used where they are: building a Request from them would copy every part.
     const direct = init?.body instanceof Uint8Array ? init.body : null;
     const request = new Request(input, direct === null ? init : { ...init, body: null });
@@ -252,6 +242,7 @@ export function hardenedFetch(
     let rateLimitsDone = 0;
     let activeJobsDone = 0;
     for (let retriesDone = 0; ; retriesDone += 1) {
+      wire.sent = false;
       if (signal.aborted) throw aborted(signal);
       if (operation === "POST /v1/uploads")
         await cfg.createPacer.acquire(signal).catch(() => {
@@ -260,6 +251,7 @@ export function hardenedFetch(
       if (carriesToken) prepared.headers.set("authorization", cfg.authorization());
       const startedAt = cfg.clock.now();
       const outcome = await attempt(timeoutMs, cfg, prepared, signal);
+      wire.sent = outcome.kind === "response" || outcome.failure.sent;
       const durationMs = cfg.clock.now() - startedAt;
       const log = (status: number | string, retryDelayMs: number | null): void => {
         cfg.logger.attempt({
@@ -321,14 +313,15 @@ export function hardenedFetch(
       await pause(cfg, plan.delayMs, signal);
     }
   };
-  // Whatever fails in here after a request went out surfaces as an SDK error; for a call the server
-  // cannot repeat it is an unknown outcome, not a plain failure.
+  // Whatever fails in here surfaces as an SDK error; after a request went out, for a call the
+  // server cannot repeat, it is an unknown outcome, not a plain failure.
   return async (input, init) => {
+    const wire = { sent: false };
     try {
-      return await guarded(input, init);
+      return await guarded(input, init, wire);
     } catch (error) {
       if (error instanceof HushscriptError) throw error;
-      if (retryClass === "never") {
+      if (retryClass === "never" && wire.sent) {
         throw new OutcomeUnknownError({
           message:
             "The SDK failed unexpectedly after the request was sent, so its outcome is unknown.",
