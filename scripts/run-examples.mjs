@@ -68,4 +68,50 @@ for (const file of readdirSync("examples")
     failed = true;
   }
 }
+/**
+ * The error slug the mock answers the purchase with (its status comes from the catalog), and whether
+ * buy.ts must say the card may have been charged. Only an answer decided from the request alone, or
+ * after the completed-purchase replay (402), proves nothing was charged; a 401, a 429 and a 409 do not.
+ * @type {[string, boolean][]}
+ */
+const purchaseFailures = [
+  ["bad_request", false],
+  ["insufficient_balance", false],
+  ["account_suspended", false],
+  ["not_found", false],
+  ["unknown_pack", false],
+  ["unauthorized", true],
+  ["rate_limited", true],
+  ["wrong_state", true],
+];
+for (const [slug, mayHaveCharged] of purchaseFailures) {
+  await mock("/__scenario", {
+    mock: { account: { balance_seconds: 360_000 }, purchase: [{ error: slug }] },
+  });
+  console.log(`== buy.ts when the purchase fails with ${slug}`);
+  const run = spawnSync(
+    process.execPath,
+    [
+      "--disable-warning=ExperimentalWarning",
+      "--import",
+      "./scripts/examples-register.mjs",
+      join("examples", "buy.ts"),
+      ...(args["buy.ts"] ?? []),
+    ],
+    {
+      encoding: "utf8",
+      stdio: ["inherit", "pipe", "inherit"],
+      timeout: 120_000,
+      env: { ...process.env, HUSHSCRIPT_BASE_URL: baseUrl, HUSHSCRIPT_TOKEN: token },
+    },
+  );
+  console.log(run.stdout);
+  const said = run.stdout.includes("The card may have been charged. Retry with: --key ");
+  if (run.status !== 1 || said !== mayHaveCharged) {
+    console.log(
+      `FAILED buy.ts after ${slug}: exit ${String(run.status)}, ${said ? "said" : "did not say"} the card may have been charged`,
+    );
+    failed = true;
+  }
+}
 process.exitCode = failed ? 1 : 0;
