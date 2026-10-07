@@ -1,6 +1,6 @@
 import { vi } from "vitest";
 import type { ManualClock } from "../helpers";
-import { BASE } from "../helpers";
+import { BASE, JOB_OPTIONS } from "../helpers";
 
 type Route =
   | "account"
@@ -82,7 +82,7 @@ function jobView(
     transcript_id: state === "done" ? "tr_1" : null,
     private_result_expires_at: null,
     private_result_available: false,
-    options: {},
+    options: JOB_OPTIONS,
   };
 }
 

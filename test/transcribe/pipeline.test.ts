@@ -1,4 +1,5 @@
 /* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
+import { execFileSync } from "node:child_process";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,7 +19,14 @@ import {
 } from "../../src/errors";
 import { decodeResumeToken, encodeResumeToken } from "../../src/transcribe/resume";
 import type { Progress } from "../../src/transcribe/types";
-import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, networkError } from "../helpers";
+import {
+  BASE,
+  JOB_OPTIONS,
+  TEST_TIMEOUT_SECONDS,
+  TOKEN,
+  fakeClock,
+  networkError,
+} from "../helpers";
 import { apiError, driven, fakeApi, type Fake, type FakeConfig } from "./fakeapi";
 import { fixtureBytes } from "./fixtures";
 
@@ -485,9 +493,17 @@ describe("waiting and fetching", () => {
             JSON.stringify({
               id: "job_1",
               state: "done",
+              mode: "standard",
+              declared_seconds: 21,
+              verified_seconds: 20,
+              actual_seconds: 20,
+              billable_seconds: 20,
               transcript_id: null,
               error: null,
               failure_kind: null,
+              retry_of: null,
+              created_at: 1,
+              options: JOB_OPTIONS,
             }),
             {
               status: 200,
@@ -949,7 +965,8 @@ describe("part-urls failures (spec 8.4)", () => {
     const error = await failure(
       driven(hs.transcribe(blob, { concurrency: 2, durationSeconds: 20 }), clock),
     );
-    expect((error as Error).message).toBe("disk gone");
+    expect(error).toMatchObject({ name: "UploadError", code: "source_read_failed" });
+    expect(((error as Error).cause as Error).message).toBe("disk gone");
     expect(aborted).toBe(true);
   });
 });
@@ -1054,5 +1071,128 @@ describe("errors after the create was sent (spec 7.3)", () => {
     expect(error.message).toBe("boom");
     expect(error.cause).toMatchObject({ name: "Error", message: "boom" });
     expect(error.resumeToken).toBeTruthy();
+  });
+});
+
+describe("a path input", () => {
+  async function scratch(): Promise<string> {
+    return mkdtemp(join(tmpdir(), "hs-path-"));
+  }
+
+  it("raises file_unreadable, with the OS error as the cause, for a missing path", async () => {
+    const { hs, fake } = setup();
+    const error = await failure(hs.transcribe(join(await scratch(), "missing.mp3")));
+    expect(error).toBeInstanceOf(PreflightError);
+    expect(error).toMatchObject({ code: "file_unreadable" });
+    expect((error as Error).cause).toMatchObject({ code: "ENOENT" });
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it("raises file_unreadable for a directory and for a FIFO, without opening the FIFO", async () => {
+    const { hs, fake } = setup();
+    const directory = await scratch();
+    expect(await failure(hs.transcribe(directory))).toMatchObject({ code: "file_unreadable" });
+    const fifo = join(directory, "pipe");
+    execFileSync("mkfifo", [fifo]);
+    expect(await failure(hs.transcribe(fifo))).toMatchObject({
+      name: "PreflightError",
+      code: "file_unreadable",
+    });
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it("is not opened by resume() while the job is past uploading, whatever the path", async () => {
+    const { hs, clock } = setup({
+      jobFlow: [{ state: "processing", polls: 7 }, { state: "done" }],
+    });
+    const timeout = (await failure(
+      driven(hs.transcribe(mp3, { waitTimeout: 60 }), clock),
+    )) as WaitTimeoutError;
+    const transcript = await driven(
+      hs.resume(timeout.resumeToken ?? "", join(await scratch(), "missing.mp3")),
+      clock,
+    );
+    expect(transcript.id).toBe("tr_1");
+  });
+
+  it("is checked for size before any request, and opened only for a job that is uploading", async () => {
+    let hold = true;
+    const ref: { clock?: Clock } = {};
+    const { hs, clock, fake } = setup({
+      hooks: {
+        r2: async (call) => {
+          if (hold) await ref.clock?.sleep(10_000_000, call.signal);
+          return undefined;
+        },
+      },
+    });
+    ref.clock = clock;
+    const stop = new AbortController();
+    const outcome = failure(hs.transcribe(mp3, { signal: stop.signal }));
+    for (let i = 0; i < 500 && fake.count("r2") === 0; i += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    stop.abort();
+    const token = ((await outcome) as AbortError).resumeToken ?? "";
+    const directory = await scratch();
+    const whole = join(directory, "whole.mp3");
+    const short = join(directory, "short.mp3");
+    await writeFile(whole, mp3);
+    await writeFile(short, mp3.subarray(0, 1000));
+
+    const before = fake.calls.length;
+    const mismatch = await failure(hs.resume(token, short));
+    expect(mismatch).toMatchObject({ code: "resume_file_mismatch" });
+    expect(fake.calls.length).toBe(before);
+
+    const createsBefore = fake.count("create");
+    const missing = await failure(driven(hs.resume(token, join(directory, "gone.mp3")), clock));
+    expect(missing).toMatchObject({ name: "PreflightError", code: "file_unreadable" });
+    expect(fake.count("create")).toBe(createsBefore);
+
+    hold = false;
+    const seen: { percent: number; creates: number }[] = [];
+    const transcript = await driven(
+      hs.resume(token, whole, {
+        onProgress: (p) => {
+          if (p.stage === "uploading")
+            seen.push({ percent: p.percent, creates: fake.count("create") });
+        },
+      }),
+      clock,
+    );
+    expect(transcript.id).toBe("tr_1");
+    // 0% once, before the replayed create goes out.
+    expect(seen[0]).toEqual({ percent: 0, creates: createsBefore });
+    expect(seen.filter((entry) => entry.percent === 0)).toHaveLength(1);
+  });
+});
+
+describe("a source that fails to read", () => {
+  it("raises source_read_failed with the key and the resume token when a stream breaks mid-upload", async () => {
+    const { hs, clock } = setup({ parts: 3 });
+    const partSize = Math.ceil(mp3.byteLength / 3);
+    let sent = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(mp3.subarray(0, partSize + 10));
+        } else {
+          controller.error(new Error("socket reset"));
+        }
+      },
+    });
+    const error = await failure(
+      driven(
+        hs.transcribe(stream, { size: mp3.byteLength, durationSeconds: 20, concurrency: 1 }),
+        clock,
+      ),
+    );
+    expect(error).toBeInstanceOf(UploadError);
+    expect(error).toMatchObject({ code: "source_read_failed" });
+    expect((error as UploadError).idempotencyKey).toBeTruthy();
+    expect((error as UploadError).resumeToken).toBeTruthy();
+    expect(((error as Error).cause as Error).message).toBe("socket reset");
   });
 });

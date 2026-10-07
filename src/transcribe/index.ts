@@ -4,7 +4,9 @@ import type { ResolvedConfig } from "../config.ts";
 import { AbortError, HushscriptError, NotFoundError, UploadError } from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { Transcript } from "../transcript.ts";
-import { present } from "./common.ts";
+import { UPLOAD_COMPLETE, UPLOAD_CREATE } from "../shapes.ts";
+import { readTranscript } from "../resources/transcripts.ts";
+import { readBody } from "./common.ts";
 import { runHeartbeat } from "./heartbeat.ts";
 import { checkDurationOption, invalidOption, preflight } from "./preflight.ts";
 import {
@@ -16,7 +18,7 @@ import {
   type ResumeState,
   type ResumeToken,
 } from "./resume.ts";
-import { openSource, type FileInput, type Source } from "./source.ts";
+import { openSource, statFile, type FileInput, type Source } from "./source.ts";
 import type { Progress, ResumeOptions, TranscribeOptions } from "./types.ts";
 import { uploadParts } from "./upload.ts";
 import {
@@ -128,9 +130,10 @@ export class Pipeline {
       const transcription = transcriptionOptions(options);
       if (transcription !== undefined) body.transcription_options = transcription;
       sentKey = idempotencyKey;
-      const created = present(
-        (await this.#api.POST("/v1/uploads", { body, signal })).data,
+      const created = await readBody<CreateResponse>(
+        this.#api.POST("/v1/uploads", { body, signal, parseAs: "text" }),
         "POST /v1/uploads",
+        UPLOAD_CREATE,
       );
       const state: ResumeState = {
         jobId: created.job_id,
@@ -166,7 +169,11 @@ export class Pipeline {
     const signal = options.signal ?? new AbortController().signal;
     let source: Source | null = null;
     try {
-      if (file !== undefined) {
+      // A path is only looked at here: it is opened once the job is known to need the bytes.
+      if (typeof file === "string") {
+        const size = await statFile(file).catch(() => null);
+        if (size !== null) assertSameFile(state, size);
+      } else if (file !== undefined) {
         source = await openSource(file, state.size);
         assertSameFile(state, source.size);
       }
@@ -185,25 +192,36 @@ export class Pipeline {
       });
       if (job.state !== "uploading")
         return await this.#finish({ state: job.state, upload: null }, run, job);
-      if (source === null) throw fileRequired();
+      if (file === undefined) throw fileRequired();
+      if (source === null) {
+        source = await openSource(file, state.size);
+        assertSameFile(state, source.size);
+        run.source = source;
+      }
+      options.onProgress?.({
+        stage: "uploading",
+        percent: 0,
+        bytesSent: 0,
+        bytesTotal: source.size,
+      });
       // Replaying the create with the original key returns the same job, with no second hold.
-      const created = present(
-        (
-          await this.#api.POST("/v1/uploads", {
-            body: {
-              size_bytes: state.size,
-              duration_seconds: Math.ceil(state.durationSeconds),
-              idempotency_key: state.idempotencyKey,
-            },
-            signal,
-          })
-        ).data,
+      const created = await readBody<CreateResponse>(
+        this.#api.POST("/v1/uploads", {
+          body: {
+            size_bytes: state.size,
+            duration_seconds: Math.ceil(state.durationSeconds),
+            idempotency_key: state.idempotencyKey,
+          },
+          signal,
+          parseAs: "text",
+        }),
         "POST /v1/uploads",
+        UPLOAD_CREATE,
       );
       if (created.job_id !== state.jobId) throw jobMissing();
       return await this.#finish(created, run);
     } catch (error) {
-      throw this.#annotate(error, token, signal, null);
+      throw this.#annotate(error, token, signal, state.idempotencyKey);
     } finally {
       await source?.close();
     }
@@ -320,12 +338,17 @@ export class Pipeline {
         },
       });
       if (failure.failed) throw failure.error;
-      const completed = await this.#api.POST("/v1/uploads/{job}/complete", {
-        params: { path: { job: state.jobId } },
-        ...(acks === null || acks.length === 0 ? {} : { body: { parts: acks } }),
-        signal,
-      });
-      return present(completed.data, "POST /v1/uploads/{job}/complete").state;
+      const completed = await readBody<{ state: string }>(
+        this.#api.POST("/v1/uploads/{job}/complete", {
+          params: { path: { job: state.jobId } },
+          ...(acks === null || acks.length === 0 ? {} : { body: { parts: acks } }),
+          signal,
+          parseAs: "text",
+        }),
+        "POST /v1/uploads/{job}/complete",
+        UPLOAD_COMPLETE,
+      );
+      return completed.state;
     } catch (error) {
       // A heartbeat that stopped the upload (a 401) is the real cause of whatever abort followed.
       throw failure.failed ? failure.error : error;
@@ -343,11 +366,7 @@ export class Pipeline {
         message: "The job is done but has no transcript id.",
       });
     }
-    const { data } = await this.#api.GET("/v1/transcripts/{id}", {
-      params: { path: { id: job.transcript_id } },
-      signal: run.signal,
-    });
-    return Transcript.fromApi(present(data, "GET /v1/transcripts/{id}"));
+    return Transcript.fromApi(await readTranscript(this.#api, job.transcript_id, run.signal));
   }
 }
 

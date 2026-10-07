@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
 import { PermissionDeniedError } from "../src/errors";
-import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, stubFetch } from "./helpers";
+import { BASE, LIMITS, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, stubFetch } from "./helpers";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -23,7 +23,7 @@ function account(extra: Record<string, unknown> = {}): Record<string, unknown> {
     credits_expire_at: null,
     card_on_file: true,
     data_region: "eu",
-    limits: { max_daily_seconds: 36_000 },
+    limits: LIMITS,
     ...extra,
   };
 }
@@ -106,7 +106,12 @@ describe("hs.account", () => {
     const result = await client().account();
     expect(result.creditsExpireAt).toBeNull();
     expect(result.purchasesRemainingInWindow).toBeNull();
-    expect(result.limits).toEqual({ maxDailySeconds: 36_000 });
+    expect(result.limits).toEqual({
+      maxDailySeconds: 36_000,
+      maxActiveJobs: 50,
+      activeJobs: 0,
+      usedTodaySeconds: 0,
+    });
     expect(Object.keys(result).some((key) => key.includes("_"))).toBe(false);
   });
 });

@@ -2,7 +2,8 @@ import type { Client } from "openapi-fetch";
 import type { Clock } from "../clock.ts";
 import { JobFailedError, WaitTimeoutError } from "../errors.ts";
 import type { components, paths } from "../generated/schema";
-import { present, sleepOrAbort } from "./common.ts";
+import { JOB_ONE } from "../shapes.ts";
+import { readBody, sleepOrAbort } from "./common.ts";
 import type { Progress } from "./types.ts";
 
 /** A job as the API sends it; `hs.jobs` hands out the camelCase `Job`. */
@@ -32,11 +33,15 @@ export async function readJob(
   id: string,
   signal?: AbortSignal,
 ): Promise<RawJob> {
-  const { data } = await api.GET("/v1/jobs/{id}", {
-    params: { path: { id } },
-    ...(signal === undefined ? {} : { signal }),
-  });
-  return present(data, "GET /v1/jobs/{id}");
+  return readBody<RawJob>(
+    api.GET("/v1/jobs/{id}", {
+      params: { path: { id } },
+      parseAs: "text",
+      ...(signal === undefined ? {} : { signal }),
+    }),
+    "GET /v1/jobs/{id}",
+    JOB_ONE,
+  );
 }
 
 export interface WaitSettings {

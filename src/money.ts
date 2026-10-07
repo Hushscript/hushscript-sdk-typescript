@@ -36,13 +36,21 @@ function minorUnitDigits(currency: string): number {
   return THREE_MINOR_UNITS.has(code) ? 3 : 2;
 }
 
-export function toMoney(amount: number, currency: string): Money {
-  const digits = minorUnitDigits(currency);
+const KNOWN_CURRENCIES: ReadonlySet<string> = new Set(Intl.supportedValuesOf("currency"));
+
+function display(amount: number, currency: string, digits: number): string {
+  const code = currency.toUpperCase();
+  // A code Intl does not know is shown plainly, as "5.99 ZZZ", instead of failing the call.
+  if (!KNOWN_CURRENCIES.has(code)) return `${(amount / 10 ** digits).toFixed(digits)} ${code}`;
   const format = new Intl.NumberFormat("en", {
     style: "currency",
-    currency,
+    currency: code,
     minimumFractionDigits: digits,
     maximumFractionDigits: digits,
   });
-  return { amount, currency, formatted: format.format(amount / 10 ** digits) };
+  return format.format(amount / 10 ** digits);
+}
+
+export function toMoney(amount: number, currency: string): Money {
+  return { amount, currency, formatted: display(amount, currency, minorUnitDigits(currency)) };
 }

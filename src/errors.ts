@@ -198,8 +198,20 @@ const OUTCOME_HINTS: Readonly<Record<string, string>> = {
 
 /** The request was sent and no response arrived, for a call the server cannot repeat. */
 export class OutcomeUnknownError extends HushscriptError {
-  constructor(init: WithDefaultCode) {
+  readonly #receivedToken: string | null;
+
+  constructor(init: WithDefaultCode & { receivedToken?: string }) {
     super({ ...init, code: init.code ?? "outcome_unknown" });
+    this.#receivedToken = init.receivedToken ?? null;
+  }
+
+  /**
+   * The string a rotate answer carried as the new token when it was not a usable one, so a caller
+   * can still look at (or rescue) it. A getter over a private field: it is left out of `inspect`,
+   * `JSON.stringify` and every message. Null for every other outcome.
+   */
+  get receivedToken(): string | null {
+    return this.#receivedToken;
   }
 
   static hintFor(operation: string): string | null {

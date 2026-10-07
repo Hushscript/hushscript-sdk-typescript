@@ -2,13 +2,14 @@ import type { Client } from "openapi-fetch";
 import {
   DailyLimitError,
   FileLimitError,
+  HushscriptError,
   InsufficientBalanceError,
   PreflightError,
   UnsupportedMediaError,
   hintValuesFrom,
 } from "../errors.ts";
 import type { paths } from "../generated/schema";
-import { present } from "./common.ts";
+import { readAccount } from "../resources/account.ts";
 import { probeDuration } from "./probe.ts";
 import { sniff } from "./sniff.ts";
 import type { Source } from "./source.ts";
@@ -34,15 +35,17 @@ export function checkDurationOption(seconds: number | undefined): void {
   }
 }
 
-/** Uploads accept 16 to 128 printable ASCII characters. */
+/** Uploads accept 16 to 128 bytes of printable ASCII, without the space (0x21 to 0x7E). */
 function checkIdempotencyKey(key: string): void {
   let printable = key.length >= 16 && key.length <= 128;
   for (let i = 0; printable && i < key.length; i += 1) {
     const code = key.charCodeAt(i);
-    printable = code >= 0x20 && code <= 0x7e;
+    printable = code >= 0x21 && code <= 0x7e;
   }
   if (!printable) {
-    throw invalidOption("idempotencyKey must be 16 to 128 printable ASCII characters.");
+    throw invalidOption(
+      "idempotencyKey must be 16 to 128 printable ASCII characters, without spaces.",
+    );
   }
 }
 
@@ -70,6 +73,20 @@ function billableEstimate(seconds: number, options: TranscribeOptions): number {
   return Math.ceil(seconds * (1 + medical + translations));
 }
 
+/** The first bytes of the input; a read that fails is an unreadable input, not a plain error. */
+async function readHead(source: Source, signal: AbortSignal): Promise<Uint8Array> {
+  try {
+    return await source.head(SNIFF_BYTES, signal);
+  } catch (error) {
+    if (error instanceof HushscriptError) throw error;
+    throw new PreflightError({
+      code: "file_unreadable",
+      message: "The input could not be read.",
+      cause: error,
+    });
+  }
+}
+
 /**
  * Everything the SDK can refuse before a hold is placed, in a fixed order. Returns
  * the duration to declare: the probed or supplied seconds, rounded up.
@@ -80,7 +97,7 @@ export async function preflight(
   api: Client<paths>,
   signal: AbortSignal,
 ): Promise<number> {
-  if (sniff(await source.head(SNIFF_BYTES, signal)) === null) {
+  if (sniff(await readHead(source, signal)) === null) {
     throw new UnsupportedMediaError({
       code: "unsupported_media",
       message: "The file is not in a supported audio format.",
@@ -102,8 +119,7 @@ export async function preflight(
   checkOptions(options);
   const declared = Math.ceil(seconds);
 
-  const { data: account } = await api.GET("/v1/account", { signal });
-  const data = present(account, "GET /v1/account");
+  const data = await readAccount(api, signal);
   const needed = billableEstimate(declared, options);
   if (data.balance_seconds < needed) {
     throw new InsufficientBalanceError({

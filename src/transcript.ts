@@ -2,6 +2,9 @@ import { renderSrt } from "./format/srt.ts";
 import { renderText, type TextFormatOptions } from "./format/txt.ts";
 import { renderVtt } from "./format/vtt.ts";
 import type { components } from "./generated/schema";
+import { describeProblem } from "./shape.ts";
+import { TRANSCRIPT_DETAIL } from "./shapes.ts";
+import { badResponse } from "./transcribe/common.ts";
 
 type TranscriptBody = components["schemas"]["TranscriptDetail"];
 
@@ -97,6 +100,10 @@ export class Transcript {
 
   /** Builds a transcript from a `GET /v1/transcripts/{id}` body, which `toJSON()` returns again. */
   static fromApi(body: TranscriptBody): Transcript {
+    const found = TRANSCRIPT_DETAIL(body);
+    if (found !== null) {
+      throw badResponse("GET /v1/transcripts/{id}", null, new Error(describeProblem(found)));
+    }
     return new Transcript(body);
   }
 

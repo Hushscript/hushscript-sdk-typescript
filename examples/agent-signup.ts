@@ -2,7 +2,7 @@
 // The server shows each token once, so every one is written to <token file> (mode 0600) the
 // moment it arrives, before anything else can fail.
 //   node agent-signup.ts <terms version> <token file>
-import { chmod, writeFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
 import { ConflictError, Hushscript, HushscriptError, type AgentClaim } from "@hushscript/sdk";
 
 const [acceptTerms, tokenFile] = process.argv.slice(2);
@@ -11,8 +11,14 @@ if (acceptTerms === undefined || tokenFile === undefined) {
 }
 
 const keep = async (token: string): Promise<void> => {
-  await writeFile(tokenFile, `${token}\n`, { mode: 0o600 });
-  await chmod(tokenFile, 0o600);
+  // The mode only applies when the file is created, so tighten it before the token goes in.
+  const file = await open(tokenFile, "w", 0o600);
+  try {
+    await file.chmod(0o600);
+    await file.writeFile(`${token}\n`);
+  } finally {
+    await file.close();
+  }
 };
 
 try {

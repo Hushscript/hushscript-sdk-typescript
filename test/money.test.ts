@@ -29,4 +29,15 @@ describe("toMoney", () => {
     expect(toMoney(500, "USD").formatted).toBe("$5.00");
     expect(toMoney(1000, "KWD").formatted).toBe(`KWD${NBSP}1.000`);
   });
+
+  it.each(["ZZZ", "ZZZZ", "", "us", "x1"])(
+    "shows an unknown currency %j as a plain amount and code, never throwing",
+    (currency) => {
+      expect(toMoney(599, currency)).toEqual({
+        amount: 599,
+        currency,
+        formatted: `5.99 ${currency.toUpperCase()}`,
+      });
+    },
+  );
 });

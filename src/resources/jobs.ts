@@ -1,10 +1,11 @@
 import type { Client } from "openapi-fetch";
-import type { paths } from "../generated/schema";
+import type { components, paths } from "../generated/schema";
 import { camelize } from "../camel.ts";
 import { paginate } from "../paginate.ts";
-import { present } from "../transcribe/common.ts";
+import { JOB_LIST } from "../shapes.ts";
+import { readBody } from "../transcribe/common.ts";
 import type { JobWaitOptions } from "../transcribe/index.ts";
-import type { RawJob } from "../transcribe/wait.ts";
+import { readJob, type RawJob } from "../transcribe/wait.ts";
 
 export type JobState = "uploading" | "fetching" | "queued" | "processing" | "done" | "failed";
 
@@ -79,18 +80,21 @@ export class JobsResource {
       const query: { active?: "true"; cursor?: string } = {};
       if (options.active === true) query.active = "true";
       if (cursor !== null) query.cursor = cursor;
-      const { data } = await this.#api.GET("/v1/jobs", {
-        params: { query },
-        ...(signal === undefined ? {} : { signal }),
-      });
-      const page = present(data, "GET /v1/jobs");
+      const page = await readBody<components["schemas"]["JobList"]>(
+        this.#api.GET("/v1/jobs", {
+          params: { query },
+          parseAs: "text",
+          ...(signal === undefined ? {} : { signal }),
+        }),
+        "GET /v1/jobs",
+        JOB_LIST,
+      );
       return { items: page.jobs.map(toJob), nextCursor: page.next_cursor };
     }, signal);
   }
 
   async get(id: string): Promise<Job> {
-    const { data } = await this.#api.GET("/v1/jobs/{id}", { params: { path: { id } } });
-    return toJob(present(data, "GET /v1/jobs/{id}"));
+    return toJob(await readJob(this.#api, id));
   }
 
   /** Polls until the job is done or failed; times out with a `WaitTimeoutError` that has no resume token. */

@@ -1,5 +1,6 @@
 /* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
-import { open, type FileHandle } from "node:fs/promises";
+import type { Stats } from "node:fs";
+import { open, stat, type FileHandle } from "node:fs/promises";
 import { PreflightError, UploadError } from "../errors.ts";
 import { aborted } from "./common.ts";
 
@@ -242,20 +243,51 @@ function isStream(file: FileInput): file is ReadableStream<Uint8Array> {
   return typeof file === "object" && "getReader" in file;
 }
 
+function unreadable(path: string, cause?: unknown): PreflightError {
+  return new PreflightError({
+    code: "file_unreadable",
+    message: `${path} cannot be read: it is missing, not a regular file or cannot be opened.`,
+    ...(cause === undefined ? {} : { cause }),
+  });
+}
+
+/**
+ * The size of the regular file at `path`, looked up without opening it: opening a FIFO or a device
+ * can block, so it is refused before that. A path that is missing, is not a regular file or cannot
+ * be read raises `file_unreadable` with the OS error as the cause.
+ */
+export async function statFile(path: string): Promise<number> {
+  let info: Stats;
+  try {
+    info = await stat(path);
+  } catch (error) {
+    throw unreadable(path, error);
+  }
+  if (!info.isFile()) throw unreadable(path);
+  return info.size;
+}
+
+async function openFile(path: string): Promise<FileSource> {
+  await statFile(path);
+  let handle: FileHandle;
+  try {
+    handle = await open(path, "r");
+  } catch (error) {
+    throw unreadable(path, error);
+  }
+  try {
+    const info = await handle.stat();
+    if (!info.isFile()) throw unreadable(path);
+    return new FileSource(handle, path, info.size);
+  } catch (error) {
+    await handle.close();
+    throw error instanceof PreflightError ? error : unreadable(path, error);
+  }
+}
+
 /** Opens `file` for reading. A stream needs `size`; every other input knows its own. */
 export async function openSource(file: FileInput, size?: number): Promise<Source> {
-  if (typeof file === "string") {
-    const handle = await open(file, "r");
-    try {
-      const info = await handle.stat();
-      if (!info.isFile())
-        throw new PreflightError({ code: "invalid_option", message: `${file} is not a file.` });
-      return new FileSource(handle, file, info.size);
-    } catch (error) {
-      await handle.close();
-      throw error;
-    }
-  }
+  if (typeof file === "string") return openFile(file);
   if (file instanceof Uint8Array) return new MemorySource(file);
   if (file instanceof Blob) return new BlobSource(file);
   if (isStream(file)) {

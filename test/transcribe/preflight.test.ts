@@ -103,6 +103,7 @@ describe("preflight", () => {
     ["a matter code over 64 characters", { matterCode: "x".repeat(65) }],
     ["a short idempotency key", { idempotencyKey: "short" }],
     ["an idempotency key with control characters", { idempotencyKey: "abcdefghijklmnop\n" }],
+    ["an idempotency key with a space", { idempotencyKey: "abcdefghijklmnop qrstuv" }],
     ["concurrency 0", { concurrency: 0 }],
     ["a fractional concurrency", { concurrency: 1.5 }],
     ["a negative waitTimeout", { waitTimeout: -1 }],

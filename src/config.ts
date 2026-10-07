@@ -159,7 +159,7 @@ function refuseBrowser(allowed: boolean | undefined): void {
   }
 }
 
-function checkToken(raw: string): string {
+export function checkToken(raw: string): string {
   const token = raw.trim();
   if (token === "") throw ConfigurationError.missingToken();
   if (!token.startsWith("hsr")) {

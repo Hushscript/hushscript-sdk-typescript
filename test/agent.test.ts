@@ -1,3 +1,4 @@
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
 import type { Clock } from "../src/clock";
@@ -9,7 +10,15 @@ import {
   ValidationError,
 } from "../src/errors";
 import { REDACTED, redact } from "../src/redact";
-import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, networkError, stubFetch } from "./helpers";
+import {
+  BASE,
+  LIMITS,
+  TEST_TIMEOUT_SECONDS,
+  TOKEN,
+  fakeClock,
+  networkError,
+  stubFetch,
+} from "./helpers";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -31,7 +40,7 @@ const ACCOUNT_BODY = {
   credits_expire_at: null,
   card_on_file: false,
   data_region: "eu",
-  limits: { max_daily_seconds: 1 },
+  limits: LIMITS,
 };
 
 function client(): Hushscript {
@@ -218,6 +227,8 @@ describe("an unusable claim answer", () => {
     ["a body that is not JSON", { status: 200, text: "<html>ok</html>" }],
     ["no token", { status: 200, body: { user_id: "usr_1", scopes: [], balance_seconds: 2700 } }],
     ["a token that is not a string", { status: 200, body: { pat: 7, user_id: "usr_1" } }],
+    ["a token that is not one", { status: 200, body: { pat: "not a token\n", user_id: "usr_1" } }],
+    ["a token with a space in it", { status: 200, body: { pat: "hsr1:eu:a b", user_id: "u" } }],
   ])(
     "is an unknown outcome with the claim hint, never a plain error, for %s",
     async (_n, answer) => {
@@ -270,7 +281,7 @@ describe("hs.agent.rotateToken", () => {
           credits_expire_at: null,
           card_on_file: false,
           data_region: "eu",
-          limits: { max_daily_seconds: 1 },
+          limits: LIMITS,
         },
       },
     ]);
@@ -305,7 +316,7 @@ describe("hs.agent.rotateToken", () => {
           credits_expire_at: null,
           card_on_file: false,
           data_region: "eu",
-          limits: { max_daily_seconds: 1 },
+          limits: LIMITS,
         },
       },
     ]);
@@ -316,6 +327,30 @@ describe("hs.agent.rotateToken", () => {
     await hs.balance();
     expect(stub.calls).toBe(2);
     expect(stub.requests[1]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("keeps a rotated token that fails the format check on the error, out of every printout", async () => {
+    const odd = "xyz-not-hsr-0123456789";
+    stubFetch([{ status: 200, body: { pat: odd, pat_id: "pat_9", scopes: [] } }]);
+    const error = (await client()
+      .agent.rotateToken()
+      .catch((e: unknown) => e)) as OutcomeUnknownError;
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error.receivedToken).toBe(odd);
+    expect(error.cause).toMatchObject({ code: "bad_response" });
+    expect(Object.keys(error)).not.toContain("receivedToken");
+    for (const printed of [inspect(error), String(error), error.message, JSON.stringify(error)]) {
+      expect(printed).not.toContain(odd);
+    }
+  });
+
+  it("gives a claim no received token to keep", async () => {
+    stubFetch([{ status: 200, body: { pat: "xyz-not-hsr-0123456789" } }]);
+    const error = (await Hushscript.agent
+      .claim("sg_1", "cs_secret", { baseUrl: BASE })
+      .catch((e: unknown) => e)) as OutcomeUnknownError;
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error.receivedToken).toBeNull();
   });
 
   it.each([

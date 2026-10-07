@@ -16,6 +16,7 @@
     "examples/**/*.ts",
     "test/**/*.ts"
   ],
+  "ignoreBinaries": ["mkfifo"],
   "ignoreDependencies": [
     "openapi-typescript",
     "prettier",
