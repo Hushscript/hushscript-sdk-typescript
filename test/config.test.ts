@@ -127,6 +127,9 @@ describe("baseUrl", () => {
     "ftp://example.org",
     "not a url",
     "api.hushscript.com",
+    "https://api.hushscript.com/v1",
+    "https://api.hushscript.com/?region=us",
+    "https://api.hushscript.com/#top",
   ])("rejects %s", (baseUrl) => {
     const error = failure(() => resolveConfig({ token: TOKEN, baseUrl }, { env: NO_ENV }));
     expect(error.message).toMatch(/baseUrl/);

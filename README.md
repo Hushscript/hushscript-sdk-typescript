@@ -287,7 +287,7 @@ ffmpeg -i input -vn -c:a libopus output.opus
 | `dangerouslyAllowBrowser` | none                  | `false`; for tests only                                              |
 
 An explicit option beats its environment variable. The base URL must be `https://`, or `http://` to
-`localhost`, `127.0.0.1` or `[::1]`. Each upload part has its own 300 s timeout, which you cannot
+`localhost`, `127.0.0.1` or `[::1]`, with no path. Each upload part has its own 300 s timeout, which you cannot
 change.
 
 ## Privacy
