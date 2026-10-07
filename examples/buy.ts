@@ -9,8 +9,13 @@ import { Hushscript, HushscriptError } from "@hushscript/sdk";
 const [pack, ...flags] = process.argv.slice(2);
 const keyAt = flags.indexOf("--key");
 const retryKey = keyAt === -1 ? undefined : flags[keyAt + 1];
+const keyMissing = keyAt !== -1 && (retryKey === undefined || retryKey.startsWith("--"));
 
 async function main(): Promise<number> {
+  if (keyMissing) {
+    console.log("--key needs the key a failed run printed: buy.ts <pack id> --key <key>.");
+    return 2;
+  }
   const hs = new Hushscript();
   const packs = await hs.billing.packs();
   for (const available of packs) {
@@ -53,7 +58,11 @@ try {
 } catch (error) {
   if (!(error instanceof HushscriptError)) throw error;
   console.log(`${error.code}: ${error.hint ?? error.message}`);
-  // The card may have been charged. Run it again with this key and it cannot charge twice.
-  if (error.idempotencyKey !== null) console.log(`retry with: --key ${error.idempotencyKey}`);
+  // A refusal (4xx) charged nothing. Anything else after the request was sent may have: run it
+  // again with this key and it cannot charge twice.
+  const refused = error.status !== null && error.status < 500 && error.code !== "bad_response";
+  if (error.idempotencyKey !== null && !refused) {
+    console.log(`The card may have been charged. Retry with: --key ${error.idempotencyKey}`);
+  }
   process.exitCode = 1;
 }

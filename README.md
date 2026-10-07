@@ -135,12 +135,18 @@ An agent can open an account, have it paid for at a hosted checkout page, and cl
 None of these calls needs a token yet, so they are static.
 
 ```ts
-import { chmod, writeFile } from "node:fs/promises";
+import { open } from "node:fs/promises";
 
 // The server shows each token once, so write every one down the moment it arrives.
 const keep = async (token: string): Promise<void> => {
-  await writeFile("agent-token", `${token}\n`, { mode: 0o600 });
-  await chmod("agent-token", 0o600);
+  // The mode only applies when the file is created, so tighten it before the token goes in.
+  const file = await open("agent-token", "w", 0o600);
+  try {
+    await file.chmod(0o600);
+    await file.writeFile(`${token}\n`);
+  } finally {
+    await file.close();
+  }
 };
 
 const signup = await Hushscript.agent.signup({
