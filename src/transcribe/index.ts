@@ -85,6 +85,29 @@ function checkRuntimeOptions(options: {
   return { concurrency, waitTimeout };
 }
 
+/** Remembers an error a caller's callback threw, so the pipeline can hand it back untouched. */
+class CallbackErrors {
+  #thrown = false;
+  #error: unknown;
+
+  wrap<T>(callback: ((value: T) => void) | undefined): ((value: T) => void) | undefined {
+    if (callback === undefined) return undefined;
+    return (value) => {
+      try {
+        callback(value);
+      } catch (error) {
+        this.#thrown = true;
+        this.#error = error;
+        throw error;
+      }
+    };
+  }
+
+  owns(error: unknown): boolean {
+    return this.#thrown && Object.is(error, this.#error);
+  }
+}
+
 /** Everything the upload and wait stages share, for one transcribe or resume call. */
 interface Run {
   state: ResumeState;
@@ -109,6 +132,9 @@ export class Pipeline {
   async transcribe(file: FileInput, options: TranscribeOptions = {}): Promise<Transcript> {
     const { concurrency, waitTimeout } = checkRuntimeOptions(options);
     const signal = options.signal ?? new AbortController().signal;
+    const callbackErrors = new CallbackErrors();
+    const onProgress = callbackErrors.wrap(options.onProgress);
+    const onResumeToken = callbackErrors.wrap(options.onResumeToken);
     let token: ResumeToken | null = null;
     // Set once the create is about to go out: from then on an error carries the key.
     let sentKey: string | null = null;
@@ -120,7 +146,7 @@ export class Pipeline {
       }
       const durationSeconds = await preflight(source, options, this.#api, signal);
       const idempotencyKey = options.idempotencyKey ?? randomUUID();
-      options.onProgress?.({
+      onProgress?.({
         stage: "uploading",
         percent: 0,
         bytesSent: 0,
@@ -148,7 +174,7 @@ export class Pipeline {
         durationSeconds,
       };
       token = encodeResumeToken(state);
-      options.onResumeToken?.(token);
+      onResumeToken?.(token);
       return await this.#finish(created, {
         state,
         token,
@@ -156,10 +182,10 @@ export class Pipeline {
         concurrency,
         waitTimeout,
         signal,
-        onProgress: options.onProgress,
+        onProgress,
       });
     } catch (error) {
-      throw this.#annotate(error, token, signal, sentKey);
+      throw this.#annotate(error, token, signal, sentKey, callbackErrors);
     } finally {
       await source?.close();
     }
@@ -173,6 +199,8 @@ export class Pipeline {
     const state = decodeResumeToken(token);
     const { concurrency, waitTimeout } = checkRuntimeOptions(options);
     const signal = options.signal ?? new AbortController().signal;
+    const callbackErrors = new CallbackErrors();
+    const onProgress = callbackErrors.wrap(options.onProgress);
     let source: Source | null = null;
     try {
       // A path is only looked at here: it is opened once the job is known to need the bytes.
@@ -190,7 +218,7 @@ export class Pipeline {
         concurrency,
         waitTimeout,
         signal,
-        onProgress: options.onProgress,
+        onProgress,
       };
       // A replayed create would mint a new job, and a new hold, for a job that was deleted or pruned.
       const job = await readJob(this.#api, state.jobId, signal).catch((error: unknown) => {
@@ -204,7 +232,7 @@ export class Pipeline {
         assertSameFile(state, source.size);
         run.source = source;
       }
-      options.onProgress?.({
+      onProgress?.({
         stage: "uploading",
         percent: 0,
         bytesSent: 0,
@@ -227,7 +255,7 @@ export class Pipeline {
       if (created.job_id !== state.jobId) throw jobMissing();
       return await this.#finish(created, run);
     } catch (error) {
-      throw this.#annotate(error, token, signal, state.idempotencyKey);
+      throw this.#annotate(error, token, signal, state.idempotencyKey, callbackErrors);
     } finally {
       await source?.close();
     }
@@ -246,13 +274,18 @@ export class Pipeline {
     });
   }
 
-  /** Adds the resume token to a cancellation and, after a create was sent, the key to every error. */
+  /**
+   * Adds the resume token to a cancellation and, after a create was sent, the key to every error.
+   * An error a caller's callback threw goes back as it was.
+   */
   #annotate(
     error: unknown,
     token: ResumeToken | null,
     signal: AbortSignal,
     key: string | null,
+    callbackErrors: CallbackErrors,
   ): unknown {
+    if (callbackErrors.owns(error)) return error;
     const cancelled = error instanceof AbortError || signal.aborted;
     const wrap =
       cancelled && token !== null && !(error instanceof AbortError && error.resumeToken !== null);

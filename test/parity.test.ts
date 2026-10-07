@@ -244,13 +244,61 @@ describe("R53: an error body that does not parse, however deeply nested, is non-
     expect(await failure(client().jobs.get("j1"))).toMatchObject({ code: "unauthorized" });
   });
 
-  it("answers a deeply nested 2xx body with a typed result, never a RangeError", async () => {
-    const deep = `,"extra":${"[".repeat(DEPTH)}${"]".repeat(DEPTH)}`;
-    stubFetch([{ status: 200, text: `${JSON.stringify(JOB).slice(0, -1)}${deep}}` }]);
-    expect((await client().jobs.get("j1")).id).toBe("j1");
+  const DEEP = `${'{"a":'.repeat(DEPTH)}1${"}".repeat(DEPTH)}`;
+  const withDeep = (body: Record<string, unknown>, key: string): string =>
+    JSON.stringify({ ...body, [key]: "@@deep" }).replace('"@@deep"', DEEP);
+  const TX_ROW = {
+    id: 7,
+    seconds: 18_000,
+    amount_cents: 599,
+    amount_refunded_cents: 0,
+    currency: "usd",
+    status: "succeeded",
+    created_at: 1_760_000_000,
+    payment_method_type: "card",
+    payment_method_brand: "visa",
+    payment_method_last4: "4242",
+    receipt_number: "HS-1",
+    initiated_via: null,
+  };
+
+  it("answers a 2xx body nested far past any real one with bad_response, never a RangeError", async () => {
+    const calls: [string, string, (hs: Hushscript) => Promise<unknown>][] = [
+      ["a job's options", withDeep(JOB, "options"), (hs) => hs.jobs.get("j1")],
+      [
+        "an account's limits",
+        JSON.stringify({ ...ACCOUNT, limits: { ...LIMITS, extra: "@@deep" } }).replace(
+          '"@@deep"',
+          DEEP,
+        ),
+        (hs) => hs.account(),
+      ],
+      [
+        "a transaction row",
+        JSON.stringify({
+          transactions: [{ ...TX_ROW, extra: "@@deep" }],
+          next_cursor: null,
+        }).replace('"@@deep"', DEEP),
+        (hs) => drain(hs.billing.transactions()),
+      ],
+    ];
+    for (const [name, text, run] of calls) {
+      stubFetch([{ status: 200, text }]);
+      const error = await failure(run(client()));
+      expect(error, name).not.toBeInstanceOf(RangeError);
+      expect(error, name).toMatchObject({ code: "bad_response", status: 200 });
+    }
+  });
+
+  it("answers a 2xx array nested far past any real one with bad_response", async () => {
     stubFetch([{ status: 200, text: "[".repeat(DEPTH) }]);
     const error = await failure(client().jobs.get("j1"));
     expect(error).toMatchObject({ code: "bad_response", status: 200 });
+  });
+
+  it("still reads a 2xx body that nests normally", async () => {
+    stubFetch([{ status: 200, body: { ...JOB, options: { ...JOB_OPTIONS } } }]);
+    expect((await client().jobs.get("j1")).id).toBe("j1");
   });
 });
 

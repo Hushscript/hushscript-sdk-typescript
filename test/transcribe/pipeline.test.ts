@@ -1052,27 +1052,25 @@ describe("errors after the create was sent (spec 7.3)", () => {
     expect(error.resumeToken).toBeNull();
   });
 
-  it("keeps the original error as the cause when it turns a failure into an abort", async () => {
+  it("hands back, never wrapped as an abort, an error a callback throws after the signal fired", async () => {
     const stop = new AbortController();
     const { hs, clock } = setup();
-    const error = (await failure(
+    const thrown = new Error("boom");
+    const error = await failure(
       driven(
         hs.transcribe(mp3, {
           signal: stop.signal,
           onProgress: (progress) => {
             if (progress.stage === "uploading" && progress.percent === 100) {
               stop.abort();
-              throw new Error("boom");
+              throw thrown;
             }
           },
         }),
         clock,
       ),
-    )) as AbortError;
-    expect(error).toBeInstanceOf(AbortError);
-    expect(error.message).toBe("boom");
-    expect(error.cause).toMatchObject({ name: "Error", message: "boom" });
-    expect(error.resumeToken).toBeTruthy();
+    );
+    expect(error).toBe(thrown);
   });
 });
 

@@ -1,4 +1,5 @@
 import type { Clock } from "../clock.ts";
+import { MAX_BODY_DEPTH, nestsDeeperThan } from "../depth.ts";
 import { AbortError, ApiError, HushscriptError } from "../errors.ts";
 import { describeProblem, type Shape } from "../shape.ts";
 
@@ -48,14 +49,19 @@ export interface ObjectBody {
   body: Record<string, unknown> | null;
 }
 
+/** A body nested deeper than any real one is treated as unusable, so no walk over it can overflow the stack. */
+function usable(json: unknown): unknown {
+  return nestsDeeperThan(json, MAX_BODY_DEPTH) ? undefined : json;
+}
+
 /** The 2xx status and the parsed body; `json` is undefined when the body is empty or not JSON. */
 async function readJson(call: TextCall, route: string): Promise<{ status: number; json: unknown }> {
   const { data, response } = await guarded(call, route);
   // A call made without `parseAs: "text"` has already been parsed.
-  if (typeof data !== "string") return { status: response.status, json: data };
+  if (typeof data !== "string") return { status: response.status, json: usable(data) };
   if (data === "") return { status: response.status, json: undefined };
   try {
-    return { status: response.status, json: JSON.parse(data) as unknown };
+    return { status: response.status, json: usable(JSON.parse(data)) };
   } catch {
     return { status: response.status, json: undefined };
   }
