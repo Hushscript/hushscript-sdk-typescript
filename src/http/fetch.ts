@@ -10,7 +10,7 @@ import {
 } from "../errors.ts";
 import { describeTarget } from "../log.ts";
 import { operationFor } from "./operations.ts";
-import { parseRetryAfter, planRetry, type RetryClass } from "./retry.ts";
+import { MAX_RETRY_AFTER_REPORTED, parseRetryAfter, planRetry, type RetryClass } from "./retry.ts";
 
 const BODY_CHUNK_BYTES = 256 * 1024;
 // Failures of connection setup (DNS, connect, TLS certificate checks): they come before the first
@@ -81,10 +81,26 @@ function whenAborted(signal: AbortSignal): Promise<never> {
   });
 }
 
+/**
+ * `retry_after_seconds` written as an integer too long for a double reads back as Infinity, which
+ * would count as absent. Its source text says it is a whole number of seconds, so it is "over 60":
+ * cap it instead. Where the runtime gives no source text it stays Infinity, so absent.
+ */
+function keepHugeRetryAfter(key: string, value: unknown, context?: { source?: string }): unknown {
+  if (
+    key === "retry_after_seconds" &&
+    value === Infinity &&
+    context?.source !== undefined &&
+    /^\d+$/.test(context.source)
+  )
+    return MAX_RETRY_AFTER_REPORTED;
+  return value;
+}
+
 /** The parsed JSON, or the raw text when it does not parse or nests too deeply to be an error body. */
 function parseBody(text: string): unknown {
   try {
-    const parsed = JSON.parse(text) as unknown;
+    const parsed = JSON.parse(text, keepHugeRetryAfter) as unknown;
     return nestsDeeperThan(parsed, MAX_BODY_DEPTH) ? text : parsed;
   } catch {
     return text;

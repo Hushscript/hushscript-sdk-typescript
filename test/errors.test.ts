@@ -95,7 +95,7 @@ describe("class tree (spec 9.2)", () => {
     expect(config.status).toBeNull();
     expect(new PaymentMethodRequiredError({ message: "m" }).code).toBe("no_default_card");
     expect(new PaymentMethodRequiredError({ message: "m" }).hint).toContain(
-      "hs.billing.addCardUrl()",
+      "add-card link from the SDK's billing methods",
     );
     expect(new NetworkError({ message: "m" }).code).toBe("network_error");
     expect(new AbortError({ message: "m" }).code).toBe("aborted");
@@ -305,6 +305,22 @@ describe("errorFromResponse", () => {
     ).toBeNull();
   });
 
+  it("reads a retry_after_seconds detail by the same rule as the header", () => {
+    const retryAfter = (value: unknown): number | null =>
+      errorFromResponse(
+        res(429),
+        { error: "agent_purchase_capped", code: 4038, details: { retry_after_seconds: value } },
+        "POST /v1/billing/purchase",
+      ).retryAfter;
+    expect(retryAfter(61)).toBe(61);
+    expect(retryAfter(1e20)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(retryAfter(Number.MAX_SAFE_INTEGER)).toBe(Number.MAX_SAFE_INTEGER);
+    expect(retryAfter(-1)).toBeNull();
+    expect(retryAfter("soon")).toBeNull();
+    expect(retryAfter(Infinity)).toBeNull();
+    expect(retryAfter(NaN)).toBeNull();
+  });
+
   it("names the missing scope in the hint", () => {
     const e = errorFromResponse(
       res(403),
@@ -327,7 +343,7 @@ describe("errorFromResponse", () => {
       "POST /v1/uploads",
     );
     expect(error.hint).toBe(
-      'Not enough minutes: 21 needed, 10 available. Buy a pack with hs.buy("300min") or in the app.',
+      "Not enough minutes: 21 needed, 10 available. Buy a pack with the SDK's buy method or in the app.",
     );
   });
 
@@ -376,7 +392,7 @@ describe("errorFromResponse", () => {
       { error: "insufficient_balance", code: 3001 },
       "POST /v1/uploads",
     );
-    expect(poor.hint).toBe('Buy a pack with hs.buy("300min") or in the app.');
+    expect(poor.hint).toBe("Buy a pack with the SDK's buy method or in the app.");
     for (const e of [limited, capped, poor]) expect(e.hint).not.toMatch(/[{}]/);
   });
 

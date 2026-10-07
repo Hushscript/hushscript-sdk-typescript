@@ -43,12 +43,17 @@ export function backoffMs(attempt: number, random: () => number): number {
   return random() * Math.min(BACKOFF_CAP_MS, BACKOFF_BASE_MS * 2 ** attempt);
 }
 
-/** Whole seconds only; HTTP dates, anything else and a number too big to be exact count as absent. */
+/** The most a reported retry-after can be: an integer past this, however long, is "over 60" and capped here. */
+export const MAX_RETRY_AFTER_REPORTED: number = Number.MAX_SAFE_INTEGER;
+
+/**
+ * Whole seconds only. HTTP dates and anything else non-numeric count as absent; an integer of any
+ * length is a real wait, so one past the safe integers is capped (and so is "over 60").
+ */
 export function parseRetryAfter(header: string | null): number | null {
   const text = header?.trim() ?? "";
   if (!/^\d+$/.test(text)) return null;
-  const seconds = Number(text);
-  return Number.isSafeInteger(seconds) ? seconds : null;
+  return Math.min(Number(text), MAX_RETRY_AFTER_REPORTED);
 }
 
 export interface RetryInput {
