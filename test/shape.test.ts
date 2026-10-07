@@ -4,6 +4,7 @@ import { Hushscript } from "../src/client";
 import { ApiError, HushscriptError, OutcomeUnknownError, UploadError } from "../src/errors";
 import { clearSecrets, redact } from "../src/redact";
 import { describeProblem, objectOf, positiveIntAtMost, str, timestamp, url } from "../src/shape";
+import { UPLOAD_CREATE } from "../src/shapes";
 import {
   BASE,
   JOB_OPTIONS,
@@ -622,6 +623,23 @@ describe("the shape combinators", () => {
     expect(describeProblem(shape(33_554_433) ?? { path: [], expected: "" })).toBe(
       "expected a positive whole number up to 33554432",
     );
+  });
+
+  it("let an upload create answer carry a part size from 8 MiB up to exactly 32 MiB", () => {
+    const answer = (partSize: number): unknown => ({
+      job_id: "job_1",
+      state: "uploading",
+      upload: {
+        part_size_bytes: partSize,
+        total_parts: 3,
+        part_urls: null,
+        next_part_number: null,
+      },
+    });
+    for (const partSize of [8_388_608, 33_554_432]) {
+      expect(UPLOAD_CREATE(answer(partSize))).toBeNull();
+    }
+    expect(UPLOAD_CREATE(answer(33_554_433))).not.toBeNull();
   });
 
   it("never echo a value, so a body with a secret in it is not copied into an error", async () => {
