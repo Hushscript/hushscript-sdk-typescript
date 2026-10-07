@@ -270,6 +270,53 @@ describe("proxied parts", () => {
     expect(fake.count("partUrls")).toBe(1);
   });
 
+  it("goes proxied for every part when the create answers part_urls: null", async () => {
+    const { hs, clock, fake } = setup({
+      hooks: {
+        create: () =>
+          Response.json({
+            job_id: "job_1",
+            state: "uploading",
+            upload: {
+              part_size_bytes: Math.ceil(mp3.byteLength / 3),
+              total_parts: 3,
+              part_urls: null,
+              next_part_number: null,
+            },
+          }),
+      },
+    });
+    await driven(hs.transcribe(mp3), clock);
+    expect(fake.count("part")).toBe(3);
+    expect(fake.count("r2")).toBe(0);
+    expect(fake.count("partUrls")).toBe(0);
+    expect(fake.completes).toEqual([null]);
+  });
+
+  it("goes proxied for every part when the first part-urls page answers part_urls: null", async () => {
+    const { hs, clock, fake } = setup({
+      hooks: {
+        create: () =>
+          Response.json({
+            job_id: "job_1",
+            state: "uploading",
+            upload: {
+              part_size_bytes: Math.ceil(mp3.byteLength / 3),
+              total_parts: 3,
+              part_urls: [],
+              next_part_number: 1,
+            },
+          }),
+        partUrls: () => Response.json({ part_urls: null, next_part_number: null }),
+      },
+    });
+    await driven(hs.transcribe(mp3), clock);
+    expect(fake.count("partUrls")).toBe(1);
+    expect(fake.count("part")).toBe(3);
+    expect(fake.count("r2")).toBe(0);
+    expect(fake.completes).toEqual([null]);
+  });
+
   it("raises the API's error when a proxied part keeps failing", async () => {
     const { hs, clock } = setup({
       proxied: true,
@@ -632,6 +679,10 @@ describe("cancellation", () => {
     )) as AbortError;
     expect(error).toBeInstanceOf(AbortError);
     expect(error.resumeToken).toBeTruthy();
+    // The fetch layer turns the hook failure into the signal's abort before the pipeline sees it;
+    // that original error is kept as the cause (a redacted copy, so matched by name and code).
+    expect(error.cause).toMatchObject({ name: "AbortError", code: "aborted" });
+    expect(error.cause).not.toBe(error);
   });
 });
 
@@ -1071,6 +1122,46 @@ describe("errors after the create was sent (spec 7.3)", () => {
       ),
     );
     expect(error).toBe(thrown);
+  });
+});
+
+describe("callback errors with several workers", () => {
+  it("hands back the object a callback threw when two workers throw distinct errors", async () => {
+    const { hs, clock } = setup({ parts: 3 });
+    const thrown: Error[] = [];
+    const error = await failure(
+      driven(
+        hs.transcribe(mp3, {
+          concurrency: 3,
+          onProgress: (progress) => {
+            if (progress.stage === "uploading" && progress.percent > 0 && thrown.length < 2) {
+              const next = new Error(`callback ${String(thrown.length)}`);
+              thrown.push(next);
+              throw next;
+            }
+          },
+        }),
+        clock,
+      ),
+    );
+    expect(thrown).toHaveLength(2);
+    expect(thrown).toContain(error);
+  });
+
+  it("hands back a thrown primitive untouched", async () => {
+    const { hs, clock } = setup();
+    const error = await failure(
+      driven(
+        hs.transcribe(mp3, {
+          onProgress: (progress) => {
+            // eslint-disable-next-line @typescript-eslint/only-throw-error -- the case under test
+            if (progress.stage === "uploading" && progress.percent > 0) throw "plain string";
+          },
+        }),
+        clock,
+      ),
+    );
+    expect(error).toBe("plain string");
   });
 });
 

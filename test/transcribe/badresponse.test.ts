@@ -116,6 +116,16 @@ describe("a 2xx answer that does not fit its shape, at each call site that reads
     expectBadResponse(await failure(run(hs.transcribe(MEDIA, { durationSeconds: 20 }))));
   });
 
+  it.each([
+    ["a missing part_urls", { ...CREATE.upload, part_urls: undefined }],
+    ["a string part_urls", { ...CREATE.upload, part_urls: "none" }],
+    ["a null row", { ...CREATE.upload, part_urls: [null] }],
+    ["a row without a url", { ...CREATE.upload, part_urls: [{ n: 1 }] }],
+  ])("raises bad_response when the create answers %s", async (_name, upload) => {
+    const { hs, run } = setup({ hooks: { create: answered({ ...CREATE, upload }) } });
+    expectBadResponse(await failure(run(hs.transcribe(MEDIA, { durationSeconds: 20 }))));
+  });
+
   describe.each(bad(PAGE, "part_urls"))("when a part-urls page answers %s", (_n, body) => {
     it("is the cause of parts_exhausted, carrying the key and the token", async () => {
       const { hs, run } = setup({ parts: 20, hooks: { partUrls: answered(body) } });

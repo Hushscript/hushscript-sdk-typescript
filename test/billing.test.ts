@@ -265,7 +265,7 @@ describe("hs.buy", () => {
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(PaymentMethodRequiredError);
     expect(error).toMatchObject({ code: "no_default_card" });
-    expect((error as PaymentMethodRequiredError).hint).toContain("addCardUrl()");
+    expect((error as PaymentMethodRequiredError).hint).toContain("add-card link");
     expect(purchaseBodies(stub)).toEqual([]);
     expect(stub.calls).toBe(1);
   });
@@ -277,7 +277,7 @@ describe("hs.buy", () => {
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(PaymentMethodRequiredError);
     expect(error).toMatchObject({ code: "default_card_required" });
-    expect((error as PaymentMethodRequiredError).hint).toContain("setDefaultCard(id)");
+    expect((error as PaymentMethodRequiredError).hint).toContain("Set a default card");
     expect((error as PaymentMethodRequiredError).hint).not.toContain("No saved card");
     expect(purchaseBodies(stub)).toEqual([]);
     expect(stub.calls).toBe(1);

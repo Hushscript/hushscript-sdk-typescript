@@ -85,10 +85,15 @@ function checkRuntimeOptions(options: {
   return { concurrency, waitTimeout };
 }
 
+function isObjectLike(value: unknown): value is object {
+  return (typeof value === "object" && value !== null) || typeof value === "function";
+}
+
 /** Remembers an error a caller's callback threw, so the pipeline can hand it back untouched. */
 class CallbackErrors {
-  #thrown = false;
-  #error: unknown;
+  // Several workers can have a callback throw at once, so every thrown value is kept, not the last.
+  readonly #objects = new WeakSet<object>();
+  readonly #primitives = new Set<unknown>();
 
   wrap<T>(callback: ((value: T) => void) | undefined): ((value: T) => void) | undefined {
     if (callback === undefined) return undefined;
@@ -96,15 +101,15 @@ class CallbackErrors {
       try {
         callback(value);
       } catch (error) {
-        this.#thrown = true;
-        this.#error = error;
+        if (isObjectLike(error)) this.#objects.add(error);
+        else this.#primitives.add(error);
         throw error;
       }
     };
   }
 
   owns(error: unknown): boolean {
-    return this.#thrown && Object.is(error, this.#error);
+    return isObjectLike(error) ? this.#objects.has(error) : this.#primitives.has(error);
   }
 }
 

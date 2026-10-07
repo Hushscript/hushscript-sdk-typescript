@@ -3,7 +3,7 @@ import { ERROR_CATALOG } from "./generated/catalog.ts";
 import { HINTS } from "./generated/hints.ts";
 import { OPERATION_SCOPES } from "./generated/scopes.ts";
 import { resolveOperation } from "./http/operations.ts";
-import { parseRetryAfter } from "./http/retry.ts";
+import { MAX_RETRY_AFTER_REPORTED, parseRetryAfter } from "./http/retry.ts";
 import { redact, redactCause, redactValue } from "./redact.ts";
 
 export interface ErrorInit {
@@ -318,8 +318,8 @@ export function errorFromResponse(
   const bodyRetry = nested["retryAfterSeconds"];
   const retryAfter =
     parseRetryAfter(res.headers.get("retry-after")) ??
-    (typeof bodyRetry === "number" && Number.isSafeInteger(bodyRetry) && bodyRetry >= 0
-      ? bodyRetry
+    (typeof bodyRetry === "number" && Number.isFinite(bodyRetry) && bodyRetry >= 0
+      ? Math.min(bodyRetry, MAX_RETRY_AFTER_REPORTED)
       : null);
   const meaning = slug === null ? undefined : ERROR_CATALOG[slug]?.meaning;
   const message =

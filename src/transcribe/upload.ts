@@ -16,13 +16,14 @@ const URL_MAX_AGE_MS = 23 * 3600 * 1000;
 interface UploadPlan {
   part_size_bytes: number;
   total_parts: number;
-  part_urls: { n: number; url: string }[];
+  /** `null`: the create says direct upload is not available, so every part goes through the API. */
+  part_urls: { n: number; url: string }[] | null;
   next_part_number: number | null;
 }
 
-/** The part-urls answer; `null` for a job that takes proxied parts only. */
+/** The part-urls answer; `null`, or a `null` part_urls, for a job that takes proxied parts only. */
 type PartUrlsBody = {
-  part_urls: { n: number; url: string }[];
+  part_urls: { n: number; url: string }[] | null;
   next_part_number?: number | null;
 } | null;
 
@@ -68,7 +69,8 @@ class PartUrls {
     this.#jobId = settings.jobId;
     this.#signal = signal;
     this.#next = plan.next_part_number;
-    if (plan.part_urls.length > 0) this.#store(plan.part_urls);
+    if (plan.part_urls === null) this.#direct = false;
+    else if (plan.part_urls.length > 0) this.#store(plan.part_urls);
   }
 
   #store(urls: readonly { n: number; url: string }[]): number {

@@ -50,8 +50,6 @@ async function failure(promise: Promise<unknown>): Promise<unknown> {
 
 describe("R61: Retry-After is read totally", () => {
   it.each([
-    ["400 digits", NINES],
-    ["a number past the safe integers", "9007199254740993"],
     ["a date", "Wed, 21 Oct 2026 07:28:00 GMT"],
     ["a negative number", "-5"],
     ["a decimal", "1.5"],
@@ -63,6 +61,14 @@ describe("R61: Retry-After is read totally", () => {
 
   it("reads whole seconds", () => {
     expect(parseRetryAfter(" 120 ")).toBe(120);
+  });
+
+  it.each([
+    ["400 digits", NINES],
+    ["a number past the safe integers", "9007199254740993"],
+    ["the largest safe integer", String(Number.MAX_SAFE_INTEGER)],
+  ])("counts %s as over 60, capped at the largest safe integer", (_name, header) => {
+    expect(parseRetryAfter(header)).toBe(Number.MAX_SAFE_INTEGER);
   });
 });
 
@@ -80,7 +86,7 @@ describe("R61: a purchase fails only as a HushscriptError that carries its key",
   });
 
   for (const status of [402, 429, 502, 503]) {
-    it(`keeps the key on a ${String(status)} with a 400-digit Retry-After, treated as absent`, async () => {
+    it(`keeps the key on a ${String(status)} with a 400-digit Retry-After, reported capped`, async () => {
       stubFetch([
         purchaseStep(
           text(status, JSON.stringify({ error: "rate_limited", code: 1 }), {
@@ -90,7 +96,11 @@ describe("R61: a purchase fails only as a HushscriptError that carries its key",
       ]);
       const error = await failure(client().billing.buy("45min", { idempotencyKey: KEY }));
       expect(error).toBeInstanceOf(HushscriptError);
-      expect(error).toMatchObject({ idempotencyKey: KEY, retryAfter: null, status });
+      expect(error).toMatchObject({
+        idempotencyKey: KEY,
+        retryAfter: Number.MAX_SAFE_INTEGER,
+        status,
+      });
     });
   }
 
@@ -98,12 +108,17 @@ describe("R61: a purchase fails only as a HushscriptError that carries its key",
     ["insufficient_balance", 402],
     ["rate_limited", 429],
   ] as const) {
-    for (const [name, details] of [
-      ["1e400", '{"needed_seconds":1e400,"balance_seconds":1e400,"retry_after_seconds":1e400}'],
-      ["NaN", '{"needed_seconds":NaN,"balance_seconds":-Infinity,"retry_after_seconds":NaN}'],
+    for (const [name, details, retryAfter] of [
+      [
+        "1e400",
+        '{"needed_seconds":1e400,"balance_seconds":1e400,"retry_after_seconds":1e400}',
+        null,
+      ],
+      ["NaN", '{"needed_seconds":NaN,"balance_seconds":-Infinity,"retry_after_seconds":NaN}', null],
       [
         "a huge integer",
         `{"needed_seconds":${"9".repeat(400)},"retry_after_seconds":${"9".repeat(400)}}`,
+        Number.MAX_SAFE_INTEGER,
       ],
     ] as const) {
       it(`keeps the key on a ${String(status)} whose details hold ${name}`, async () => {
@@ -120,7 +135,7 @@ describe("R61: a purchase fails only as a HushscriptError that carries its key",
         expect(error).toMatchObject({
           idempotencyKey: KEY,
           status,
-          retryAfter: null,
+          retryAfter,
           numericCode: null,
         });
         const hint = (error as HushscriptError).hint ?? "";

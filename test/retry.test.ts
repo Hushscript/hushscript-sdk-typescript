@@ -150,6 +150,7 @@ describe("planRetry", () => {
     expect(plan({ status: 429, retryAfter: 0 })).toEqual({ retry: true, delayMs: 0 });
     expect(plan({ status: 429, retryAfter: 61 })).toEqual({ retry: false });
     expect(plan({ status: 503, retryAfter: 120 })).toEqual({ retry: false });
+    expect(plan({ status: 429, retryAfter: Number.MAX_SAFE_INTEGER })).toEqual({ retry: false });
   });
 
   it("retries a purchase on network errors, 502 and 503 only, at most once", () => {
@@ -297,6 +298,24 @@ describe("through the hardened fetch", () => {
     expect(f.calls).toBe(1);
     await expect(call("safe")).rejects.toBeInstanceOf(RateLimitError);
   });
+
+  it.each(["9".repeat(400), "9007199254740993", "99999999999999999999"])(
+    "does not retry a Retry-After of %s and reports it capped",
+    async (header) => {
+      const f = stubFetch([
+        {
+          status: 429,
+          headers: { "retry-after": header },
+          body: { error: "rate_limited", code: 5000 },
+        },
+      ]);
+      await expect(call("safe")).rejects.toMatchObject({
+        code: "rate_limited",
+        retryAfter: Number.MAX_SAFE_INTEGER,
+      });
+      expect(f.calls).toBe(1);
+    },
+  );
 
   it("waits Retry-After up to 60 s and retries", async () => {
     const clock = fakeClock();

@@ -78,7 +78,7 @@ export const UPLOAD_CREATE: Shape = objectOf<Schemas["UploadCreateResponse"]>({
     objectOf<NonNullable<Schemas["UploadCreateResponse"]["upload"]>>({
       part_size_bytes: positiveInt,
       total_parts: positiveInt,
-      part_urls: arrayOf(PART_URL),
+      part_urls: nullable(arrayOf(PART_URL)),
       next_part_number: nullable(positiveInt),
     }),
   ),
@@ -86,13 +86,13 @@ export const UPLOAD_CREATE: Shape = objectOf<Schemas["UploadCreateResponse"]>({
 
 export const UPLOAD_COMPLETE: Shape = objectOf<Schemas["UploadCompleteResponse"]>({ state: str });
 
-/** `null` is the answer for a job that takes proxied parts only. */
+/** `null`, or a `null` part_urls, is the answer for a job that takes proxied parts only. */
 export const PART_URLS: Shape = nullable(
   objectOf<{
     part_urls: unknown;
     next_part_number: unknown;
   }>({
-    part_urls: arrayOf(PART_URL),
+    part_urls: nullable(arrayOf(PART_URL)),
     next_part_number: optional(nullable(positiveInt)),
   }),
 );

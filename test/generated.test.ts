@@ -56,4 +56,9 @@ describe("generated tables", () => {
     expect(HINTS["resume_file_required"]).toContain("Pass the original file to resume it");
     expect(HINTS["config_invalid"]).toBeUndefined();
   });
+  it("names no SDK method in any hint text", () => {
+    for (const [slug, text] of Object.entries(HINTS)) {
+      expect(text, slug).not.toMatch(/\bhs\.|\w\(\)|\(id\)/);
+    }
+  });
 });
