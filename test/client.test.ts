@@ -1,6 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { inspect } from "node:util";
 import { Hushscript } from "../src/client";
 import {
+  ApiError,
+  HushscriptError,
   NetworkError,
   OutcomeUnknownError,
   PermissionDeniedError,
@@ -36,6 +39,26 @@ describe("hs.api", () => {
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(PermissionDeniedError);
     expect((error as PermissionDeniedError).hint).toContain('"transcripts:read" permission');
+  });
+
+  it("surfaces a 2xx with a body that is not JSON as bad_response, not a raw SyntaxError", async () => {
+    stubFetch([{ status: 200, text: "<html>maintenance</html>" }]);
+    const error = await client()
+      .api.GET("/v1/account")
+      .catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(SyntaxError);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ code: "bad_response" });
+    expect((error as HushscriptError).message).toContain("GET /v1/account");
+  });
+
+  it("redacts a token the non-JSON body echoes, in the error and its cause", async () => {
+    stubFetch([{ status: 200, text: TOKEN }]);
+    const error = await client()
+      .api.GET("/v1/account")
+      .catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "bad_response" });
+    expect(`${inspect(error, { depth: 10 })}${JSON.stringify(error)}`).not.toContain(TOKEN);
   });
 
   it("does not wait for Retry-After above 60 s", async () => {

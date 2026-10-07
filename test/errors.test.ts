@@ -1,5 +1,6 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { inspect } from "node:util";
 import { beforeAll, describe, expect, it } from "vitest";
 import {
   AbortError,
@@ -422,6 +423,28 @@ describe("errorFromResponse", () => {
     });
     expect(wrapped.message).not.toContain(TOKEN);
     expect((wrapped.cause as Error).message).not.toContain(TOKEN);
+  });
+
+  it("never lets the token out through the error slug", () => {
+    const error = errorFromResponse(res(400), { error: TOKEN, code: 1000 }, "GET /v1/account");
+    expect(error.code).toBe(REDACTED);
+    const surfaces = [JSON.stringify(error), inspect(error, { depth: 10 }), error.message];
+    for (const text of surfaces) expect(text).not.toContain(TOKEN);
+  });
+
+  it("never lets the token out through a details key", () => {
+    const error = errorFromResponse(
+      res(400),
+      { error: "bad_request", code: 1000, details: { [TOKEN]: "x" }, [`k_${TOKEN}`]: 1 },
+      "GET /v1/account",
+    );
+    const surfaces = [
+      JSON.stringify(error),
+      inspect(error, { depth: 10 }),
+      JSON.stringify(error.details),
+    ];
+    for (const text of surfaces) expect(text).not.toContain(TOKEN);
+    expect(JSON.stringify(error.details)).toContain(REDACTED);
   });
 });
 

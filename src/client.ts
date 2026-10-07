@@ -2,6 +2,7 @@ import { inspect } from "node:util";
 import createClient, { type Client } from "openapi-fetch";
 import { resolveConfig, type HushscriptOptions, type ResolvedConfig } from "./config.ts";
 import type { paths } from "./generated/schema";
+import { guardApi } from "./http/guard.ts";
 import { createTransport } from "./http/transport.ts";
 import { REDACTED } from "./redact.ts";
 import { AgentResource, agentStatic, type AgentStatic } from "./resources/agent.ts";
@@ -44,13 +45,14 @@ export class Hushscript {
     const config = resolveConfig(options);
     this.#config = config;
     Object.defineProperty(this, inspect.custom, { value: () => this.toString() });
-    this.api = createClient<paths>({ baseUrl: config.baseUrl, fetch: createTransport(config) });
-    this.api.use({
+    const api = createClient<paths>({ baseUrl: config.baseUrl, fetch: createTransport(config) });
+    api.use({
       onRequest: ({ request }) => {
         request.headers.set("authorization", config.authorization());
         request.headers.set("user-agent", config.userAgent);
       },
     });
+    this.api = guardApi(api);
     this.#pipeline = new Pipeline(config, this.api);
     this.jobs = new JobsResource(this.api, (id, options) => this.#pipeline.waitForJob(id, options));
     this.transcripts = new TranscriptsResource(this.api);
