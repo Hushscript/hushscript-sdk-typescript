@@ -1,3 +1,4 @@
+/* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
 // Conformance runner (docs/runner-contract.md in the conformance repo). It starts nothing: the mock
 // is the compose `mock` service this container shares a network namespace with.
 //
@@ -81,14 +82,76 @@ function realSleep(ms: number): Promise<void> {
 }
 
 // The SDK's transport is the global fetch, so counting here counts the SDK's requests only: the
-// runner's own control calls go through `rawFetch`.
+// runner's own control calls go through `rawFetch`. A request stays in flight until its response
+// body is fully read, cancelled or errored, not only until the headers arrive: the SDK reads the
+// body under its per-attempt timeout on the virtual clock, so the driver must not jump time while
+// that read is still pending. The SDK always consumes the body (`arrayBuffer`) or aborts the
+// request, and a status without a body has none to wait for, so the count cannot stay up.
 const traffic = { inFlight: 0, activity: 0 };
-globalThis.fetch = (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-  traffic.inFlight += 1;
-  traffic.activity += 1;
-  return rawFetch(input, init).finally(() => {
+
+function leaveOnce(): () => void {
+  let left = false;
+  return () => {
+    if (left) return;
+    left = true;
     traffic.inFlight -= 1;
     traffic.activity += 1;
+  };
+}
+
+/** The same bytes, pulled only on demand, calling `leave` once the stream is done, errored or cancelled. */
+function countedBody(
+  body: ReadableStream<Uint8Array>,
+  leave: () => void,
+): ReadableStream<Uint8Array> {
+  const reader = body.getReader();
+  return new ReadableStream<Uint8Array>(
+    {
+      async pull(controller) {
+        try {
+          const next = await reader.read();
+          if (next.done) {
+            leave();
+            controller.close();
+          } else {
+            controller.enqueue(next.value);
+          }
+        } catch (error) {
+          leave();
+          throw error;
+        }
+      },
+      async cancel(reason) {
+        try {
+          await reader.cancel(reason);
+        } finally {
+          leave();
+        }
+      },
+    },
+    { highWaterMark: 0 },
+  );
+}
+
+globalThis.fetch = async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+  traffic.inFlight += 1;
+  traffic.activity += 1;
+  const leave = leaveOnce();
+  let response: Response;
+  try {
+    response = await rawFetch(input, init);
+  } catch (error) {
+    leave();
+    throw error;
+  }
+  if (response.body === null) {
+    leave();
+    return response;
+  }
+  return new Response(countedBody(response.body, leave), {
+    status: response.status,
+    statusText: response.statusText,
+    headers: response.headers,
   });
 };
 
