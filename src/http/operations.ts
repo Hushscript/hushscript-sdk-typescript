@@ -52,7 +52,7 @@ function hasIdempotencyKey(body: string | null): boolean {
 
 /**
  * The retry class of a concrete request, from its method, URL path and, for an upload create, its
- * body (spec 7.2, 7.4). A create replays safely only with an idempotency key; without one it is
+ * body. A create replays safely only with an idempotency key; without one it is
  * an ordinary mutation.
  */
 export function retryClassForRequest(

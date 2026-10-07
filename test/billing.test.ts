@@ -1,12 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
 import {
+  ApiError,
   AuthenticationError,
+  HushscriptError,
+  NetworkError,
   PaymentMethodRequiredError,
   PermissionDeniedError,
   PreflightError,
 } from "../src/errors";
-import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, stubFetch } from "./helpers";
+import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, networkError, stubFetch } from "./helpers";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -43,17 +46,9 @@ function cards(
 }
 
 const PURCHASED = { status: 200, body: { status: "ok", balance_seconds: 18_000 } };
-const ACCOUNT = {
-  status: 200,
-  body: {
-    balance_seconds: 18_000,
-    held_seconds: 120,
-    credits_expire_at: 1_800_000_000,
-    card_on_file: true,
-    data_region: "eu",
-    limits: { max_daily_seconds: 36_000 },
-  },
-};
+function paths(stub: { requests: Request[] }): string[] {
+  return stub.requests.map((request) => new URL(request.url).pathname);
+}
 
 function purchaseBodies(stub: {
   requests: Request[];
@@ -237,35 +232,25 @@ describe("billing history", () => {
 });
 
 describe("hs.buy", () => {
-  it("uses the default card, mints one key and returns the balance from the purchase response", async () => {
+  it("uses the default card, mints one key and returns the purchase, with no request after the charge", async () => {
     const stub = stubFetch([
       cards("pm_a", [card("pm_a", true, true), card("pm_b")]),
       { status: 200, body: { status: "ok", balance_seconds: 20_000 } },
-      ACCOUNT,
     ]);
-    const balance = await client().buy("300min");
-    const [purchase] = purchaseBodies(stub);
-    expect(purchase).toMatchObject({
+    const purchase = await client().buy("300min");
+    const [body] = purchaseBodies(stub);
+    expect(body).toMatchObject({
       pack: "300min",
       quick_payment_method_id: "pm_a",
       policy_ack: false,
     });
-    expect(purchase?.["idempotency_key"]).toMatch(/^[\da-f-]{36}$/);
-    expect(balance).toEqual({
-      seconds: 20_000,
-      minutes: 333,
-      heldSeconds: 120,
-      expiresAt: new Date(1_800_000_000_000),
-      purchasesRemaining: null,
-    });
+    expect(body?.["idempotency_key"]).toMatch(/^[\da-f-]{36}$/);
+    expect(purchase).toEqual({ seconds: 20_000, minutes: 333 });
+    expect(paths(stub)).toEqual(["/v1/billing/cards", "/v1/billing/purchase"]);
   });
 
   it("uses the only eligible card when there is no default", async () => {
-    const stub = stubFetch([
-      cards(null, [card("pm_old", false), card("pm_ok")]),
-      PURCHASED,
-      ACCOUNT,
-    ]);
+    const stub = stubFetch([cards(null, [card("pm_old", false), card("pm_ok")]), PURCHASED]);
     await client().buy("45min");
     expect(purchaseBodies(stub)[0]).toMatchObject({ quick_payment_method_id: "pm_ok" });
   });
@@ -273,7 +258,6 @@ describe("hs.buy", () => {
   it.each([
     ["no card at all", cards(null, [])],
     ["only a card that cannot be charged off-session", cards(null, [card("pm_x", false)])],
-    ["several eligible cards and no default", cards(null, [card("pm_1"), card("pm_2")])],
   ])("raises PaymentMethodRequiredError and sends no purchase with %s", async (_name, saved) => {
     const stub = stubFetch([saved]);
     const error: unknown = await client()
@@ -281,6 +265,20 @@ describe("hs.buy", () => {
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(PaymentMethodRequiredError);
     expect(error).toMatchObject({ code: "no_default_card" });
+    expect((error as PaymentMethodRequiredError).hint).toContain("addCardUrl()");
+    expect(purchaseBodies(stub)).toEqual([]);
+    expect(stub.calls).toBe(1);
+  });
+
+  it("asks for a default card, not a new one, when several cards could be charged", async () => {
+    const stub = stubFetch([cards(null, [card("pm_1"), card("pm_2")])]);
+    const error: unknown = await client()
+      .buy("300min")
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PaymentMethodRequiredError);
+    expect(error).toMatchObject({ code: "default_card_required" });
+    expect((error as PaymentMethodRequiredError).hint).toContain("setDefaultCard(id)");
+    expect((error as PaymentMethodRequiredError).hint).not.toContain("No saved card");
     expect(purchaseBodies(stub)).toEqual([]);
     expect(stub.calls).toBe(1);
   });
@@ -290,11 +288,7 @@ describe("hs.buy", () => {
       (request) => {
         const path = new URL(request.url).pathname;
         const answer =
-          path === "/v1/billing/cards"
-            ? cards("pm_a", [card("pm_a", true, true)])
-            : path === "/v1/billing/purchase"
-              ? PURCHASED
-              : ACCOUNT;
+          path === "/v1/billing/cards" ? cards("pm_a", [card("pm_a", true, true)]) : PURCHASED;
         return Response.json(answer.body, { status: answer.status });
       },
     ]);
@@ -305,7 +299,7 @@ describe("hs.buy", () => {
   });
 
   it("sends a caller's idempotency key as it is, and refuses a malformed one before any request", async () => {
-    const stub = stubFetch([cards("pm_a", [card("pm_a", true, true)]), PURCHASED, ACCOUNT]);
+    const stub = stubFetch([cards("pm_a", [card("pm_a", true, true)]), PURCHASED]);
     await client().buy("300min", { idempotencyKey: "order_42-retry" });
     expect(purchaseBodies(stub)[0]).toMatchObject({ idempotency_key: "order_42-retry" });
     const calls = stub.calls;
@@ -324,15 +318,16 @@ describe("hs.buy", () => {
       cards("pm_a", [card("pm_a", true, true)]),
       { status: 502, text: "bad gateway" },
       PURCHASED,
-      ACCOUNT,
     ]);
-    await client().buy("300min");
+    const purchase = await client().buy("300min");
     const bodies = purchaseBodies(stub);
     expect(bodies).toHaveLength(2);
     expect(bodies[1]?.["idempotency_key"]).toBe(bodies[0]?.["idempotency_key"]);
+    expect(purchase.seconds).toBe(18_000);
+    expect(paths(stub)).not.toContain("/v1/account");
   });
 
-  it("does not retry a refusal, and the error says to buy in the app", async () => {
+  it("does not retry a refusal, the error says to buy in the app and carries the key", async () => {
     const stub = stubFetch([
       cards("pm_a", [card("pm_a", true, true)]),
       { status: 403, body: { error: "pat_purchase_requires_app", code: 4021 } },
@@ -343,10 +338,61 @@ describe("hs.buy", () => {
     expect(error).toBeInstanceOf(PermissionDeniedError);
     expect(error).toMatchObject({ code: "pat_purchase_requires_app" });
     expect(purchaseBodies(stub)).toHaveLength(1);
+    expect((error as HushscriptError).idempotencyKey).toBe(
+      purchaseBodies(stub)[0]?.["idempotency_key"],
+    );
   });
 
+  it("gives up after a lost connection with the key, and the same key retries without a second charge", async () => {
+    const stub = stubFetch([
+      cards("pm_a", [card("pm_a", true, true)]),
+      { error: networkError("ECONNRESET") },
+      { error: networkError("ECONNRESET") },
+      cards("pm_a", [card("pm_a", true, true)]),
+      PURCHASED,
+    ]);
+    const hs = client();
+    const error: unknown = await hs.buy("300min").catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NetworkError);
+    const key = (error as NetworkError).idempotencyKey;
+    expect(key).toMatch(/^[\da-f-]{36}$/);
+    expect(purchaseBodies(stub).map((body) => body["idempotency_key"])).toEqual([key, key]);
+    await hs.buy("300min", { idempotencyKey: key ?? undefined });
+    expect(purchaseBodies(stub)[2]?.["idempotency_key"]).toBe(key);
+  });
+
+  it.each([
+    ["an empty body", { status: 200, text: "" }],
+    ["a body that is not JSON", { status: 200, text: "<html>ok</html>" }],
+    ["a JSON array", { status: 200, text: "[]" }],
+    ["a status that is not ok", { status: 200, body: { status: "pending", balance_seconds: 1 } }],
+    ["no balance", { status: 200, body: { status: "ok" } }],
+    [
+      "a balance that is not a whole number",
+      { status: 200, body: { status: "ok", balance_seconds: 1.5 } },
+    ],
+    [
+      "a balance that is a string",
+      { status: 200, body: { status: "ok", balance_seconds: "18000" } },
+    ],
+  ])(
+    "raises ApiError bad_response, with the key and no follow-up request, for %s",
+    async (_name, answer) => {
+      const stub = stubFetch([cards("pm_a", [card("pm_a", true, true)]), answer]);
+      const error: unknown = await client()
+        .buy("300min")
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({ code: "bad_response", status: 200, numericCode: null });
+      expect((error as HushscriptError).idempotencyKey).toBe(
+        purchaseBodies(stub)[0]?.["idempotency_key"],
+      );
+      expect(paths(stub)).toEqual(["/v1/billing/cards", "/v1/billing/purchase"]);
+    },
+  );
+
   it("is the same call as hs.billing.buy", async () => {
-    const stub = stubFetch([cards("pm_a", [card("pm_a", true, true)]), PURCHASED, ACCOUNT]);
+    const stub = stubFetch([cards("pm_a", [card("pm_a", true, true)]), PURCHASED]);
     const hs = client();
     await hs.billing.buy("300min");
     expect(purchaseBodies(stub)).toHaveLength(1);
@@ -355,6 +401,36 @@ describe("hs.buy", () => {
 
   it("does not catch an error from reading the cards", async () => {
     stubFetch([{ status: 401, body: { error: "unauthorized", code: 2000 } }]);
-    await expect(client().buy("300min")).rejects.toBeInstanceOf(AuthenticationError);
+    const error: unknown = await client()
+      .buy("300min")
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AuthenticationError);
+    expect((error as HushscriptError).idempotencyKey).toBeNull();
+  });
+});
+
+describe("billing reads", () => {
+  it.each([
+    ["an empty body", ""],
+    ["a body that is not JSON", "<html></html>"],
+  ])("raise ApiError bad_response, not a plain error, for %s on a 2xx", async (_name, text) => {
+    stubFetch([{ status: 200, text }]);
+    const hs = client();
+    for (const read of [
+      () => hs.billing.packs(),
+      () => hs.billing.cards(),
+      () => hs.billing.addCardUrl(),
+    ]) {
+      const error: unknown = await read().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ApiError);
+      expect(error).toMatchObject({ code: "bad_response" });
+    }
+  });
+
+  it("raises ApiError bad_response when setting the default card gets a body that is not JSON", async () => {
+    stubFetch([{ status: 200, text: "<html></html>" }]);
+    await expect(client().billing.setDefaultCard("pm_a")).rejects.toMatchObject({
+      code: "bad_response",
+    });
   });
 });

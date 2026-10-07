@@ -4,7 +4,7 @@ import { AuthenticationError, HushscriptError } from "../errors.ts";
 const HEARTBEAT_INTERVAL_MS = 120_000;
 
 /**
- * Calls `send` every 120 s until the signal aborts (spec 8.5). Failures are ignored, except
+ * Calls `send` every 120 s until the signal aborts. Failures are ignored, except
  * `wrong_state` (the job moved on: stop quietly) and `unauthorized` (rethrown). Ticks are scheduled
  * from the start time, so a slow request does not stretch the interval.
  */

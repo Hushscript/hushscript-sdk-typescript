@@ -34,7 +34,7 @@ describe("construction", () => {
     expect(error.numericCode).toBeNull();
     expect(error.status).toBeNull();
     expect(error.hint).toBe(
-      "Set HUSHSCRIPT_TOKEN or pass a token. Create one in the Hushscript app: Account → Connected apps (app.hushscript.com/account/mcp).",
+      "Set HUSHSCRIPT_TOKEN or pass a token. Create one in the Hushscript app: Account → MCP (app.hushscript.com/account/mcp).",
     );
   });
 
@@ -180,6 +180,18 @@ describe("logging and clock", () => {
       resolveConfig({ token: TOKEN, logLevel: "off" }, { env: { HUSHSCRIPT_LOG: "debug" } })
         .logLevel,
     ).toBe("off");
+  });
+
+  it("checks a replacement token like the first one, and keeps the old one when it is refused", () => {
+    const cfg = resolveConfig({ token: TOKEN }, { env: NO_ENV });
+    for (const bad of ["", "   ", "not-a-token", "hsr1:eu:has space"]) {
+      expect(() => {
+        cfg.setToken(bad);
+      }).toThrow(ConfigurationError);
+    }
+    expect(cfg.authorization()).toBe(`Bearer ${TOKEN}`);
+    cfg.setToken(`  ${TOKEN}x\n`);
+    expect(cfg.authorization()).toBe(`Bearer ${TOKEN}x`);
   });
 
   it("lets every explicitly passed option beat its environment variable", () => {

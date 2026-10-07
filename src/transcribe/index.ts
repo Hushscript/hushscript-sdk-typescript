@@ -56,7 +56,7 @@ function transcriptionOptions(options: TranscribeOptions): CreateBody["transcrip
   return Object.keys(out).length === 0 ? undefined : out;
 }
 
-/** Spec 8.6: bad options are refused before any request, never clamped. */
+/** Bad options are refused before any request, never clamped. */
 function checkRuntimeOptions(options: {
   concurrency?: number | undefined;
   waitTimeout?: number | undefined;
@@ -88,7 +88,7 @@ interface Run {
   onProgress: ((progress: Progress) => void) | undefined;
 }
 
-/** The friendly transcribe pipeline (spec 8): preflight, create, parts, complete, wait, fetch. */
+/** The friendly transcribe pipeline: preflight, create, parts, complete, wait, fetch. */
 export class Pipeline {
   readonly #cfg: ResolvedConfig;
   readonly #api: Client<paths>;
@@ -102,7 +102,7 @@ export class Pipeline {
     const { concurrency, waitTimeout } = checkRuntimeOptions(options);
     const signal = options.signal ?? new AbortController().signal;
     let token: ResumeToken | null = null;
-    // Set once the create is about to go out: from then on an error carries the key (spec 7.3).
+    // Set once the create is about to go out: from then on an error carries the key.
     let sentKey: string | null = null;
     let source: Source | null = null;
     try {
@@ -222,7 +222,7 @@ export class Pipeline {
     });
   }
 
-  /** Adds the resume token to a cancellation and, after a create was sent, the key to every error (spec 7.1, 7.3). */
+  /** Adds the resume token to a cancellation and, after a create was sent, the key to every error. */
   #annotate(
     error: unknown,
     token: ResumeToken | null,

@@ -1,11 +1,11 @@
 import createClient, { type Client } from "openapi-fetch";
 import { resolveTokenlessConfig, type ResolvedConfig } from "../config.ts";
-import { ValidationError } from "../errors.ts";
+import { OutcomeUnknownError, ValidationError } from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { createTransport } from "../http/transport.ts";
 import { toMoney, type Money } from "../money.ts";
 import { registerSecret } from "../redact.ts";
-import { present } from "../transcribe/common.ts";
+import { badResponse, guarded, present, readObject } from "../transcribe/common.ts";
 import type { Balance } from "./account.ts";
 
 export interface AgentSignupRequest {
@@ -61,6 +61,24 @@ export interface AgentStatic {
   ): Promise<AgentClaim>;
 }
 
+const CLAIM_ROUTE = "POST /v1/agent/accounts/{signup_id}/claim";
+const ROTATE_ROUTE = "POST /v1/agent/credentials/rotate";
+
+/** The answer was a 2xx but carried no token: the credential was minted and is lost, like a lost response. */
+function lostCredential(route: string, status: number, cause?: unknown): OutcomeUnknownError {
+  return new OutcomeUnknownError({
+    message: `${route} answered ${String(status)} without a usable token, so the token may be lost.`,
+    hint: OutcomeUnknownError.hintFor(route),
+    cause: badResponse(route, status, cause),
+  });
+}
+
+function strings(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
+}
+
 function tokenlessApi(baseUrl: string | undefined): Client<paths> {
   const config = resolveTokenlessConfig({ baseUrl });
   const api = createClient<paths>({ baseUrl: config.baseUrl, fetch: createTransport(config) });
@@ -84,22 +102,25 @@ export const agentStatic: AgentStatic = {
       });
     }
     const api = tokenlessApi(request.baseUrl);
-    const { data } = await api.POST("/v1/agent/accounts", {
-      body: {
-        contact_email: request.email,
-        pack_id: request.pack,
-        accept_terms_version: request.acceptTerms,
-        agent: {
-          name: request.agent.name,
-          platform: request.agent.platform,
-          ...(request.agent.contactUrl === undefined
-            ? {}
-            : { contact_url: request.agent.contactUrl }),
+    const { data } = await guarded(
+      api.POST("/v1/agent/accounts", {
+        body: {
+          contact_email: request.email,
+          pack_id: request.pack,
+          accept_terms_version: request.acceptTerms,
+          agent: {
+            name: request.agent.name,
+            platform: request.agent.platform,
+            ...(request.agent.contactUrl === undefined
+              ? {}
+              : { contact_url: request.agent.contactUrl }),
+          },
+          ...(request.dataRegion === undefined ? {} : { data_region: request.dataRegion }),
+          ...(request.dryRun === undefined ? {} : { dry_run: request.dryRun }),
         },
-        ...(request.dataRegion === undefined ? {} : { data_region: request.dataRegion }),
-        ...(request.dryRun === undefined ? {} : { dry_run: request.dryRun }),
-      },
-    });
+      }),
+      "POST /v1/agent/accounts",
+    );
     const body = present(data, "POST /v1/agent/accounts");
     return {
       signupId: body.signup_id,
@@ -112,23 +133,31 @@ export const agentStatic: AgentStatic = {
 
   async claim(signupId, claimSecret, options = {}) {
     const api = tokenlessApi(options.baseUrl);
-    const { data } = await api.POST("/v1/agent/accounts/{signup_id}/claim", {
-      // The OpenAPI document leaves the {signup_id} path parameter out of this operation, so its
-      // generated type has no `path`; openapi-fetch still fills the template from it.
-      params: { path: { signup_id: signupId } } as never,
-      body: { claim_secret: claimSecret },
-    });
-    const body = present(data, "POST /v1/agent/accounts/{signup_id}/claim");
-    registerSecret(body.pat);
+    const { status, body } = await readObject(
+      api.POST("/v1/agent/accounts/{signup_id}/claim", {
+        // The OpenAPI document leaves the {signup_id} path parameter out of this operation, so its
+        // generated type has no `path`; openapi-fetch still fills the template from it.
+        params: { path: { signup_id: signupId } } as never,
+        body: { claim_secret: claimSecret },
+        parseAs: "text",
+      }),
+      CLAIM_ROUTE,
+    );
+    const pat = body?.["pat"];
+    if (typeof pat !== "string" || pat === "") throw lostCredential(CLAIM_ROUTE, status);
+    registerSecret(pat);
+    const seconds = body?.["balance_seconds"];
+    const balanceSeconds = typeof seconds === "number" && Number.isInteger(seconds) ? seconds : 0;
+    const userId = body?.["user_id"];
     return {
-      token: body.pat,
-      userId: body.user_id,
-      scopes: body.scopes,
+      token: pat,
+      userId: typeof userId === "string" ? userId : "",
+      scopes: strings(body?.["scopes"]),
       // A fresh account has no holds; the claim answer carries no expiry, and a follow-up read
       // could fail after the token was shown for the only time.
       balance: {
-        seconds: body.balance_seconds,
-        minutes: Math.trunc(body.balance_seconds / 60),
+        seconds: balanceSeconds,
+        minutes: Math.trunc(balanceSeconds / 60),
         heldSeconds: 0,
         expiresAt: null,
         purchasesRemaining: null,
@@ -152,14 +181,25 @@ export class AgentResource {
    * once; store the returned one. A lost answer raises `OutcomeUnknownError` and is never retried.
    */
   async rotateToken(): Promise<RotatedToken> {
-    const { data } = await this.#api.POST("/v1/agent/credentials/rotate");
-    const body = present(data, "POST /v1/agent/credentials/rotate");
-    this.#config.setToken(body.pat);
+    const { status, body } = await readObject(
+      this.#api.POST("/v1/agent/credentials/rotate", { parseAs: "text" }),
+      ROTATE_ROUTE,
+    );
+    const pat = body?.["pat"];
+    if (typeof pat !== "string" || pat === "") throw lostCredential(ROTATE_ROUTE, status);
+    registerSecret(pat);
+    try {
+      this.#config.setToken(pat);
+    } catch (error) {
+      throw lostCredential(ROTATE_ROUTE, status, error);
+    }
+    const tokenId = body?.["pat_id"];
+    const expiresAt = body?.["expires_at"];
     return {
-      token: body.pat,
-      tokenId: body.pat_id,
-      scopes: body.scopes,
-      expiresAt: typeof body.expires_at === "number" ? new Date(body.expires_at * 1000) : null,
+      token: pat,
+      tokenId: typeof tokenId === "string" ? tokenId : "",
+      scopes: strings(body?.["scopes"]),
+      expiresAt: typeof expiresAt === "number" ? new Date(expiresAt * 1000) : null,
     };
   }
 }

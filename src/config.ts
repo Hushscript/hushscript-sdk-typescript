@@ -61,14 +61,14 @@ export interface ConfigValues {
 export class ResolvedConfig {
   readonly baseUrl: string;
   readonly timeoutMs: number;
-  /** Per upload part PUT (spec 3); not configurable. */
+  /** Per upload part PUT; not configurable. */
   readonly partTimeoutMs: number;
   readonly maxRetries: number;
   readonly logLevel: LogLevel;
   readonly clock: Clock;
   readonly logger: Logger;
   readonly random: () => number;
-  /** Paces `POST /v1/uploads` for this client instance (spec 7.5). */
+  /** Paces `POST /v1/uploads` for this client instance. */
   readonly createPacer: TokenBucket;
   readonly userAgent: string;
   #token: string | null;
@@ -96,7 +96,7 @@ export class ResolvedConfig {
   /** Replaces the token for every later request (token rotation); the new one is redacted from then on. */
   setToken(token: string): void {
     registerSecret(token);
-    this.#token = token;
+    this.#token = checkToken(token);
   }
 
   toJSON(): Record<string, unknown> {
@@ -220,7 +220,7 @@ export function resolveConfig(
   return build(token, options, env, internals);
 }
 
-/** The configuration for the calls that carry no token: agent signup and claim (spec 3). */
+/** The configuration for the calls that carry no token: agent signup and claim. */
 export function resolveTokenlessConfig(
   options: TokenlessOptions = {},
   internals: ConfigInternals = {},

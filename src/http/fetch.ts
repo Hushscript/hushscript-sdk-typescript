@@ -145,7 +145,7 @@ async function attempt(
       headers: request.headers,
       body: request.bytes === null ? null : bodyStream(request.bytes, progress),
       duplex: "half",
-      // Never followed (spec 7.2): a 3xx is an error, and credentials never leave the API origin.
+      // Never followed: a 3xx is an error, and credentials never leave the API origin.
       redirect: "manual",
       signal: controller.signal,
     });
@@ -200,8 +200,8 @@ function terminalFailure(
 }
 
 /**
- * `fetch` with the spec's hardening: per-request timeout, retries by class (spec 7.2), pacing of
- * upload creates (7.5), typed errors for non-2xx answers, redacted debug lines (10). It adds no
+ * `fetch` with the SDK's hardening: per-request timeout, retries by class, pacing of
+ * upload creates, typed errors for non-2xx answers, redacted debug lines. It adds no
  * credentials: direct-to-storage part PUTs must not carry an Authorization header.
  */
 export function hardenedFetch(
@@ -211,7 +211,7 @@ export function hardenedFetch(
 ): typeof fetch {
   const timeoutMs = options.timeoutMs ?? cfg.timeoutMs;
   return async (input, init) => {
-    // Bytes are used where they are: building a Request from them would copy every part (spec 8.4).
+    // Bytes are used where they are: building a Request from them would copy every part.
     const direct = init?.body instanceof Uint8Array ? init.body : null;
     const request = new Request(input, direct === null ? init : { ...init, body: null });
     const url = new URL(request.url);
@@ -225,6 +225,9 @@ export function hardenedFetch(
     const bytes = buffer !== null && buffer.byteLength > 0 ? buffer : null;
     const headers = new Headers(request.headers);
     if (url.origin !== apiOrigin) headers.delete("authorization");
+    // Read again for every attempt: a token rotated while this request waits (a retry's backoff or
+    // the create pacer) must be the one it goes out with.
+    const carriesToken = headers.has("authorization");
     if (bytes !== null) headers.set("content-length", String(bytes.byteLength));
     const prepared = { url: request.url, method, headers, bytes };
 
@@ -236,6 +239,7 @@ export function hardenedFetch(
         await cfg.createPacer.acquire(signal).catch(() => {
           throw aborted(signal);
         });
+      if (carriesToken) prepared.headers.set("authorization", cfg.authorization());
       const startedAt = cfg.clock.now();
       const outcome = await attempt(timeoutMs, cfg, prepared, signal);
       const durationMs = cfg.clock.now() - startedAt;

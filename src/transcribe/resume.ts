@@ -1,6 +1,6 @@
 import { ConfigurationError, ResumeMismatchError } from "../errors.ts";
 
-/** Opaque base64url JSON `{v:1, jobId, idempotencyKey, size, durationSeconds}` (spec 6.1). */
+/** Opaque base64url JSON `{v:1, jobId, idempotencyKey, size, durationSeconds}`. */
 export type ResumeToken = string;
 
 export interface ResumeState {

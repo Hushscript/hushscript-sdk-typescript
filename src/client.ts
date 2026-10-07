@@ -5,7 +5,7 @@ import type { paths } from "./generated/schema";
 import { createTransport } from "./http/transport.ts";
 import { REDACTED } from "./redact.ts";
 import { AgentResource, agentStatic, type AgentStatic } from "./resources/agent.ts";
-import { BillingResource, type BuyOptions } from "./resources/billing.ts";
+import { BillingResource, type BuyOptions, type Purchase } from "./resources/billing.ts";
 import { JobsResource } from "./resources/jobs.ts";
 import {
   readAccount,
@@ -31,7 +31,7 @@ export class Hushscript {
   readonly jobs: JobsResource;
   /** Finished transcripts: list, read and the deletion records. */
   readonly transcripts: TranscriptsResource;
-  /** Packs, saved cards and purchase history. Needs the `billing` scope and machine billing turned on in the app. */
+  /** Packs, saved cards and purchase history. Buying also needs the token's own purchase switch and the account-wide one, both in the app under Account → MCP. */
   readonly billing: BillingResource;
   /** Calls an agent account makes with its own token. */
   readonly agent: AgentResource;
@@ -58,7 +58,7 @@ export class Hushscript {
     this.agent = new AgentResource(this.api, config);
   }
 
-  /** Uploads `file`, waits for the transcript and returns it (spec 6.1). */
+  /** Uploads `file`, waits for the transcript and returns it. */
   transcribe(file: FileInput, options?: TranscribeOptions): Promise<Transcript> {
     return this.#pipeline.transcribe(file, options);
   }
@@ -68,8 +68,8 @@ export class Hushscript {
     return this.#pipeline.resume(token, file, options);
   }
 
-  /** Buys a pack with the saved default card and returns the new balance (alias of `hs.billing.buy`). */
-  buy(packId: string, options?: BuyOptions): Promise<Balance> {
+  /** Buys a pack with the saved default card and returns what the purchase left you with (alias of `hs.billing.buy`). */
+  buy(packId: string, options?: BuyOptions): Promise<Purchase> {
     return this.billing.buy(packId, options);
   }
 
@@ -78,7 +78,7 @@ export class Hushscript {
     return toBalance(await readAccount(this.api));
   }
 
-  /** The account in camelCase: balance, holds, expiry, limits, `cardOnFile` and `dataRegion` (spec 6.3). */
+  /** The account in camelCase: balance, holds, expiry, limits, `cardOnFile` and `dataRegion`. */
   async account(): Promise<Account> {
     return toAccount(await readAccount(this.api));
   }

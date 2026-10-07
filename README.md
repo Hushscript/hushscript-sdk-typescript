@@ -8,7 +8,7 @@ so you do not have to.
 
 ```sh
 npm install @hushscript/sdk
-export HUSHSCRIPT_TOKEN=hsr1:...   # Account → Connected apps in the Hushscript app
+export HUSHSCRIPT_TOKEN=hsr1:...   # Account → MCP in the Hushscript app
 ```
 
 ```ts
@@ -49,16 +49,21 @@ returns the full `Transcript` once it is done.
 for (const pack of await hs.billing.packs()) {
   console.log(pack.id, `${pack.minutes} minutes`, pack.price.formatted);
 }
-const balance = await hs.buy("300min", { acknowledgeNoRefund: true });
+const purchase = await hs.buy("300min", { acknowledgeNoRefund: true });
+console.log(`${purchase.minutes} minutes to spend now`);
 ```
 
 The packs are `45min`, `300min`, `900min`, `1800min` and `6000min`. Prices depend on your country,
 so read them from `pack.price` and never hard-code one.
 
 `buy()` charges your saved default card, or the only card that can be charged when there is no
-default. With no usable card it raises `PaymentMethodRequiredError` and sends nothing; add one at
-the URL from `hs.billing.addCardUrl()` or in the app. Show your buyer this notice before you call
-it, then pass `acknowledgeNoRefund: true`:
+default, and returns a `Purchase`: the `seconds` and `minutes` you have after it settled. It makes
+no request after the charge, so nothing can fail once the money has moved. With no usable card it
+raises `PaymentMethodRequiredError` and sends nothing: `no_default_card` when there is none (add one
+at the URL from `hs.billing.addCardUrl()` or in the app), `default_card_required` when several
+cards could be charged and none is the default (pick one with `hs.billing.setDefaultCard(id)`).
+
+Show your buyer this notice before you call it, then pass `acknowledgeNoRefund: true`:
 
 > Minutes are added to your account instantly after payment. All purchases are final and
 > non-refundable.
@@ -66,13 +71,50 @@ it, then pass `acknowledgeNoRefund: true`:
 The flag records that the notice was shown. It does not gate the charge, and without it `buy()`
 still goes ahead.
 
-Buying from code is off until you allow it. Create a token with the `billing` permission, then turn
-on "Let connected apps buy minutes" in the app under Account → Connected apps. If either is missing
-the call fails with `pat_scope_missing`. If the card is declined or the bank wants to confirm the
-payment, the call fails with `pat_purchase_requires_app`; buy that pack in the app.
+### Allow buying first
 
-A purchase is retried at most once, with the same idempotency key, so a flaky network never charges
-you twice. Pass `idempotencyKey` to keep your own.
+Buying from code is off until you allow it in three places. If any is missing, the call fails with
+`pat_scope_missing`.
+
+1. The token has the permission labeled "Buy minutes and manage your saved payment methods" (the
+   `billing` scope), ticked when you create it.
+2. The token has "Let this token buy minutes" turned on, on the same "Create a new token" form.
+3. "Let connected apps buy minutes" is on for the whole account.
+
+All of it is in the app under Account → MCP.
+
+### When a purchase does not go through
+
+If the card is declined or cannot be charged without you, the call fails with
+`pat_purchase_requires_app` (403); if the bank wants to confirm the payment, it fails with
+`pat_purchase_requires_authentication` (403). In both cases nothing was charged: buy that pack in
+the app.
+
+A purchase is retried at most once, on a network error, a 502 or a 503, with the same idempotency
+key, so those retries cannot charge you twice. When `buy()` still gives up after the request was
+sent (the connection dropped twice, or the answer was not one the SDK can use), the card may have
+been charged. Every such error carries `idempotencyKey`; ask again with it and the purchase can
+never happen twice:
+
+```ts
+import { HushscriptError, type Purchase } from "@hushscript/sdk";
+
+let purchase: Purchase;
+try {
+  purchase = await hs.buy("300min", { acknowledgeNoRefund: true });
+} catch (error) {
+  if (!(error instanceof HushscriptError) || error.idempotencyKey === null) throw error;
+  // A refusal (4xx) charged nothing, so only retry a lost or unusable answer.
+  if (error.status !== null && error.status < 500 && error.code !== "bad_response") throw error;
+  purchase = await hs.buy("300min", {
+    acknowledgeNoRefund: true,
+    idempotencyKey: error.idempotencyKey,
+  });
+}
+```
+
+A key you pass yourself must be 1 to 128 characters from `A-Za-z0-9_-`. Do not reuse a key for a
+different pack.
 
 ## Export subtitles
 
@@ -93,6 +135,14 @@ An agent can open an account, have it paid for at a hosted checkout page, and cl
 None of these calls needs a token yet, so they are static.
 
 ```ts
+import { chmod, writeFile } from "node:fs/promises";
+
+// The server shows each token once, so write every one down the moment it arrives.
+const keep = async (token: string): Promise<void> => {
+  await writeFile("agent-token", `${token}\n`, { mode: 0o600 });
+  await chmod("agent-token", 0o600);
+};
+
 const signup = await Hushscript.agent.signup({
   email: "agent@example.com",
   pack: "45min",
@@ -103,17 +153,20 @@ console.log(`Pay ${signup.price.formatted} at ${signup.checkoutUrl}`);
 
 // After the checkout is paid:
 const account = await Hushscript.agent.claim(signup.signupId, signup.claimSecret);
+await keep(account.token); // before anything else can fail
 const hs = new Hushscript({ token: account.token });
-const next = await hs.agent.rotateToken(); // the client now uses `next.token`
+const next = await hs.agent.rotateToken(); // revokes the claimed token; the client uses `next.token`
+await keep(next.token);
 ```
 
 - `acceptTerms` is never filled in for you. A wrong version fails with `policy_version_stale`, and
   the error's `hint` names the current one.
-- The claim answers `wrong_state` until the checkout is paid.
+- The claim answers `wrong_state` (a `ConflictError`) until the checkout is paid.
 - New agent accounts can buy only `45min` and `300min` until earlier purchases settle.
-- Keep `claimSecret` and every token: the server shows each of them once. A claim or a rotation
-  whose answer is lost raises `OutcomeUnknownError` and is never retried, because a retry could not
-  succeed; its `hint` says what to check.
+- Keep `claimSecret` and every token: the server shows each of them once, and a rotation revokes
+  the token it replaces, so lose the new one and the account is out of reach. A claim or a rotation
+  whose answer is lost, or comes back without a token, raises `OutcomeUnknownError` and is never
+  retried, because a retry could not succeed; its `hint` says what to check.
 - `dryRun: true` validates a signup without opening a checkout.
 
 ## Errors
@@ -160,16 +213,17 @@ HushscriptError
 └─ OutcomeUnknownError
 ```
 
-An error raised after an upload started carries `idempotencyKey` and, once the job exists,
-`resumeToken`. Pass the token to `hs.resume(token, file)` to carry on without a second charge.
+An error raised after an upload started, or after a purchase was sent, carries `idempotencyKey`;
+once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(token, file)` to carry on without a second charge.
 
 ## What the SDK does for you
 
 - **Checks before it spends.** It sniffs the format from the file's bytes, probes the duration,
   and refuses a file the server would refuse, or one your balance or daily limit cannot cover,
   before any minutes are held.
-- **Never charges twice.** Every upload and purchase carries an idempotency key. Retries reuse it,
-  and a `resumeToken` replays the same job instead of starting a new one.
+- **Keeps retries from charging twice.** Every upload and purchase carries an idempotency key, and
+  retries reuse it. A `resumeToken` replays the same job instead of starting a new one, and the key
+  on a failed purchase does the same for `buy()`.
 - **Retries what is safe.** Reads, heartbeats and part uploads retry on network errors, 429 and 5xx
   with jittered backoff, and honor `Retry-After` up to 60 seconds. A purchase retries once on a
   network error, 502 or 503. A claim, a rotation and a signup never retry.
@@ -218,7 +272,7 @@ a leaked token, so constructing a client where `window` and `document` exist thr
 
 ## Pricing
 
-Hushscript sells prepaid minute packs, with no subscription. The price of a pack depends on your
+Personal accounts buy prepaid minute packs. The price of a pack depends on your
 country, and your minutes stay valid for a year after your last transcription or purchase. A
 transcription uses the minutes of the recording; medical mode and each translation target use more.
 Current prices are on [hushscript.com/pricing](https://hushscript.com/pricing).
@@ -238,9 +292,8 @@ export condition points at the same ESM build). TypeScript consumers need TypeSc
 Releases come from release-please. The package is published to npm by `publish.yml` through npm
 trusted publishing (OIDC): no npm token is stored in GitHub. The very first publish of
 `@hushscript/sdk` cannot use a trusted publisher, because the package does not exist on the registry
-yet, so the owner publishes it once by hand (workspace plan, Task 19) and then attaches the trusted
-publisher (this repository, workflow `publish.yml`, environment `release`) in the package settings on
-npmjs.com. Every later release is published by the workflow with provenance.
+yet, so the maintainers publish it once by hand and then attach the trusted publisher (this
+repository, workflow `publish.yml`, environment `release`) in the package settings on npmjs.com. Every later release is published by the workflow with provenance.
 
 ## Development
 
@@ -255,14 +308,11 @@ just regen              # regenerate openapi.json and src/generated from the pro
 ```
 
 The conformance mock is built from the `hushscript-sdk-conformance` repository at the tag pinned in
-`compose.yaml`. To use a local checkout instead:
+`package.json` (`config.conformanceRef`). To use a local checkout instead:
 
 ```sh
 CONFORMANCE_CONTEXT=../hushscript-sdk-conformance CONFORMANCE_DIR=../hushscript-sdk-conformance just ci
 ```
-
-`docs/repo-template.md` describes how this repository is put together and how the sibling SDK
-repositories reuse it.
 
 ## Security
 

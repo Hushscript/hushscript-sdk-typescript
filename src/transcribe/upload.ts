@@ -6,9 +6,9 @@ import { hardenedFetch } from "../http/fetch.ts";
 import { aborted } from "./common.ts";
 import type { Source } from "./source.ts";
 
-/** Parts of a job with no direct plan (spec 8.4): the API's own upper bound for a proxied part. */
+/** Parts of a job with no direct plan: the API's own upper bound for a proxied part. */
 const PROXIED_PART_BYTES = 32 * 1024 * 1024;
-/** Presigned URLs live 24 h; a page older than this is fetched again (spec 8.4). */
+/** Presigned URLs live 24 h; a page older than this is fetched again. */
 const URL_MAX_AGE_MS = 23 * 3600 * 1000;
 
 /** The direct-to-R2 plan from the create response, or null for a proxied job. */
@@ -43,7 +43,7 @@ interface Page {
   fetchedAt: number;
 }
 
-/** Presigned part URLs, 16 to a page, fetched on demand and again when expired (spec 8.4). */
+/** Presigned part URLs, 16 to a page, fetched on demand and again when expired. */
 class PartUrls {
   readonly #api: Client<paths>;
   readonly #cfg: ResolvedConfig;
@@ -220,7 +220,7 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
   };
 
   /**
-   * A failed direct attempt, whether the PUT or the part-urls fetch behind it (spec 8.4): a 403, or
+   * A failed direct attempt, whether the PUT or the part-urls fetch behind it: a 403, or
    * any failure once a direct PUT has succeeded, gets one fresh page; after that the job falls back
    * to proxied parts if no direct PUT ever succeeded, and raises `parts_exhausted` if one did.
    */
@@ -267,7 +267,7 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
     });
   };
 
-  /** Direct first; a part that fails keeps the fallback rules of spec 8.4. */
+  /** Direct first; a part that fails keeps the fallback rules. */
   const sendDirect = async (n: number, bytes: Uint8Array): Promise<void> => {
     const state = { refetched: false };
     while (!isProxied() && urls !== null) {

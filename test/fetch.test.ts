@@ -2,9 +2,12 @@ import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { AbortError, ApiError, NetworkError, OutcomeUnknownError } from "../src/errors";
+import type { Clock } from "../src/clock";
+import type { ResolvedConfig } from "../src/config";
 import { hardenedFetch } from "../src/http/fetch";
 import {
   BASE,
+  TEST_TIMEOUT_SECONDS,
   TOKEN,
   call,
   config,
@@ -577,11 +580,11 @@ describe("request shaping", () => {
     await call("safe", {
       method: "PUT",
       body: "abc",
-      headers: { "x-a": "1", authorization: "Bearer t" },
+      headers: { "x-a": "1", "x-b": "2" },
     });
     expect(f.requests[0]?.method).toBe("PUT");
     expect(f.requests[0]?.headers.get("x-a")).toBe("1");
-    expect(f.requests[0]?.headers.get("authorization")).toBe("Bearer t");
+    expect(f.requests[0]?.headers.get("x-b")).toBe("2");
   });
 
   it("returns a successful response untouched, body readable", async () => {
@@ -673,6 +676,63 @@ describe("request bodies and redirects", () => {
     await hardenedFetch(config(), "safe")("https://storage.example/part", { headers });
     expect(f.requests[0]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
     expect(f.requests[1]?.headers.get("authorization")).toBeNull();
+  });
+});
+
+describe("the token of a request that waits", () => {
+  const ROTATED = "hsr1:eu:rotated-token-not-in-the-usual-shape-0123456789";
+
+  /** A config whose clock swaps the token the first time anything but the request timeout sleeps. */
+  function rotatingConfig(): ResolvedConfig {
+    const base = fakeClock();
+    let rotated = false;
+    const clock: Clock = {
+      now: () => base.now(),
+      sleep: (ms, signal) => {
+        if (!rotated && ms !== TEST_TIMEOUT_SECONDS * 1000) {
+          rotated = true;
+          cfg.setToken(ROTATED);
+        }
+        return base.sleep(ms, signal);
+      },
+    };
+    const cfg: ResolvedConfig = config(clock);
+    return cfg;
+  }
+
+  it("is the one in force at the retry, not the one the request was built with", async () => {
+    const f = stubFetch([
+      { status: 503, text: "unavailable" },
+      { status: 200, body: {} },
+    ]);
+    await call("safe", { cfg: rotatingConfig(), headers: { authorization: `Bearer ${TOKEN}` } });
+    expect(f.requests.map((r) => r.headers.get("authorization"))).toEqual([
+      `Bearer ${TOKEN}`,
+      `Bearer ${ROTATED}`,
+    ]);
+  });
+
+  it("is the one in force when a paced create finally goes out", async () => {
+    const f = stubFetch([{ status: 200, body: {} }]);
+    const cfg = rotatingConfig();
+    for (let i = 0; i < 4; i += 1) await cfg.createPacer.acquire();
+    await call("upload-create", {
+      cfg,
+      method: "POST",
+      path: "/v1/uploads",
+      body: JSON.stringify({ idempotency_key: "0123456789abcdef0123" }),
+      headers: { authorization: `Bearer ${TOKEN}` },
+    });
+    expect(f.requests[0]?.headers.get("authorization")).toBe(`Bearer ${ROTATED}`);
+  });
+
+  it("is never added to a request that carried none", async () => {
+    const f = stubFetch([
+      { status: 503, text: "unavailable" },
+      { status: 200, body: {} },
+    ]);
+    await call("safe", { cfg: rotatingConfig() });
+    expect(f.requests.map((r) => r.headers.get("authorization"))).toEqual([null, null]);
   });
 });
 

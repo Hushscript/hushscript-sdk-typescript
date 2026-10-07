@@ -207,6 +207,18 @@ describe("errorFromResponse", () => {
     expect(error.status).toBe(status);
   });
 
+  it.each([
+    ["GET /v1/jobs/{id}", true],
+    ["POST /v1/uploads/{job}/complete", true],
+    ["POST /v1/uploads/{job}/heartbeat", true],
+    ["POST /v1/agent/accounts/{signup_id}/claim", false],
+    ["POST /v1/billing/purchase", false],
+    ["POST /v1/org/transcripts/{id}/hold", false],
+  ])("attaches the job hint of wrong_state on %s: %s", (operation, attached) => {
+    const error = errorFromResponse(res(409), { error: "wrong_state", code: 4001 }, operation);
+    expect(error.hint).toBe(attached ? HINTS["wrong_state"] : null);
+  });
+
   it("lets a rate-limit slug win over an odd status", () => {
     expect(
       errorFromResponse(res(503), { error: "rate_limited", code: 5000 }, "GET /v1/jobs"),

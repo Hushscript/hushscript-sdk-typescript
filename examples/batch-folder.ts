@@ -1,6 +1,6 @@
 import { mkdir, readdir, writeFile } from "node:fs/promises";
 import { basename, extname, join } from "node:path";
-import { Hushscript, HushscriptError } from "../src/index.ts";
+import { Hushscript, HushscriptError } from "@hushscript/sdk";
 
 const AUDIO = new Set([".mp3", ".m4a", ".mp4", ".mov", ".wav", ".flac", ".ogg", ".opus"]);
 const folder = process.argv[2] ?? "recordings";

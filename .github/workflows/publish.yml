@@ -8,7 +8,7 @@ permissions: {}
 
 concurrency:
   group: publish-${{ github.event.release.tag_name }}
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   # Builds and packs with read-only permissions and no OIDC token: nothing that runs the project's
@@ -63,7 +63,10 @@ jobs:
       - name: Pack the tarball, write the SBOM and the tarball's digest
         id: pack
         run: |
-          tarball="$(npm pack --ignore-scripts --json | jq -r '.[0].filename')"
+          npm pack --ignore-scripts --json > pack.json
+          tarball="$(jq -r '.[0].filename' pack.json)"
+          node scripts/check-publish-files.mjs pack.json
+          node_modules/.bin/publint "$tarball"
           npm sbom --sbom-format cyclonedx --omit dev > sbom.cdx.json
           echo "tarball=$tarball" >> "$GITHUB_OUTPUT"
           echo "sha256=$(sha256sum "$tarball" | cut -d' ' -f1)" >> "$GITHUB_OUTPUT"

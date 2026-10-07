@@ -51,7 +51,7 @@ export interface WaitSettings {
   resumeToken: string | null;
 }
 
-/** Polls the job at 5 s, times 1.5 up to 15 s, until done or failed (spec 8.6); a timeout is `WaitTimeoutError`. */
+/** Polls the job at 5 s, times 1.5 up to 15 s, until done or failed; a timeout is `WaitTimeoutError`. */
 export async function waitForJob(settings: WaitSettings): Promise<RawJob> {
   const { api, clock, jobId, signal } = settings;
   const startedAt = clock.now();

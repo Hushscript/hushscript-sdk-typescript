@@ -15,7 +15,7 @@ function isLayer3Sync(head: Uint8Array): boolean {
 }
 
 /**
- * The container by magic bytes (spec 8.1), never by file name. Looks only at the first bytes and
+ * The container by magic bytes, never by file name. Looks only at the first bytes and
  * never throws; `null` means the file is not one of the accepted formats.
  */
 export function sniff(head: Uint8Array): MediaKind | null {

@@ -25,7 +25,7 @@ export interface TranscribeOptions {
   autoInsights?: boolean | undefined;
   /** At most 64 characters (org accounts). */
   matterCode?: string | undefined;
-  /** Overrides the probe (spec 8.2). */
+  /** Overrides the probe. */
   durationSeconds?: number | undefined;
   /** Bytes; required with a stream input. */
   size?: number | undefined;

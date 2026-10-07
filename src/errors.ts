@@ -7,7 +7,7 @@ import { parseRetryAfter } from "./http/retry.ts";
 import { redact, redactCause, redactValue } from "./redact.ts";
 
 export interface ErrorInit {
-  /** Slug: the API's own for API errors, the SDK's for SDK-side ones (spec 9.2). */
+  /** Slug: the API's own for API errors, the SDK's for SDK-side ones. */
   code: string;
   message: string;
   numericCode?: number | null;
@@ -26,7 +26,7 @@ type WithDefaultCode = Omit<ErrorInit, "code"> & { code?: string };
 const PLACEHOLDER = /\{(\w+)\}/g;
 
 /**
- * Fills a hint template (spec 9.3 rendering rules): split after each ". ", drop every sentence
+ * Fills a hint template: split after each ". ", drop every sentence
  * with a placeholder that has no value, join the rest with one space. Nothing left is null.
  */
 function fillHint(template: string, values: Record<string, unknown>): string | null {
@@ -87,7 +87,7 @@ export class HushscriptError extends Error {
   hint: string | null;
   details: Record<string, unknown>;
   retryAfter: number | null;
-  /** Set on an error `transcribe()` raised after its create was sent: passing it back replays the same job (spec 7.3). */
+  /** Set on an error `transcribe()` raised after its create was sent, or `buy()` after its purchase was sent: passing it back replays the same job or purchase instead of making a second one. */
   idempotencyKey: string | null = null;
   /** Set once the job id is known; `resume()` takes it. */
   resumeToken: string | null = null;
@@ -108,7 +108,7 @@ export class HushscriptError extends Error {
 }
 
 const MISSING_TOKEN_HINT =
-  "Set HUSHSCRIPT_TOKEN or pass a token. Create one in the Hushscript app: Account → Connected apps (app.hushscript.com/account/mcp).";
+  "Set HUSHSCRIPT_TOKEN or pass a token. Create one in the Hushscript app: Account → MCP (app.hushscript.com/account/mcp).";
 
 export class ConfigurationError extends HushscriptError {
   constructor(init: WithDefaultCode) {
@@ -196,7 +196,7 @@ const OUTCOME_HINTS: Readonly<Record<string, string>> = {
     "The old token may already be revoked. Try a request with it; if it fails, the new token was lost and the account needs support.",
 };
 
-/** The request was sent and no response arrived, for a call the server cannot repeat (spec 7.4). */
+/** The request was sent and no response arrived, for a call the server cannot repeat. */
 export class OutcomeUnknownError extends HushscriptError {
   constructor(init: WithDefaultCode) {
     super({ ...init, code: init.code ?? "outcome_unknown" });
@@ -220,6 +220,8 @@ const BALANCE_SLUGS: ReadonlySet<string> = new Set([
   "org_plan_frozen",
 ]);
 const UPLOAD_SLUGS: ReadonlySet<string> = new Set(["upload_incomplete", "size_exceeded"]);
+
+const JOB_OPERATION = /^\w+ \/v1\/(?:jobs|uploads)(?:\/|$)/;
 
 type ErrorClass = new (init: ErrorInit) => HushscriptError;
 
@@ -309,6 +311,10 @@ export function errorFromResponse(
     status: res.status,
     details,
     retryAfter,
+    // `wrong_state` names a job call, so only job and upload operations carry that hint.
+    ...(code === "wrong_state" && !JOB_OPERATION.test(resolveOperation(operation))
+      ? { hint: null }
+      : {}),
     hintValues: hintValuesFor(details, retryAfter, operation),
   });
 }

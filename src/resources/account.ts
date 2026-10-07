@@ -18,7 +18,7 @@ export interface UploadLimits {
   usedTodaySeconds: number;
 }
 
-/** The account: balance, limits, card and region (spec 6.3). */
+/** The account: balance, limits, card and region. */
 export interface Account {
   /** Net of holds and clawback debt; may be negative. */
   balanceSeconds: number;

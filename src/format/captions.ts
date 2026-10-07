@@ -55,7 +55,7 @@ export function utteranceCues(utterances: readonly Utterance[]): Cue[] {
 }
 
 /**
- * Re-slices utterances into readable cues (spec 6.2): lines of at most 42 characters, two lines to a
+ * Re-slices utterances into readable cues: lines of at most 42 characters, two lines to a
  * cue, the utterance span split by character share, and every cue, the last of an utterance
  * included, capped at 7000 ms (R38: the last cue ends at its utterance's end only when that is within the cap).
  */

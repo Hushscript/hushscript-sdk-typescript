@@ -1,23 +1,23 @@
 /**
  * `safe`: GETs and heartbeats. `idempotent`: part PUTs and complete, which can be repeated after
- * any 5xx. `upload-create`: like idempotent plus the pacing rules of spec 7.5.
+ * any 5xx. `upload-create`: like idempotent plus pacing.
  */
 export type RetryClass = "safe" | "idempotent" | "upload-create" | "purchase" | "never" | "mutate";
 
-/** A Retry-After above this is never waited for (spec 7.2). */
+/** A Retry-After above this is never waited for. */
 const MAX_RETRY_AFTER_SECONDS = 60;
 
 const BACKOFF_CAP_MS = 8000;
 const BACKOFF_BASE_MS = 500;
 const PURCHASE_MAX_RETRIES = 1;
-/** Spec 7.5: rate_limited without Retry-After on an upload create backs off 15, 30, 60 s, then raises. */
+/** `rate_limited` without Retry-After on an upload create backs off 15, 30, 60 s, then raises. */
 const CREATE_RATE_LIMIT_SCHEDULE_MS: readonly number[] = [15_000, 30_000, 60_000];
-/** Spec 7.5: too_many_active_jobs waits 30 s between tries, up to 10 tries. */
+/** `too_many_active_jobs` waits 30 s between tries, up to 10 tries. */
 const CREATE_ACTIVE_JOBS_WAIT_MS = 30_000;
 const CREATE_ACTIVE_JOBS_RETRIES = 9;
 
 /**
- * Spec 7.2, by `METHOD /path/template`. Everything that is neither listed here nor a GET or HEAD
+ * The retry class by `METHOD /path/template`. Everything that is neither listed here nor a GET or HEAD
  * mutates and is only retried when the request provably never left (`mutate`).
  */
 export const EXPLICIT_CLASSES: Readonly<Record<string, RetryClass>> = {
