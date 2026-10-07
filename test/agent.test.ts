@@ -128,7 +128,7 @@ describe("Hushscript.agent.signup", () => {
   it("names the current terms version when the server says the one passed is stale", async () => {
     stubFetch([
       {
-        status: 409,
+        status: 422,
         body: {
           error: "policy_version_stale",
           code: 1043,
@@ -139,8 +139,9 @@ describe("Hushscript.agent.signup", () => {
     const error: unknown = await Hushscript.agent
       .signup({ ...SIGNUP, acceptTerms: "2020-01-01", baseUrl: BASE })
       .catch((e: unknown) => e);
-    expect(error).toMatchObject({ code: "policy_version_stale" });
-    expect((error as ConflictError).hint).toContain("2026-10-01");
+    expect(error).toBeInstanceOf(ValidationError);
+    expect(error).toMatchObject({ code: "policy_version_stale", numericCode: 1043, status: 422 });
+    expect((error as ValidationError).hint).toBe("Accept the current terms version: 2026-10-01.");
   });
 
   it("reaches the API through HUSHSCRIPT_BASE_URL when no baseUrl is passed", () => {

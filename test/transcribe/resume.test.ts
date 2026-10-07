@@ -19,7 +19,8 @@ describe("resume token", () => {
   it("round-trips for arbitrary valid inputs", () => {
     fc.assert(
       fc.property(
-        fc.string({ minLength: 1 }),
+        // "." and ".." are not path segments, so a job id can never be either.
+        fc.string({ minLength: 1 }).filter((id) => id !== "." && id !== ".."),
         fc.string({ minLength: 1 }),
         fc.integer({ min: 1, max: Number.MAX_SAFE_INTEGER }),
         fc.integer({ min: 1, max: 36_000 }),

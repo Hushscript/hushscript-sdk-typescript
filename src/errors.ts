@@ -98,7 +98,7 @@ export class HushscriptError extends Error {
       init.cause === undefined ? undefined : { cause: redactCause(init.cause) },
     );
     this.name = new.target.name;
-    this.code = init.code;
+    this.code = redact(init.code);
     this.numericCode = init.numericCode ?? null;
     this.status = init.status ?? null;
     this.hint = resolveHint(init);

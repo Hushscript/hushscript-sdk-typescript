@@ -43,7 +43,9 @@ export function redactValue(value: unknown): unknown {
   if (typeof value === "string") return redact(value);
   if (Array.isArray(value)) return value.map(redactValue);
   if (typeof value === "object" && value !== null) {
-    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, redactValue(item)]));
+    return Object.fromEntries(
+      Object.entries(value).map(([key, item]) => [redact(key), redactValue(item)]),
+    );
   }
   return value;
 }

@@ -3,7 +3,6 @@ import {
   DailyLimitError,
   FileLimitError,
   HushscriptError,
-  InsufficientBalanceError,
   PreflightError,
   UnsupportedMediaError,
   hintValuesFrom,
@@ -77,13 +76,6 @@ function checkOptions(options: TranscribeOptions): void {
   if (options.idempotencyKey !== undefined) checkIdempotencyKey(options.idempotencyKey);
 }
 
-/** Duration times the multipliers a hold would carry; multichannel counts once, the channel count being unknown. */
-function billableEstimate(seconds: number, options: TranscribeOptions): number {
-  const medical = options.medical === true ? 1 : 0;
-  const translations = 0.25 * (options.translateTo?.length ?? 0);
-  return Math.ceil(seconds * (1 + medical + translations));
-}
-
 /** The first bytes of the input; a read that fails is an unreadable input, not a plain error. */
 async function readHead(source: Source, signal: AbortSignal): Promise<Uint8Array> {
   try {
@@ -131,15 +123,6 @@ export async function preflight(
   const declared = Math.ceil(seconds);
 
   const data = await readAccount(api, signal);
-  const needed = billableEstimate(declared, options);
-  if (data.balance_seconds < needed) {
-    throw new InsufficientBalanceError({
-      code: "insufficient_balance",
-      message: `The balance is ${String(data.balance_seconds)} s; this file needs about ${String(needed)} s.`,
-      details: { neededSeconds: needed, balanceSeconds: data.balance_seconds },
-      hintValues: hintValuesFrom({ neededSeconds: needed, balanceSeconds: data.balance_seconds }),
-    });
-  }
   const { used_today_seconds: used, max_daily_seconds: max } = data.limits;
   if (used + declared > max) {
     throw new DailyLimitError({

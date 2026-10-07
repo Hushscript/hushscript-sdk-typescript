@@ -45,9 +45,9 @@ export function createLogger(level: LogLevel, sink: (line: string) => void = std
   };
 }
 
-/** What a request URL looks like in a log line. Storage URLs carry a signature, so only the part number shows. */
+/** What a request URL looks like in a log line. Storage URLs carry a signature, so only the part number (the `partNumber` query value) shows. */
 export function describeTarget(url: URL, apiOrigin: string): string {
   if (url.origin === apiOrigin && !url.pathname.startsWith("/__r2/")) return url.pathname;
-  const last = url.pathname.split("/").at(-1) ?? "";
-  return /^\d+$/.test(last) ? `r2:part/${last}` : "r2:part";
+  const part = url.searchParams.get("partNumber") ?? "";
+  return /^\d+$/.test(part) ? `r2:part/${part}` : "r2:part";
 }

@@ -492,13 +492,24 @@ describe("logging (spec 10)", () => {
     stubFetch([{ status: 200, body: {} }]);
     const cfg = config(fakeClock(), { logLevel: "debug" }, lines);
     await hardenedFetch(cfg, "safe")(
-      "https://bucket.r2.example.com/uploads/job_1/parts/7?X-Amz-Signature=deadbeef",
+      "https://acct.r2.cloudflarestorage.com/bucket/uploads/job_1/audio.mp3?partNumber=7&uploadId=up_abc&X-Amz-Algorithm=AWS4-HMAC-SHA256&X-Amz-Signature=deadbeef",
       {
         method: "PUT",
         body: "x",
       },
     );
     expect(lines).toEqual(["hushscript PUT r2:part/7 status=200 attempt=1 duration_ms=0"]);
+  });
+
+  it("logs a storage URL with no part number as r2:part, whatever its last path segment", async () => {
+    const lines: string[] = [];
+    stubFetch([{ status: 200, body: {} }]);
+    const cfg = config(fakeClock(), { logLevel: "debug" }, lines);
+    await hardenedFetch(cfg, "safe")(
+      "https://acct.r2.cloudflarestorage.com/bucket/uploads/job_1/9?X-Amz-Signature=deadbeef",
+      { method: "PUT", body: "x" },
+    );
+    expect(lines).toEqual(["hushscript PUT r2:part status=200 attempt=1 duration_ms=0"]);
   });
 
   it("redacts a token that ends up in a log line", async () => {

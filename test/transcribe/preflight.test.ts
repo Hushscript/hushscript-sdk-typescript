@@ -4,7 +4,6 @@ import { Hushscript } from "../../src/client";
 import {
   DailyLimitError,
   FileLimitError,
-  InsufficientBalanceError,
   PreflightError,
   UnsupportedMediaError,
 } from "../../src/errors";
@@ -145,46 +144,12 @@ describe("preflight", () => {
     });
   });
 
-  it("refuses with InsufficientBalanceError when the estimate exceeds the balance, with the hint filled in", async () => {
+  it("goes on to create with a balance of 0: the server's 402 at create is the authority", async () => {
     const { hs, clock } = client();
-    const fake = fakeApi({ balance: 10 });
-    const error = await driven(hs.transcribe(await fixtureBytes("cbr-20s.mp3")), clock).catch(
-      (e: unknown) => e,
-    );
-    expect(error).toBeInstanceOf(InsufficientBalanceError);
-    const typed = error as InsufficientBalanceError;
-    expect(typed.status).toBeNull();
-    expect(typed.code).toBe("insufficient_balance");
-    expect(typed.hint).toContain("Not enough minutes: 1 needed, 0 available.");
+    const fake = fakeApi({ balance: 0 });
+    await driven(hs.transcribe(await fixtureBytes("cbr-20s.mp3")), clock);
     expect(fake.count("account")).toBe(1);
-    expect(fake.count("create")).toBe(0);
-  });
-
-  it("counts medical and translation targets in the estimate", async () => {
-    const { hs, clock } = client();
-    const fake = fakeApi({ balance: 70 });
-    const error = await driven(
-      hs.transcribe(await fixtureBytes("cbr-20s.mp3"), {
-        medical: true,
-        language: "en",
-        translateTo: ["de", "fr"],
-      }),
-      clock,
-    ).catch((e: unknown) => e);
-    // 21 s declared x (1 + 1 + 0.5) = 53 s: fits 70, so it goes on to create.
-    expect(error).not.toBeInstanceOf(InsufficientBalanceError);
     expect(fake.count("create")).toBe(1);
-    const tight = fakeApi({ balance: 52 });
-    const refused = await driven(
-      hs.transcribe(await fixtureBytes("cbr-20s.mp3"), {
-        medical: true,
-        language: "en",
-        translateTo: ["de", "fr"],
-      }),
-      clock,
-    ).catch((e: unknown) => e);
-    expect(refused).toBeInstanceOf(InsufficientBalanceError);
-    expect(tight.count("create")).toBe(0);
   });
 
   it("refuses with DailyLimitError past the daily limit", async () => {

@@ -225,8 +225,9 @@ once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(t
 ## What the SDK does for you
 
 - **Checks before it spends.** It sniffs the format from the file's bytes, probes the duration,
-  and refuses a file the server would refuse, or one your balance or daily limit cannot cover,
-  before any minutes are held.
+  and refuses a file the server would refuse, or one your daily limit cannot cover, before any
+  minutes are held. Whether your balance covers the file is the server's call: a 402 comes back
+  when the upload is created, before any part is sent.
 - **Keeps retries from charging twice.** Every upload and purchase carries an idempotency key, and
   retries reuse it. A `resumeToken` replays the same job instead of starting a new one, and the key
   on a failed purchase does the same for `buy()`.
