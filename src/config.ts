@@ -135,6 +135,9 @@ function checkBaseUrl(raw: string): string {
       message: "baseUrl must be https://, or http:// to localhost, 127.0.0.1 or [::1].",
     });
   }
+  if (url.pathname !== "/" || url.search !== "" || url.hash !== "" || /[?#]/.test(raw)) {
+    throw new ConfigurationError({ message: "baseUrl must not have a path, query or fragment." });
+  }
   return raw.replace(/\/+$/, "");
 }
 
