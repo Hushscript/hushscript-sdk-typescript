@@ -360,13 +360,15 @@ describe("direct part retries", () => {
     expect(fake.count("r2")).toBe(4);
   });
 
-  it("refuses a plan whose part count does not match the file", async () => {
+  it("refuses a plan whose part count does not match the file, and one with no part size", async () => {
     const { hs, clock } = setup({ plan: { total_parts: 99 } });
     const error = await failure(driven(hs.transcribe(mp3), clock));
     expect((error as UploadError).code).toBe("bad_part_plan");
     const second = setup({ plan: { part_size_bytes: 0 } });
     const again = await failure(driven(second.hs.transcribe(mp3), second.clock));
-    expect((again as UploadError).code).toBe("bad_part_plan");
+    // A part size of zero never fits the shape of a create answer, so it is the answer that is refused.
+    expect(again).toBeInstanceOf(ApiError);
+    expect((again as ApiError).code).toBe("bad_response");
   });
 });
 
