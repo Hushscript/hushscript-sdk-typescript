@@ -1,4 +1,5 @@
 import { ConfigurationError, ResumeMismatchError } from "../errors.ts";
+import { isPathSegment } from "../shape.ts";
 
 /** Opaque base64url JSON `{v:1, jobId, idempotencyKey, size, durationSeconds}`. */
 export type ResumeToken = string;
@@ -37,8 +38,7 @@ export function decodeResumeToken(token: string): ResumeState {
   const { jobId, idempotencyKey, size, durationSeconds } = body;
   if (
     body["v"] !== 1 ||
-    typeof jobId !== "string" ||
-    jobId === "" ||
+    !isPathSegment(jobId) ||
     typeof idempotencyKey !== "string" ||
     idempotencyKey === "" ||
     typeof size !== "number" ||

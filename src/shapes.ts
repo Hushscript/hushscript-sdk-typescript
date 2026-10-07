@@ -7,6 +7,7 @@ import {
   num,
   objectOf,
   optional,
+  pathId,
   positiveInt,
   recordOf,
   str,
@@ -58,7 +59,7 @@ const JOB = objectOf<Schemas["Job"]>({
   failure_kind: nullable(str),
   retry_of: nullable(str),
   created_at: timestamp,
-  transcript_id: nullable(str),
+  transcript_id: nullable(pathId),
   options: OPTIONS_SUMMARY,
 });
 
@@ -71,7 +72,7 @@ export const JOB_ONE: Shape = JOB;
 const PART_URL = objectOf<Schemas["PresignedPartUrl"]>({ n: positiveInt, url });
 
 export const UPLOAD_CREATE: Shape = objectOf<Schemas["UploadCreateResponse"]>({
-  job_id: str,
+  job_id: pathId,
   state: str,
   upload: nullable(
     objectOf<NonNullable<Schemas["UploadCreateResponse"]["upload"]>>({

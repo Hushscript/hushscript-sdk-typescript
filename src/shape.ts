@@ -29,6 +29,20 @@ export const num: Shape = (value) =>
 /** A count or a 1-based number: a whole number above zero. */
 export const positiveInt: Shape = (value) =>
   Number.isSafeInteger(value) && (value as number) > 0 ? null : problem("a positive whole number");
+/** Whether `value` can stand as one URL path segment: a non-empty string that is not "." or "..", with no lone surrogate. */
+export function isPathSegment(value: unknown): value is string {
+  // With the u flag a surrogate pair is one code point, so this only matches an unpaired one.
+  return (
+    typeof value === "string" &&
+    value !== "" &&
+    value !== "." &&
+    value !== ".." &&
+    !/[\uD800-\uDFFF]/u.test(value)
+  );
+}
+
+/** An id the SDK will put in a request path. */
+export const pathId: Shape = (value) => (isPathSegment(value) ? null : problem("a usable id"));
 export const bool: Shape = (value) => (typeof value === "boolean" ? null : problem("a boolean"));
 export const anything: Shape = () => null;
 

@@ -8,6 +8,7 @@ import { registerSecret } from "../redact.ts";
 import { describeProblem, timestamp } from "../shape.ts";
 import { AGENT_SIGNUP } from "../shapes.ts";
 import { badResponse, readBody, readObject } from "../transcribe/common.ts";
+import { checkPathId } from "../transcribe/preflight.ts";
 import type { Balance } from "./account.ts";
 
 export interface AgentSignupRequest {
@@ -160,6 +161,7 @@ export const agentStatic: AgentStatic = {
   },
 
   async claim(signupId, claimSecret, options = {}) {
+    checkPathId(signupId, "signupId");
     const api = tokenlessApi(options.baseUrl);
     const { status, body } = await readObject(
       api.POST("/v1/agent/accounts/{signup_id}/claim", {

@@ -10,6 +10,7 @@ import {
 } from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { readAccount } from "../resources/account.ts";
+import { isPathSegment } from "../shape.ts";
 import { probeDuration } from "./probe.ts";
 import { sniff } from "./sniff.ts";
 import type { Source } from "./source.ts";
@@ -26,6 +27,16 @@ const SNIFF_BYTES = 64;
 
 export function invalidOption(message: string): PreflightError {
   return new PreflightError({ code: "invalid_option", message });
+}
+
+/** An id a caller passed that becomes a request path segment; one that cannot be is refused before any request. */
+export function checkPathId(id: unknown, name: string): string {
+  if (!isPathSegment(id)) {
+    throw invalidOption(
+      `${name} must be a non-empty string that is not "." or "..", with no lone surrogate.`,
+    );
+  }
+  return id;
 }
 
 /** A supplied duration that is not a finite positive number is an invalid option, not an out-of-range file. */
