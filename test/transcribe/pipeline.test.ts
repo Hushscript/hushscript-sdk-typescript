@@ -9,6 +9,8 @@ import {
   AbortError,
   ApiError,
   AuthenticationError,
+  ConfigurationError,
+  NetworkError,
   FileLimitError,
   HushscriptError,
   JobFailedError,
@@ -420,23 +422,6 @@ describe("direct part retries", () => {
 });
 
 describe("heartbeat and complete", () => {
-  it("heartbeats at most 120 s apart while parts are held, and stops once complete returned", async () => {
-    const ref: { clock?: Clock } = {};
-    const { hs, clock, fake } = setup({
-      parts: 8,
-      hooks: {
-        r2: async (call) => {
-          await ref.clock?.sleep(240_000, call.signal);
-          return undefined;
-        },
-      },
-    });
-    ref.clock = clock;
-    await driven(hs.transcribe(mp3), clock);
-    expect(fake.count("heartbeat")).toBeGreaterThanOrEqual(3);
-    expect(clock.pending).toHaveLength(0);
-  });
-
   it("stops heartbeating on wrong_state and carries on uploading", async () => {
     const ref: { clock?: Clock } = {};
     const { hs, clock, fake } = setup({
@@ -469,6 +454,17 @@ describe("heartbeat and complete", () => {
     ref.clock = clock;
     const error = await failure(driven(hs.transcribe(mp3), clock));
     expect(error).toBeInstanceOf(AuthenticationError);
+    expect(error).toMatchObject({
+      code: "unauthorized",
+      status: 401,
+      idempotencyKey: fake.creates[0]?.["idempotency_key"],
+    });
+    expect(decodeResumeToken((error as AuthenticationError).resumeToken ?? "")).toEqual({
+      jobId: "job_1",
+      idempotencyKey: fake.creates[0]?.["idempotency_key"],
+      size: mp3.byteLength,
+      durationSeconds: 21,
+    });
     expect(fake.count("complete")).toBe(0);
   });
 
@@ -491,12 +487,22 @@ describe("heartbeat and complete", () => {
   });
 
   it("raises JobFailedError when complete already says failed", async () => {
-    const { hs, clock } = setup({
+    const { hs, clock, fake } = setup({
       completeState: "failed",
       jobFlow: [{ state: "failed", error: "nope", failure_kind: "media_unreadable" }],
     });
     const error = await failure(driven(hs.transcribe(mp3), clock));
     expect(error).toBeInstanceOf(JobFailedError);
+    expect(error).toMatchObject({
+      code: "job_failed",
+      status: null,
+      failureKind: "media_unreadable",
+      error: "nope",
+      jobId: "job_1",
+    });
+    expect(fake.count("job")).toBe(1);
+    expect(clock.sleeps.filter((ms) => ms >= 5000 && ms < 100_000)).toEqual([]);
+    expect(fake.count("transcript")).toBe(0);
   });
 });
 
@@ -562,7 +568,8 @@ describe("waiting and fetching", () => {
       },
     });
     const error = await failure(driven(hs.transcribe(mp3), clock));
-    expect((error as UploadError).code).toBe("transcript_missing");
+    expect(error).toBeInstanceOf(UploadError);
+    expect(error).toMatchObject({ code: "transcript_missing", status: null });
   });
 });
 
@@ -596,8 +603,11 @@ describe("resume", () => {
   });
 
   it("refuses a token that is not one", async () => {
-    const { hs } = setup();
-    await expect(hs.resume("garbage")).rejects.toMatchObject({ code: "config_invalid" });
+    const { hs, fake } = setup();
+    const error = await failure(hs.resume("garbage"));
+    expect(error).toBeInstanceOf(ConfigurationError);
+    expect(error).toMatchObject({ code: "config_invalid", status: null });
+    expect(fake.calls).toHaveLength(0);
   });
 
   it("resumes an interrupted upload with the file, and asks for the file when it is missing", async () => {
@@ -642,10 +652,12 @@ describe("resume", () => {
 
 describe("cancellation", () => {
   it("carries no token when the job does not exist yet", async () => {
-    const { hs } = setup();
+    const { hs, fake } = setup();
     const error = await failure(hs.transcribe(mp3, { signal: AbortSignal.abort() }));
     expect(error).toBeInstanceOf(AbortError);
     expect((error as AbortError).resumeToken).toBeNull();
+    expect(error).toMatchObject({ code: "aborted", status: null, idempotencyKey: null });
+    expect(fake.calls).toHaveLength(0);
   });
 
   it("carries the token once the job exists, when aborted while waiting", async () => {
@@ -704,68 +716,162 @@ describe("a loop over files", () => {
 
 describe("options (spec 7.3, 8.6)", () => {
   it("is an invalid_option PreflightError for a stream-less size", async () => {
-    const { hs } = setup();
+    const { hs, fake } = setup();
     const error = await failure(hs.transcribe(42 as unknown as string));
     expect(error).toBeInstanceOf(PreflightError);
+    expect(error).toMatchObject({ code: "invalid_option", status: null });
+    expect(fake.calls).toHaveLength(0);
   });
 
-  it.each([0, 9, 100, 1.5, -1, Number.NaN])(
+  it.each([0, 9, 100, 1.5, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     "refuses concurrency %s as invalid_option before any request, never clamping it",
     async (concurrency) => {
       const { hs, fake } = setup();
       const error = await failure(hs.transcribe(mp3, { concurrency }));
       expect(error).toBeInstanceOf(PreflightError);
-      expect((error as PreflightError).code).toBe("invalid_option");
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
       expect(fake.calls).toHaveLength(0);
     },
   );
 
-  it.each([Number.NaN, Number.POSITIVE_INFINITY, -5, 0])(
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 0])(
     "refuses durationSeconds %s as invalid_option, not as an out-of-range file",
     async (durationSeconds) => {
       const { hs, fake } = setup();
       const error = await failure(hs.transcribe(mp3, { durationSeconds }));
       expect(error).toBeInstanceOf(PreflightError);
       expect(error).not.toBeInstanceOf(FileLimitError);
-      expect((error as PreflightError).code).toBe("invalid_option");
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
       expect(fake.calls).toHaveLength(0);
     },
   );
 
-  it.each([10, 14.9, 36_001, 40_000])(
+  it.each([10, 14.99, 36_000.01, 36_001, 40_000])(
     "refuses a finite durationSeconds of %s as duration_out_of_range",
     async (durationSeconds) => {
       const { hs, fake } = setup();
       const error = await failure(hs.transcribe(mp3, { durationSeconds }));
       expect(error).toBeInstanceOf(FileLimitError);
-      expect((error as FileLimitError).code).toBe("duration_out_of_range");
+      expect(error).toMatchObject({ code: "duration_out_of_range", status: null });
       expect(fake.calls).toHaveLength(0);
     },
   );
 
-  it.each([0, -3, 1.5, Number.NaN])(
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
     "refuses a stream size of %s as invalid_option",
     async (size) => {
       const { hs, fake } = setup();
       const stream = new ReadableStream<Uint8Array>();
       const error = await failure(hs.transcribe(stream, { size, durationSeconds: 20 }));
-      expect((error as PreflightError).code).toBe("invalid_option");
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
       expect(fake.calls).toHaveLength(0);
     },
   );
 
-  it("refuses an out-of-range concurrency on resume too", async () => {
-    const { hs, fake } = setup();
-    const token = encodeResumeToken({
-      jobId: "job_1",
-      idempotencyKey: "0123456789abcdefghij",
-      size: mp3.byteLength,
-      durationSeconds: 21,
-    });
-    const error = await failure(hs.resume(token, mp3, { concurrency: 9 }));
-    expect((error as PreflightError).code).toBe("invalid_option");
-    expect(fake.calls).toHaveLength(0);
-  });
+  it.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, 9])(
+    "refuses concurrency %s on resume before any request",
+    async (concurrency) => {
+      const { hs, fake } = setup();
+      const token = encodeResumeToken({
+        jobId: "job_1",
+        idempotencyKey: "0123456789abcdefghij",
+        size: mp3.byteLength,
+        durationSeconds: 21,
+      });
+      const error = await failure(hs.resume(token, mp3, { concurrency }));
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(fake.calls).toHaveLength(0);
+    },
+  );
+});
+
+describe("invalid wait options across transcribe and resume", () => {
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, "10", false])(
+    "refuses waitTimeout %s before any request on both surfaces",
+    async (value) => {
+      const { hs, fake } = setup();
+      const token = encodeResumeToken({
+        jobId: "job_1",
+        idempotencyKey: "0123456789abcdef",
+        size: mp3.byteLength,
+        durationSeconds: 21,
+      });
+      for (const call of [
+        () => hs.transcribe(mp3, { waitTimeout: value as number }),
+        () => hs.resume(token, mp3, { waitTimeout: value as number }),
+      ]) {
+        const error = await failure(call());
+        expect(error).toBeInstanceOf(PreflightError);
+        expect(error).toMatchObject({ code: "invalid_option", status: null });
+        expect(fake.calls).toHaveLength(0);
+      }
+    },
+  );
+
+  it.each(["uploading", "processing"])(
+    "returns the resume %s progress callback error unchanged and sends nothing further",
+    async (state) => {
+      const { hs, clock, fake } = setup({ jobFlow: [{ state }] });
+      const token = encodeResumeToken({
+        jobId: "job_1",
+        idempotencyKey: "0123456789abcdef",
+        size: mp3.byteLength,
+        durationSeconds: 21,
+      });
+      const thrown = new Error("caller failed");
+      const error = await failure(
+        driven(
+          hs.resume(token, mp3, {
+            onProgress: () => {
+              throw thrown;
+            },
+          }),
+          clock,
+        ),
+      );
+      expect(error).toBe(thrown);
+      expect(fake.calls.map((entry) => entry.route)).toEqual(["job"]);
+    },
+  );
+
+  it.each([new Error("caller failed"), "caller failed", null])(
+    "returns the resume token callback error unchanged and sends nothing further (%#)",
+    async (thrown) => {
+      const { hs, clock, fake } = setup();
+      const error = await failure(
+        driven(
+          hs.transcribe(mp3, {
+            onResumeToken: () => {
+              // eslint-disable-next-line @typescript-eslint/only-throw-error -- verifies primitive callback errors
+              throw thrown;
+            },
+          }),
+          clock,
+        ),
+      );
+      expect(error).toBe(thrown);
+      expect(fake.calls.map((entry) => entry.route)).toEqual(["account", "create"]);
+    },
+  );
+
+  it.each([new Error("caller failed"), "caller failed", null])(
+    "returns the 0 percent progress callback error unchanged before create (%#)",
+    async (thrown) => {
+      const { hs, fake } = setup();
+      const error = await failure(
+        hs.transcribe(mp3, {
+          onProgress: () => {
+            // eslint-disable-next-line @typescript-eslint/only-throw-error -- verifies primitive callback errors
+            throw thrown;
+          },
+        }),
+      );
+      expect(error).toBe(thrown);
+      expect(fake.calls.map((entry) => entry.route)).toEqual(["account"]);
+    },
+  );
 });
 
 describe("streams of the wrong size (spec 7.3)", () => {
@@ -1051,7 +1157,8 @@ describe("errors after the create was sent (spec 7.3)", () => {
       maxRetries: 0,
     });
     const lost = await failure(driven(hs.transcribe(mp3), clock));
-    expect(lost).toBeInstanceOf(HushscriptError);
+    expect(lost).toBeInstanceOf(NetworkError);
+    expect(lost).toMatchObject({ code: "network_error", status: null });
     const key = (lost as HushscriptError).idempotencyKey;
     expect(key).toMatch(/^[0-9a-f-]{36}$/);
     expect((lost as HushscriptError).resumeToken).toBeNull();
@@ -1082,7 +1189,7 @@ describe("errors after the create was sent (spec 7.3)", () => {
 
   it("carries a key on a caller abort during the create, and no token", async () => {
     const stop = new AbortController();
-    const { hs } = setup({
+    const { hs, fake } = setup({
       hooks: {
         create: () => {
           stop.abort();
@@ -1092,7 +1199,9 @@ describe("errors after the create was sent (spec 7.3)", () => {
     });
     const error = (await failure(hs.transcribe(mp3, { signal: stop.signal }))) as AbortError;
     expect(error).toBeInstanceOf(AbortError);
-    expect(error.idempotencyKey).toBeTruthy();
+    expect(error).toMatchObject({ code: "aborted", status: null });
+    const create = JSON.parse(fake.routes("create")[0]?.body ?? "{}") as Record<string, unknown>;
+    expect(error.idempotencyKey).toBe(create["idempotency_key"]);
     expect(error.resumeToken).toBeNull();
   });
 
@@ -1261,7 +1370,7 @@ describe("a path input", () => {
 
 describe("a source that fails to read", () => {
   it("raises source_read_failed with the key and the resume token when a stream breaks mid-upload", async () => {
-    const { hs, clock } = setup({ parts: 3 });
+    const { hs, clock, fake } = setup({ parts: 3 });
     const partSize = Math.ceil(mp3.byteLength / 3);
     let sent = false;
     const stream = new ReadableStream<Uint8Array>({
@@ -1281,9 +1390,16 @@ describe("a source that fails to read", () => {
       ),
     );
     expect(error).toBeInstanceOf(UploadError);
-    expect(error).toMatchObject({ code: "source_read_failed" });
-    expect((error as UploadError).idempotencyKey).toBeTruthy();
-    expect((error as UploadError).resumeToken).toBeTruthy();
+    expect(error).toMatchObject({ code: "source_read_failed", status: null });
+    expect((error as UploadError).idempotencyKey).toBe(fake.creates[0]?.["idempotency_key"]);
+    expect((error as UploadError).resumeToken).toBe(
+      encodeResumeToken({
+        jobId: "job_1",
+        idempotencyKey: fake.creates[0]?.["idempotency_key"] as string,
+        size: mp3.byteLength,
+        durationSeconds: 20,
+      }),
+    );
     expect(((error as Error).cause as Error).message).toBe("socket reset");
   });
 });

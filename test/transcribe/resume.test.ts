@@ -40,6 +40,10 @@ describe("resume token", () => {
 
   it.each([
     "",
+    null,
+    42,
+    false,
+    {},
     "not base64 json!",
     Buffer.from("[]").toString("base64url"),
     Buffer.from("null").toString("base64url"),
@@ -49,7 +53,14 @@ describe("resume token", () => {
     Buffer.from(JSON.stringify({ v: 1, ...state, durationSeconds: "21" })).toString("base64url"),
     Buffer.from(JSON.stringify({ v: 1, jobId: "j", size: 1 })).toString("base64url"),
   ])("rejects a malformed token (%#)", (token) => {
-    expect(() => decodeResumeToken(token)).toThrow(ConfigurationError);
+    let error: unknown;
+    try {
+      decodeResumeToken(token as string);
+    } catch (caught) {
+      error = caught;
+    }
+    expect(error).toBeInstanceOf(ConfigurationError);
+    expect(error).toMatchObject({ code: "config_invalid", status: null });
   });
 
   it("refuses a file of a different size, and accepts the same size", () => {
@@ -65,13 +76,14 @@ describe("resume token", () => {
       return null;
     })();
     expect(error).toBeInstanceOf(ResumeMismatchError);
-    expect((error as ResumeMismatchError).code).toBe("resume_file_mismatch");
+    expect(error).toMatchObject({ code: "resume_file_mismatch", status: null });
     expect((error as ResumeMismatchError).hint).toContain("not the file the upload started with");
   });
 
   it("has an error for a missing file", () => {
     const error = fileRequired();
-    expect(error.code).toBe("resume_file_required");
+    expect(error).toBeInstanceOf(ResumeMismatchError);
+    expect(error).toMatchObject({ code: "resume_file_required", status: null });
     expect(error.hint).toContain("Pass the original file");
   });
 });

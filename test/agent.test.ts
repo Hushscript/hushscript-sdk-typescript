@@ -4,6 +4,8 @@ import { Hushscript } from "../src/client";
 import type { Clock } from "../src/clock";
 import { resolveTokenlessConfig } from "../src/config";
 import {
+  ApiError,
+  PreflightError,
   ConfigurationError,
   ConflictError,
   OutcomeUnknownError,
@@ -125,6 +127,19 @@ describe("Hushscript.agent.signup", () => {
     expect(stub.calls).toBe(0);
   });
 
+  it.each([[null], [42], [{}], [[]]])(
+    "refuses nonstring acceptTerms %j before any request",
+    async (terms) => {
+      const stub = stubFetch([]);
+      const error: unknown = await Hushscript.agent
+        .signup({ ...SIGNUP, acceptTerms: terms as unknown as string, baseUrl: BASE })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ValidationError);
+      expect(error).toMatchObject({ code: "accept_terms_required", status: null });
+      expect(stub.requests).toHaveLength(0);
+    },
+  );
+
   it("names the current terms version when the server says the one passed is stale", async () => {
     stubFetch([
       {
@@ -163,6 +178,7 @@ describe("Hushscript.agent.signup", () => {
       .signup({ ...SIGNUP, baseUrl: BASE })
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
     expect((error as OutcomeUnknownError).hint).toBeNull();
     expect(stub.calls).toBe(1);
   });
@@ -203,21 +219,40 @@ describe("Hushscript.agent.claim", () => {
     expect(redact(`leaked ${CLAIMED_TOKEN}`)).toBe(`leaked ${REDACTED}`);
   });
 
+  it.each(["", ".", "..", null, 42, {}])(
+    "refuses invalid signup path id %j before any request",
+    async (id) => {
+      const stub = stubFetch([]);
+      const error: unknown = await Hushscript.agent
+        .claim(id as unknown as string, "cs_secret", { baseUrl: BASE })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(stub.requests).toHaveLength(0);
+    },
+  );
+
   it("never retries: a lost response is an unknown outcome with the claim hint", async () => {
     const stub = stubFetch([{ error: networkError("ECONNRESET") }]);
     const error: unknown = await Hushscript.agent
       .claim("sg_1", "cs_secret", { baseUrl: BASE })
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OutcomeUnknownError);
-    expect((error as OutcomeUnknownError).hint).toContain("The claim may have succeeded.");
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+    expect((error as OutcomeUnknownError).hint).toBe(
+      "The claim may have succeeded. Retrying will fail with agent_claim_invalid. If you have no token, contact support with the signup id.",
+    );
     expect(stub.calls).toBe(1);
   });
 
   it("never retries a 5xx either", async () => {
     const stub = stubFetch([{ status: 503, text: "unavailable" }]);
-    await expect(
-      Hushscript.agent.claim("sg_1", "cs_secret", { baseUrl: BASE }),
-    ).rejects.toBeInstanceOf(Error);
+    const error: unknown = await Hushscript.agent
+      .claim("sg_1", "cs_secret", { baseUrl: BASE })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({ code: "http_503", status: 503 });
+    expect((error as ApiError).constructor).toBe(ApiError);
     expect(stub.calls).toBe(1);
   });
 });
@@ -238,7 +273,10 @@ describe("an unusable claim answer", () => {
         .claim("sg_1", "cs_secret", { baseUrl: BASE })
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(OutcomeUnknownError);
-      expect((error as OutcomeUnknownError).hint).toContain("The claim may have succeeded.");
+      expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+      expect((error as OutcomeUnknownError).hint).toBe(
+        "The claim may have succeeded. Retrying will fail with agent_claim_invalid. If you have no token, contact support with the signup id.",
+      );
       const cause = (error as OutcomeUnknownError).cause;
       expect(cause).toMatchObject({ name: "ApiError", code: "bad_response" });
       expect(stub.calls).toBe(1);
@@ -324,7 +362,10 @@ describe("hs.agent.rotateToken", () => {
     const hs = client();
     const error: unknown = await hs.agent.rotateToken().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OutcomeUnknownError);
-    expect((error as OutcomeUnknownError).hint).toContain("The old token may already be revoked.");
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+    expect((error as OutcomeUnknownError).hint).toBe(
+      "The old token may already be revoked. Try a request with it; if it fails, the new token was lost and the account needs support.",
+    );
     await hs.balance();
     expect(stub.calls).toBe(2);
     expect(stub.requests[1]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
@@ -337,6 +378,7 @@ describe("hs.agent.rotateToken", () => {
       .agent.rotateToken()
       .catch((e: unknown) => e)) as OutcomeUnknownError;
     expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
     expect(error.receivedToken).toBe(odd);
     expect(error.cause).toMatchObject({ code: "bad_response" });
     expect(Object.keys(error)).not.toContain("receivedToken");
@@ -377,6 +419,7 @@ describe("hs.agent.rotateToken", () => {
     const hs = client();
     const error = (await hs.agent.rotateToken().catch((e: unknown) => e)) as OutcomeUnknownError;
     expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
     expect(error.cause).toMatchObject({ code: "bad_response" });
     expect(error.receivedToken).toBe(NEW_TOKEN);
     await hs.balance();
@@ -389,6 +432,7 @@ describe("hs.agent.rotateToken", () => {
       .agent.rotateToken()
       .catch((e: unknown) => e)) as OutcomeUnknownError;
     expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
     expect(error.receivedToken).toBeNull();
   });
 
@@ -398,6 +442,7 @@ describe("hs.agent.rotateToken", () => {
       .claim("sg_1", "cs_secret", { baseUrl: BASE })
       .catch((e: unknown) => e)) as OutcomeUnknownError;
     expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
     expect(error.receivedToken).toBeNull();
   });
 
@@ -410,7 +455,10 @@ describe("hs.agent.rotateToken", () => {
     const hs = client();
     const error: unknown = await hs.agent.rotateToken().catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OutcomeUnknownError);
-    expect((error as OutcomeUnknownError).hint).toContain("The old token may already be revoked.");
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+    expect((error as OutcomeUnknownError).hint).toBe(
+      "The old token may already be revoked. Try a request with it; if it fails, the new token was lost and the account needs support.",
+    );
     expect((error as OutcomeUnknownError).cause).toMatchObject({ code: "bad_response" });
     await hs.balance();
     expect(stub.requests[1]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
@@ -547,5 +595,27 @@ describe("results that hand the caller a secret", () => {
       expect(Object.prototype.propertyIsEnumerable.call(result, inspect.custom)).toBe(false);
       expect(Object.keys({ ...result })).toEqual(Object.keys(result));
     });
+  });
+});
+
+describe("static agent baseUrl validation", () => {
+  it.each([
+    "",
+    "http://api.hushscript.com",
+    "https://api.hushscript.com/v1",
+    "not a URL",
+    "https://api.hushscript.com?secret=x",
+    "https://api.hushscript.com#fragment",
+  ])("refuses baseUrl %j before signup or claim sends a request", async (baseUrl) => {
+    const stub = stubFetch([]);
+    for (const attempt of [
+      () => Hushscript.agent.signup({ ...SIGNUP, baseUrl }),
+      () => Hushscript.agent.claim("sg_1", "cs_secret", { baseUrl }),
+    ]) {
+      const error: unknown = await attempt().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(ConfigurationError);
+      expect(error).toMatchObject({ code: "config_invalid", status: null, hint: null });
+      expect(stub.requests).toHaveLength(0);
+    }
   });
 });

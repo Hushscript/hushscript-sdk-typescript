@@ -25,7 +25,12 @@ describe("sniff", () => {
       ogg: "ogg",
       opus: "ogg",
     };
-    for (const name of Object.keys(await durations())) {
+    const names = Object.keys(await durations());
+    expect(names).toHaveLength(20);
+    expect(new Set(names.map((name) => name.split(".").at(-1)))).toEqual(
+      new Set(Object.keys(expected)),
+    );
+    for (const name of names) {
       const kind = sniff((await fixtureBytes(name)).subarray(0, 64));
       if (name === "webm-renamed.mp3") expect(kind, name).toBeNull();
       else expect(kind, name).toBe(expected[name.split(".").at(-1) ?? ""]);

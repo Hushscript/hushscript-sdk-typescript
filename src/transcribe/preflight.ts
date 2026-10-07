@@ -47,7 +47,7 @@ export function checkDurationOption(seconds: number | undefined): void {
 
 /** Uploads accept 16 to 128 bytes of printable ASCII, without the space (0x21 to 0x7E). */
 function checkIdempotencyKey(key: string): void {
-  let printable = key.length >= 16 && key.length <= 128;
+  let printable = typeof key === "string" && key.length >= 16 && key.length <= 128;
   for (let i = 0; printable && i < key.length; i += 1) {
     const code = key.charCodeAt(i);
     printable = code >= 0x21 && code <= 0x7e;

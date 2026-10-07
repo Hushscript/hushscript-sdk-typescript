@@ -34,6 +34,7 @@ describe("preflight", () => {
     const error = await refusal(hs.transcribe(await fixturePath("short-10s.mp3")));
     expect(error).toBeInstanceOf(FileLimitError);
     expect((error as FileLimitError).code).toBe("duration_out_of_range");
+    expect((error as FileLimitError).status).toBeNull();
     expect((error as FileLimitError).hint).toBe(
       "Files must be between 15 seconds and 10 hours long.",
     );
@@ -45,6 +46,7 @@ describe("preflight", () => {
     const f = stubFetch([{ status: 500 }]);
     const error = await refusal(hs.transcribe(await fixturePath("webm-renamed.mp3")));
     expect(error).toBeInstanceOf(UnsupportedMediaError);
+    expect(error).toMatchObject({ code: "unsupported_media", status: null });
     expect((error as UnsupportedMediaError).hint).toContain(
       "ffmpeg -i input -vn -c:a libopus output.opus",
     );
@@ -53,8 +55,11 @@ describe("preflight", () => {
 
   it("refuses an empty file", async () => {
     const { hs } = client();
-    stubFetch([{ status: 500 }]);
-    expect(await refusal(hs.transcribe(new Uint8Array()))).toBeInstanceOf(UnsupportedMediaError);
+    const f = stubFetch([{ status: 500 }]);
+    const error = await refusal(hs.transcribe(new Uint8Array()));
+    expect(error).toBeInstanceOf(UnsupportedMediaError);
+    expect(error).toMatchObject({ code: "unsupported_media", status: null });
+    expect(f.calls).toBe(0);
   });
 
   it("refuses a file over 5 GB by its declared size", async () => {
@@ -66,32 +71,34 @@ describe("preflight", () => {
     const error = await refusal(hs.transcribe(huge, { durationSeconds: 60 }));
     expect(error).toBeInstanceOf(FileLimitError);
     expect((error as FileLimitError).code).toBe("size_out_of_range");
+    expect((error as FileLimitError).status).toBeNull();
     expect(f.calls).toBe(0);
   });
 
-  it("refuses a duration outside 15 s to 10 hours, and a duration that is not a positive number", async () => {
-    const { hs } = client();
-    stubFetch([{ status: 500 }]);
-    const bytes = await fixtureBytes("cbr-20s.mp3");
-    expect(await refusal(hs.transcribe(bytes, { durationSeconds: 36_001 }))).toBeInstanceOf(
-      FileLimitError,
-    );
-    const notANumber = await refusal(hs.transcribe(bytes, { durationSeconds: Number.NaN }));
-    expect(notANumber).toBeInstanceOf(PreflightError);
-    expect(notANumber).not.toBeInstanceOf(FileLimitError);
-    expect((notANumber as PreflightError).code).toBe("invalid_option");
-    expect(await refusal(hs.transcribe(bytes, { durationSeconds: 14.5 }))).toBeInstanceOf(
-      FileLimitError,
-    );
-  });
+  it.each([14.5, 36_000.5, 36_001])(
+    "refuses duration %s outside the file limits",
+    async (durationSeconds) => {
+      const { hs } = client();
+      const f = stubFetch([{ status: 500 }]);
+      const error = await refusal(
+        hs.transcribe(await fixtureBytes("cbr-20s.mp3"), { durationSeconds }),
+      );
+      expect(error).toBeInstanceOf(FileLimitError);
+      expect(error).toMatchObject({ code: "duration_out_of_range", status: null });
+      expect(f.calls).toBe(0);
+    },
+  );
 
   it("refuses unreadable duration unless durationSeconds is given", async () => {
     const { hs, clock } = client();
-    fakeApi();
+    const fake = fakeApi();
     const noise = Uint8Array.from([0xff, 0xfb, 0x90, 0x00, ...new Uint8Array(3000)]);
     const error = await refusal(hs.transcribe(noise));
-    expect((error as PreflightError).code).toBe("duration_unreadable");
-    expect(clock.now()).toBe(0);
+    expect(error).toBeInstanceOf(UnsupportedMediaError);
+    expect(error).toMatchObject({ code: "duration_unreadable", status: null });
+    expect(fake.calls).toHaveLength(0);
+    await driven(hs.transcribe(noise, { durationSeconds: 20 }), clock);
+    expect(fake.creates[0]).toMatchObject({ duration_seconds: 20 });
   });
 
   it.each<[string, Record<string, unknown>]>([
@@ -100,7 +107,11 @@ describe("preflight", () => {
     ["more than 1000 keyterms", { keyterms: Array.from({ length: 1001 }, () => "term") }],
     ["a keyterm of 7 words", { keyterms: ["one two three four five six seven"] }],
     ["a matter code over 64 characters", { matterCode: "x".repeat(65) }],
-    ["a short idempotency key", { idempotencyKey: "short" }],
+    ["a short idempotency key", { idempotencyKey: "x".repeat(15) }],
+    ["a long idempotency key", { idempotencyKey: "x".repeat(129) }],
+    ["a null idempotency key", { idempotencyKey: null }],
+    ["a numeric idempotency key", { idempotencyKey: 42 }],
+    ["an object idempotency key", { idempotencyKey: {} }],
     ["an idempotency key with control characters", { idempotencyKey: "abcdefghijklmnop\n" }],
     ["an idempotency key with a space", { idempotencyKey: "abcdefghijklmnop qrstuv" }],
     ["concurrency 0", { concurrency: 0 }],
@@ -113,6 +124,7 @@ describe("preflight", () => {
     const error = await refusal(hs.transcribe(bytes, options));
     expect(error).toBeInstanceOf(PreflightError);
     expect((error as PreflightError).code).toBe("invalid_option");
+    expect((error as PreflightError).status).toBeNull();
     expect(f.calls).toBe(0);
   });
 
@@ -136,13 +148,69 @@ describe("preflight", () => {
 
   it("refuses a stream without durationSeconds or size", async () => {
     const { hs } = client();
-    stubFetch([{ status: 500 }]);
+    const f = stubFetch([{ status: 500 }]);
     const make = (): ReadableStream<Uint8Array> => new ReadableStream<Uint8Array>();
-    expect(await refusal(hs.transcribe(make()))).toMatchObject({ code: "invalid_option" });
-    expect(await refusal(hs.transcribe(make(), { size: 10 }))).toMatchObject({
-      code: "invalid_option",
-    });
+    for (const options of [{}, { size: 10 }, { durationSeconds: 20 }]) {
+      const error = await refusal(hs.transcribe(make(), options));
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(f.calls).toBe(0);
+    }
   });
+
+  it("accepts exactly 5 GB before create", async () => {
+    const { hs } = client();
+    const fake = fakeApi();
+    const blob = new Blob([await fixtureBytes("cbr-20s.mp3")]);
+    Object.defineProperty(blob, "size", { value: 5_000_000_000 });
+    const stop = new Error("stop after preflight");
+    const error = await refusal(
+      hs.transcribe(blob, {
+        durationSeconds: 20,
+        onProgress: () => {
+          throw stop;
+        },
+      }),
+    );
+    expect(error).toBe(stop);
+    expect(fake.calls.map((entry) => entry.route)).toEqual(["account"]);
+  });
+
+  it.each([15, 36_000])(
+    "accepts duration boundary %s and an exactly full daily limit",
+    async (durationSeconds) => {
+      const { hs, clock } = client();
+      const fake = fakeApi({ maxDaily: durationSeconds + 10, usedToday: 10 });
+      await driven(hs.transcribe(await fixtureBytes("cbr-20s.mp3"), { durationSeconds }), clock);
+      expect(fake.creates[0]).toMatchObject({ duration_seconds: durationSeconds });
+      expect(fake.count("create")).toBe(1);
+    },
+  );
+
+  it.each([16, 128])(
+    "accepts key length %s with maximum keyterms and matter code and concurrency 1",
+    async (length) => {
+      const { hs, clock } = client();
+      const fake = fakeApi();
+      const idempotencyKey = "x".repeat(length);
+      const keyterms = Array.from({ length: 1000 }, () => "term");
+      const matterCode = "m".repeat(64);
+      await driven(
+        hs.transcribe(await fixtureBytes("cbr-20s.mp3"), {
+          idempotencyKey,
+          keyterms,
+          matterCode,
+          concurrency: 1,
+        }),
+        clock,
+      );
+      expect(fake.creates[0]).toMatchObject({
+        idempotency_key: idempotencyKey,
+        matter_code: matterCode,
+        transcription_options: { keyterms_prompt: keyterms },
+      });
+    },
+  );
 
   it("goes on to create with a balance of 0: the server's 402 at create is the authority", async () => {
     const { hs, clock } = client();
@@ -159,6 +227,7 @@ describe("preflight", () => {
       (e: unknown) => e,
     );
     expect(error).toBeInstanceOf(DailyLimitError);
+    expect(error).toMatchObject({ code: "daily_limit", status: null });
     expect((error as DailyLimitError).hint).toContain("(59 of 60 min used in the last 24 h)");
     expect(fake.count("create")).toBe(0);
   });

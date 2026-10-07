@@ -65,6 +65,48 @@ describe("hs.balance", () => {
     expect((await client().balance()).purchasesRemaining).toBeNull();
   });
 
+  it.each([null, "2", -1, 0.5, 1e20])(
+    "treats invalid optional purchases remaining %j as absent",
+    async (remaining) => {
+      for (const read of [() => client().balance(), () => client().account()]) {
+        stubFetch([{ status: 200, body: account({ purchases_remaining_in_window: remaining }) }]);
+        const result = await read();
+        expect(
+          "purchasesRemaining" in result
+            ? result.purchasesRemaining
+            : result.purchasesRemainingInWindow,
+        ).toBeNull();
+      }
+    },
+  );
+
+  it("treats an overflowing optional purchases count as absent", async () => {
+    for (const read of [() => client().balance(), () => client().account()]) {
+      stubFetch([
+        {
+          status: 200,
+          text: JSON.stringify(account()).replace(
+            '"balance_seconds":18000',
+            '"purchases_remaining_in_window":1e400,"balance_seconds":18000',
+          ),
+        },
+      ]);
+      const result = await read();
+      expect(
+        "purchasesRemaining" in result
+          ? result.purchasesRemaining
+          : result.purchasesRemainingInWindow,
+      ).toBeNull();
+    }
+  });
+
+  it.each([0, 3])("accepts optional purchases remaining %s", async (remaining) => {
+    stubFetch([{ status: 200, body: account({ purchases_remaining_in_window: remaining }) }]);
+    expect((await client().balance()).purchasesRemaining).toBe(remaining);
+    stubFetch([{ status: 200, body: account({ purchases_remaining_in_window: remaining }) }]);
+    expect((await client().account()).purchasesRemainingInWindow).toBe(remaining);
+  });
+
   it("sends GET /v1/account with the bearer token and raises typed errors", async () => {
     const f = stubFetch([{ status: 403, body: { error: "pat_scope_missing", code: 2023 } }]);
     await expect(client().balance()).rejects.toBeInstanceOf(PermissionDeniedError);

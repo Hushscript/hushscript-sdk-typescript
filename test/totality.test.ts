@@ -308,6 +308,7 @@ describe("R61: nothing but a HushscriptError escapes elsewhere", () => {
   it("still gives an unexpected failure inside the SDK after the send the key and the token", async () => {
     const clock = fakeClock({ manual: true });
     const api = fakeApi({ jobFlow: [{ state: "processing", polls: 2 }, { state: "done" }] });
+    const tokens: string[] = [];
     const flaky: Clock = {
       ...clock,
       now: () => {
@@ -316,11 +317,19 @@ describe("R61: nothing but a HushscriptError escapes elsewhere", () => {
       },
     };
     const error = await failure(
-      driven(client(flaky).transcribe(MEDIA, { durationSeconds: 20 }), clock),
+      driven(
+        client(flaky).transcribe(MEDIA, {
+          durationSeconds: 20,
+          onResumeToken: (token) => tokens.push(token),
+        }),
+        clock,
+      ),
     );
     expect(error).toBeInstanceOf(HushscriptError);
-    expect(error).toMatchObject({ code: "unexpected_error" });
-    expect((error as HushscriptError).idempotencyKey).not.toBeNull();
-    expect((error as HushscriptError).resumeToken).not.toBeNull();
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect(api.creates).toHaveLength(1);
+    expect(tokens).toHaveLength(1);
+    expect((error as HushscriptError).idempotencyKey).toBe(api.creates[0]?.["idempotency_key"]);
+    expect((error as HushscriptError).resumeToken).toBe(tokens[0]);
   });
 });

@@ -117,10 +117,19 @@ describe("hs.api", () => {
   });
 
   it("retries a mutation only when it never left", async () => {
+    const unsent = stubFetch([{ error: networkError("ECONNREFUSED") }, { status: 200, body: {} }]);
+    const result = await client().api.POST("/v1/org/custody", {
+      body: { transcript_ids: [] } as never,
+    });
+    expect(result.response.status).toBe(200);
+    expect(unsent.calls).toBe(2);
+    expect(unsent.bodies[0]).toBe(unsent.bodies[1]);
     const f = stubFetch([{ error: networkError("ECONNRESET") }]);
-    await expect(
-      client().api.POST("/v1/org/custody", { body: { transcript_ids: [] } as never }),
-    ).rejects.toThrow();
+    const error = await client()
+      .api.POST("/v1/org/custody", { body: { transcript_ids: [] } as never })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({ code: "network_error", status: null });
     expect(f.calls).toBe(1);
   });
 
@@ -154,15 +163,19 @@ describe("hs.api", () => {
       { status: 503, text: "x" },
       { status: 200, body: { job_id: "j" } },
     ]);
-    await expect(
-      client().api.POST("/v1/uploads", { body: { size_bytes: 1, duration_seconds: 20 } }),
-    ).rejects.toMatchObject({ status: 503 });
+    const keylessError = await client()
+      .api.POST("/v1/uploads", { body: { size_bytes: 1, duration_seconds: 20 } })
+      .catch((error: unknown) => error);
+    expect(keylessError).toBeInstanceOf(ApiError);
+    expect(keylessError).toMatchObject({ code: "http_503", status: 503 });
     expect(keyless.calls).toBe(1);
 
     const dropped = stubFetch([{ error: networkError("ECONNRESET") }]);
-    await expect(
-      client().api.POST("/v1/uploads", { body: { size_bytes: 1, duration_seconds: 20 } }),
-    ).rejects.toThrow();
+    const error = await client()
+      .api.POST("/v1/uploads", { body: { size_bytes: 1, duration_seconds: 20 } })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({ code: "network_error", status: null });
     expect(dropped.calls).toBe(1);
   });
 
@@ -201,7 +214,10 @@ describe("hs.api", () => {
       .api.POST("/v1/agent/accounts/sg_1/claim" as never, { body: { claim_secret: "cs" } } as never)
       .catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OutcomeUnknownError);
-    expect((error as OutcomeUnknownError).hint).toContain("agent_claim_invalid");
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+    expect((error as OutcomeUnknownError).hint).toBe(
+      "The claim may have succeeded. Retrying will fail with agent_claim_invalid. If you have no token, contact support with the signup id.",
+    );
     expect(f.calls).toBe(1);
   });
 

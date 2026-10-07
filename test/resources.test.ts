@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
-import { AbortError, AuthenticationError, HushscriptError } from "../src/errors";
+import { AbortError, AuthenticationError, HushscriptError, PreflightError } from "../src/errors";
 import { BASE, JOB_OPTIONS, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, stubFetch } from "./helpers";
 
 afterEach(() => {
@@ -360,5 +360,23 @@ describe("signal on lists", () => {
     await expect(drain(client().transcripts.list())).rejects.toMatchObject({
       code: "pagination_loop",
     });
+  });
+});
+
+describe("resource path identifiers (R52/R53)", () => {
+  it.each(["", ".", "..", null, 42, {}])("refuses invalid id %j before any request", async (id) => {
+    const f = stubFetch([]);
+    const hs = client();
+    const invalid = id as unknown as string;
+    for (const run of [
+      () => hs.jobs.get(invalid),
+      () => hs.jobs.wait(invalid),
+      () => hs.transcripts.get(invalid),
+    ]) {
+      const error: unknown = await run().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(f.calls).toBe(0);
+    }
   });
 });

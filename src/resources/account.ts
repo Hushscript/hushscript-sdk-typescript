@@ -52,7 +52,9 @@ function expiry(raw: RawAccount): Date | null {
 
 function purchasesRemaining(raw: RawAccount): number | null {
   const remaining = (raw as Record<string, unknown>)["purchases_remaining_in_window"];
-  return typeof remaining === "number" ? remaining : null;
+  return typeof remaining === "number" && Number.isSafeInteger(remaining) && remaining >= 0
+    ? remaining
+    : null;
 }
 
 export function toAccount(raw: RawAccount): Account {

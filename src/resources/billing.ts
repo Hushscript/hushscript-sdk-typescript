@@ -198,8 +198,8 @@ export class BillingResource {
    * `idempotencyKey` to retry without any chance of a second charge.
    */
   async buy(packId: string, options: BuyOptions = {}): Promise<Purchase> {
-    const key = options.idempotencyKey ?? randomUUID();
-    if (!PURCHASE_KEY.test(key)) {
+    const key = options.idempotencyKey === undefined ? randomUUID() : options.idempotencyKey;
+    if (typeof key !== "string" || !PURCHASE_KEY.test(key)) {
       throw invalidOption(
         "idempotencyKey must be 1 to 128 characters from A-Z, a-z, 0-9, _ and -.",
       );
@@ -219,7 +219,11 @@ export class BillingResource {
         PURCHASE_ROUTE,
       );
       const seconds = body?.["balance_seconds"];
-      if (body?.["status"] !== "ok" || typeof seconds !== "number" || !Number.isInteger(seconds)) {
+      if (
+        body?.["status"] !== "ok" ||
+        typeof seconds !== "number" ||
+        !Number.isSafeInteger(seconds)
+      ) {
         throw badResponse(PURCHASE_ROUTE, status);
       }
       return { seconds, minutes: Math.trunc(seconds / 60) + 0 };
