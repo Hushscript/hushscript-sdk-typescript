@@ -1,11 +1,18 @@
 {
   "$schema": "https://unpkg.com/knip@6/schema.json",
-  "entry": ["scripts/generate.mjs", "smoke/smoke.ts"],
+  "entry": [
+    "scripts/generate.mjs",
+    "scripts/run-examples.mjs",
+    "scripts/check-publish-files.mjs",
+    "smoke/smoke.ts",
+    "examples/*.ts"
+  ],
   "project": [
     "src/**/*.ts",
     "scripts/**/*.mjs",
     "conformance/**/*.ts",
     "smoke/**/*.ts",
+    "examples/**/*.ts",
     "test/**/*.ts"
   ],
   "ignoreDependencies": [

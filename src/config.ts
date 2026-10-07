@@ -31,6 +31,12 @@ export interface HushscriptOptions {
   clock?: Clock | undefined;
 }
 
+/** What a call that needs no token (agent signup and claim) can configure. */
+export interface TokenlessOptions {
+  /** Falls back to HUSHSCRIPT_BASE_URL, then the production host. */
+  baseUrl?: string | undefined;
+}
+
 /** Hooks for tests; not part of the public options. */
 export interface ConfigInternals {
   env?: Record<string, string | undefined>;
@@ -65,9 +71,9 @@ export class ResolvedConfig {
   /** Paces `POST /v1/uploads` for this client instance (spec 7.5). */
   readonly createPacer: TokenBucket;
   readonly userAgent: string;
-  readonly #token: string;
+  #token: string | null;
 
-  constructor(token: string, values: ConfigValues) {
+  constructor(token: string | null, values: ConfigValues) {
     this.#token = token;
     Object.defineProperty(this, inspect.custom, { value: () => this.toString() });
     this.baseUrl = values.baseUrl;
@@ -83,7 +89,14 @@ export class ResolvedConfig {
   }
 
   authorization(): string {
+    if (this.#token === null) throw ConfigurationError.missingToken();
     return `Bearer ${this.#token}`;
+  }
+
+  /** Replaces the token for every later request (token rotation); the new one is redacted from then on. */
+  setToken(token: string): void {
+    registerSecret(token);
+    this.#token = token;
   }
 
   toJSON(): Record<string, unknown> {
@@ -137,18 +150,17 @@ function checkLogLevel(raw: string): LogLevel {
   throw new ConfigurationError({ message: 'The log level must be "off" or "debug".' });
 }
 
-export function resolveConfig(
-  options: HushscriptOptions = {},
-  internals: ConfigInternals = {},
-): ResolvedConfig {
-  const env = internals.env ?? process.env;
-  if (isBrowser() && options.dangerouslyAllowBrowser !== true) {
+function refuseBrowser(allowed: boolean | undefined): void {
+  if (isBrowser() && allowed !== true) {
     throw new ConfigurationError({
       message:
         "The Hushscript SDK refuses to run in a browser: a token in a browser bundle is a leaked token. Call it from a server.",
     });
   }
-  const token = (options.token ?? env["HUSHSCRIPT_TOKEN"] ?? "").trim();
+}
+
+function checkToken(raw: string): string {
+  const token = raw.trim();
   if (token === "") throw ConfigurationError.missingToken();
   if (!token.startsWith("hsr")) {
     throw new ConfigurationError({ message: "This doesn't look like a Hushscript token." });
@@ -159,6 +171,15 @@ export function resolveConfig(
         "The token has spaces, control characters or non-ASCII characters in it; check how it was copied.",
     });
   }
+  return token;
+}
+
+function build(
+  token: string | null,
+  options: HushscriptOptions,
+  env: Record<string, string | undefined>,
+  internals: ConfigInternals,
+): ResolvedConfig {
   const timeout = options.timeout ?? DEFAULT_TIMEOUT_SECONDS;
   if (!Number.isFinite(timeout) || timeout <= 0) {
     throw new ConfigurationError({ message: "timeout must be a positive number of seconds." });
@@ -174,7 +195,7 @@ export function resolveConfig(
   }
   const clock = options.clock ?? systemClock;
   const logLevel = checkLogLevel(options.logLevel ?? env["HUSHSCRIPT_LOG"] ?? "off");
-  registerSecret(token);
+  if (token !== null) registerSecret(token);
   return new ResolvedConfig(token, {
     baseUrl: checkBaseUrl(options.baseUrl ?? env["HUSHSCRIPT_BASE_URL"] ?? DEFAULT_BASE_URL),
     timeoutMs: timeout * 1000,
@@ -187,4 +208,23 @@ export function resolveConfig(
     createPacer: new TokenBucket(CREATES_PER_WINDOW, CREATE_WINDOW_MS, clock),
     userAgent: `hushscript-typescript/${pkg.version} ${runtime()}`,
   });
+}
+
+export function resolveConfig(
+  options: HushscriptOptions = {},
+  internals: ConfigInternals = {},
+): ResolvedConfig {
+  const env = internals.env ?? process.env;
+  refuseBrowser(options.dangerouslyAllowBrowser);
+  const token = checkToken(options.token ?? env["HUSHSCRIPT_TOKEN"] ?? "");
+  return build(token, options, env, internals);
+}
+
+/** The configuration for the calls that carry no token: agent signup and claim (spec 3). */
+export function resolveTokenlessConfig(
+  options: TokenlessOptions = {},
+  internals: ConfigInternals = {},
+): ResolvedConfig {
+  refuseBrowser(undefined);
+  return build(null, options, internals.env ?? process.env, internals);
 }

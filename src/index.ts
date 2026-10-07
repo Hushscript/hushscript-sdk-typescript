@@ -30,8 +30,25 @@ export type { ErrorCatalogEntry } from "./generated/catalog.ts";
 export { HINTS } from "./generated/hints.ts";
 export { OPERATION_SCOPES } from "./generated/scopes.ts";
 export type { components, operations, paths } from "./generated/schema";
+export type { Money } from "./money.ts";
 export type { Page } from "./paginate.ts";
 export type { Account, Balance, UploadLimits } from "./resources/account.ts";
+export type {
+  AgentClaim,
+  AgentSignup,
+  AgentSignupRequest,
+  AgentStatic,
+  RotatedToken,
+} from "./resources/agent.ts";
+export type {
+  BuyOptions,
+  Card,
+  Cards,
+  Hold,
+  LedgerEntry,
+  Pack,
+  Transaction,
+} from "./resources/billing.ts";
 export type { Job, JobOptions, JobState } from "./resources/jobs.ts";
 export type {
   DeletedTranscript,

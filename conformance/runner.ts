@@ -1,9 +1,8 @@
 // Conformance runner (docs/runner-contract.md in the conformance repo). It starts nothing: the mock
 // is the compose `mock` service this container shares a network namespace with.
 //
-// Ops are mapped one at a time; a scenario whose op (or `prior` op) has no mapping yet is reported
-// as SKIP. The contract forbids skipping, so every later task that adds friendly-layer methods
-// adds the matching entries to OPS until nothing is skipped.
+// A scenario whose op (or `prior` op) has no mapping is reported as SKIP. The contract forbids
+// skipping, so CONFORMANCE_STRICT=1 (the default in `just conformance`) turns every skip into a failure.
 import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
@@ -280,6 +279,32 @@ const OPS: Record<string, Op> = {
     return { count: ids.length, firstId: ids[0] ?? null, lastId: ids.at(-1) ?? null };
   },
   getTranscript: async (hs, args) => transcriptResult(await hs.transcripts.get(String(args["id"]))),
+  buy: async (hs, args) => {
+    const balance = await hs.buy(String(args["pack"]));
+    return {
+      seconds: balance.seconds,
+      minutes: balance.minutes,
+      heldSeconds: balance.heldSeconds,
+      expiresAt: balance.expiresAt,
+    };
+  },
+  claim: async (_hs, args) => {
+    const claimed = await Hushscript.agent.claim(
+      String(args["signupId"]),
+      String(args["claimSecret"]),
+      { baseUrl: BASE_URL },
+    );
+    return {
+      token: claimed.token,
+      userId: claimed.userId,
+      scopes: claimed.scopes,
+      seconds: claimed.balance.seconds,
+    };
+  },
+  rotate: async (hs) => {
+    const rotated = await hs.agent.rotateToken();
+    return { token: rotated.token, tokenId: rotated.tokenId, scopes: rotated.scopes };
+  },
 };
 
 function isObj(value: unknown): value is Obj {
@@ -508,11 +533,17 @@ async function main(): Promise<void> {
   let passed = 0;
   let failed = 0;
   let skipped = 0;
+  const strict = process.env["CONFORMANCE_STRICT"] === "1";
   for (const name of names) {
     const scenario = (await control("GET", `/__files/scenarios/${name}.json`)) as Scenario;
     if (!mapped(scenario.call)) {
-      skipped += 1;
-      console.log(`SKIP ${name} (op ${scenario.call.op} is not mapped yet)`);
+      if (strict) {
+        failed += 1;
+        console.log(`FAIL ${name}: op ${scenario.call.op} is not mapped (CONFORMANCE_STRICT=1)`);
+      } else {
+        skipped += 1;
+        console.log(`SKIP ${name} (op ${scenario.call.op} is not mapped yet)`);
+      }
       continue;
     }
     let problems: string[];

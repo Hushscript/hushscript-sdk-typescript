@@ -92,7 +92,7 @@ export async function preflight(
       message: `The file is ${String(source.size)} bytes; the limit is 1 byte to ${String(MAX_FILE_BYTES)} bytes.`,
     });
   }
-  const seconds = options.durationSeconds ?? (await probeDuration(source));
+  const seconds = options.durationSeconds ?? (await probeDuration(source, signal));
   if (seconds < MIN_DURATION_SECONDS || Math.ceil(seconds) > MAX_DURATION_SECONDS) {
     throw new FileLimitError({
       code: "duration_out_of_range",

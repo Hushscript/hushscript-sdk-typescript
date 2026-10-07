@@ -1,7 +1,7 @@
 // eslint-disable-next-line n/no-unsupported-features/node-builtins -- present, if flagged experimental, in every Node 22 release (since 19.8); the rule's table lags
 import { openAsBlob } from "node:fs";
 import { parseBlob, parseBuffer, type IAudioMetadata } from "music-metadata";
-import { UnsupportedMediaError } from "../errors.ts";
+import { AbortError, UnsupportedMediaError } from "../errors.ts";
 import type { ProbeInput, Source } from "./source.ts";
 
 const ID3_HEADER_BYTES = 10;
@@ -16,8 +16,11 @@ const OPUS_PRE_SKIP_AT = 10;
  * length; the probe adds it back so it never undershoots. It is read from the stream's own
  * OpusHead (u16 little-endian at offset 10), so a file with a larger pre-skip counts too.
  */
-async function opusPreSkipSeconds(source: Source): Promise<number> {
-  const head = await source.head(OPUS_HEAD_BYTES);
+async function opusPreSkipSeconds(
+  source: Source,
+  signal: AbortSignal | undefined,
+): Promise<number> {
+  const head = await source.head(OPUS_HEAD_BYTES, signal);
   const at = ascii(head, 0, head.length).indexOf("OpusHead");
   if (at === -1 || at + OPUS_PRE_SKIP_AT + 2 > head.length) return 0;
   const preSkip =
@@ -56,15 +59,18 @@ function ascii(bytes: Uint8Array, at: number, length: number): string {
 }
 
 /** Where the first MPEG audio frame starts, skipping ID3v2 tags; null if none shows up near the start. */
-async function firstFrame(source: Source): Promise<Uint8Array | null> {
+async function firstFrame(
+  source: Source,
+  signal: AbortSignal | undefined,
+): Promise<Uint8Array | null> {
   let at = 0;
   for (let tags = 0; tags < MAX_ID3_TAGS; tags += 1) {
-    const header = await source.read(at, ID3_HEADER_BYTES);
+    const header = await source.read(at, ID3_HEADER_BYTES, signal);
     if (ascii(header, 0, 3) !== "ID3" || header.length < ID3_HEADER_BYTES) break;
     const footer = ((header[5] ?? 0) & 0x10) === 0 ? 0 : 10;
     at += ID3_HEADER_BYTES + syncsafe(header, 6) + footer;
   }
-  const window = await source.read(at, FRAME_SCAN_BYTES);
+  const window = await source.read(at, FRAME_SCAN_BYTES, signal);
   for (let i = 0; i + 4 <= window.length; i += 1) {
     const b1 = window[i + 1] ?? 0;
     if (window[i] === 0xff && (b1 & 0xe0) === 0xe0 && (b1 & 0x06) !== 0 && (b1 & 0x18) !== 0x08) {
@@ -75,8 +81,11 @@ async function firstFrame(source: Source): Promise<Uint8Array | null> {
 }
 
 /** Whether the first frame carries a Xing, Info or VBRI header: the duration is then in the header. */
-async function hasDurationHeader(source: Source): Promise<boolean> {
-  const frame = await firstFrame(source);
+async function hasDurationHeader(
+  source: Source,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  const frame = await firstFrame(source, signal);
   if (frame === null) return false;
   const b1 = frame[1] ?? 0;
   const mpeg1 = (b1 & 0x18) === 0x18;
@@ -100,7 +109,7 @@ function unreadable(cause?: unknown): UnsupportedMediaError {
  * counted for an MP3 with no Xing, VBRI or Info header (spec 8.2), and the last page is read for
  * Ogg, whose headers carry no length.
  */
-export async function probeDuration(source: Source): Promise<number> {
+export async function probeDuration(source: Source, signal?: AbortSignal): Promise<number> {
   const input = source.probeInput;
   if (input === null) throw unreadable();
   let duration: number | undefined;
@@ -108,15 +117,17 @@ export async function probeDuration(source: Source): Promise<number> {
     let meta = await parse(input, false);
     if (
       meta.format.duration === undefined ||
-      (meta.format.container === "MPEG" && !(await hasDurationHeader(source)))
+      (meta.format.container === "MPEG" && !(await hasDurationHeader(source, signal)))
     ) {
       meta = await parse(input, true);
     }
     duration = meta.format.duration;
     if (duration !== undefined && /opus/i.test(meta.format.codec ?? "")) {
-      duration += await opusPreSkipSeconds(source);
+      duration += await opusPreSkipSeconds(source, signal);
     }
   } catch (error) {
+    // A cancelled read is the caller's doing, not a file the parser could not read.
+    if (error instanceof AbortError) throw error;
     throw unreadable(error);
   }
   if (duration === undefined || !Number.isFinite(duration) || duration <= 0) throw unreadable();

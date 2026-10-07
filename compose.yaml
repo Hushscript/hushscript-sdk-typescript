@@ -84,6 +84,8 @@ services:
 
   conformance:
     <<: *sandboxed
+    environment:
+      CONFORMANCE_STRICT: ${CONFORMANCE_STRICT:-1}
     command:
       - timeout
       - "1800"
@@ -93,16 +95,7 @@ services:
 
   examples:
     <<: *sandboxed
-    command:
-      - sh
-      - -c
-      - >-
-        found=0;
-        for f in examples/*.ts; do
-        [ -e "$$f" ] || continue; found=1;
-        timeout 600 node --disable-warning=ExperimentalWarning "$$f" || exit 1;
-        done;
-        [ "$$found" = 1 ] || echo "no examples yet"
+    command: ["timeout", "900", "node", "scripts/run-examples.mjs"]
 
   # Outbound network: fetches the spec and hints.json, writes openapi.json and src/generated.
   regen:

@@ -1,4 +1,8 @@
 rules:
+  concurrency-limits:
+    ignore:
+      # A release run must finish: cancelling release-please halfway can leave a tag without its release.
+      - release.yml
   unpinned-uses:
     config:
       policies:

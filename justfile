@@ -4,6 +4,8 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 export HOST_UID := `id -u`
 export HOST_GID := `id -g`
+# No scenario may be skipped: an unmapped op fails the conformance run.
+export CONFORMANCE_STRICT := env("CONFORMANCE_STRICT", "1")
 
 node22_image := "node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392"
 node24_image := "node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
@@ -123,6 +125,23 @@ build version=floor:
       timeout 60 bun --eval "$check"
     docker run {{sandbox}} --network none --user "$user" -e DENO_DIR=/tmp/deno -v "$out/consumer":/consumer:ro -w /consumer --entrypoint timeout {{deno_image}} \
       60 deno eval --node-modules-dir=manual "$check"
+
+# what `npm publish` would upload, without uploading: the file list must be dist/, README, LICENSE and package.json only.
+# Same sandbox as `build` (no network); the registry is never contacted.
+publish-dry-run version=floor:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
+    docker build --quiet --target dev --build-arg NODE_VERSION={{version}} -f docker/dev.Dockerfile -t "hushscript-typescript-dev:node{{version}}" .
+    out="$(mktemp -d)"
+    trap 'rm -rf "$out"' EXIT
+    mkdir -p "$out/dist"
+    docker run {{sandbox}} --network none --user "$(id -u):$(id -g)" -e HOME=/tmp -e npm_config_cache=/tmp/npm \
+      -v "$out/dist":/work/dist "hushscript-typescript-dev:node{{version}}" \
+      sh -c 'cp tsup.config.ts /tmp/tsup.config.ts && timeout 600 tsup --config /tmp/tsup.config.ts \
+        && timeout 120 npm publish --dry-run --provenance=false --ignore-scripts \
+        && timeout 120 npm pack --dry-run --ignore-scripts --json > /tmp/pack.json \
+        && timeout 60 node scripts/check-publish-files.mjs /tmp/pack.json'
 
 # regenerate openapi.json and src/generated from the production spec, or from a local spec file (outbound network)
 regen spec="":
