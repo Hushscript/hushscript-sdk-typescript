@@ -1,6 +1,6 @@
 {
   "name": "@hushscript/sdk",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "description": "Official TypeScript SDK for the Hushscript transcription API.",
   "license": "MIT",
   "type": "module",

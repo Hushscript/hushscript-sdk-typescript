@@ -3,9 +3,9 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { UnsupportedMediaError } from "../../src/errors";
+import { AbortError, UnsupportedMediaError } from "../../src/errors";
 import { probeDuration } from "../../src/transcribe/probe";
-import { openSource } from "../../src/transcribe/source";
+import { openSource, type Source } from "../../src/transcribe/source";
 import { durations, fixtureBytes, fixturePath } from "./fixtures";
 
 describe("probeDuration", () => {
@@ -23,6 +23,33 @@ describe("probeDuration", () => {
         await source.close();
       }
     }
+  });
+
+  it("hands the caller's signal to its reads, and an abort is not an unreadable file", async () => {
+    const inner = await openSource(await fixtureBytes("opus-20s.opus"));
+    const controller = new AbortController();
+    const seen: (AbortSignal | undefined)[] = [];
+    const watching: Source = {
+      size: inner.size,
+      probeInput: inner.probeInput,
+      sequential: false,
+      head: (length, signal) => {
+        seen.push(signal);
+        return inner.head(length, signal);
+      },
+      read: (offset, length, signal) => inner.read(offset, length, signal),
+      close: () => inner.close(),
+    };
+    await probeDuration(watching, controller.signal);
+    expect(seen).toEqual([controller.signal]);
+
+    controller.abort();
+    const stalled: Source = {
+      ...watching,
+      head: () => Promise.reject(new AbortError({ message: "The request was aborted." })),
+    };
+    await expect(probeDuration(stalled, controller.signal)).rejects.toBeInstanceOf(AbortError);
+    await inner.close();
   });
 
   it("reads Blob and Uint8Array inputs the same way as a path", async () => {

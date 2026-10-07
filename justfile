@@ -126,6 +126,23 @@ build version=floor:
     docker run {{sandbox}} --network none --user "$user" -e DENO_DIR=/tmp/deno -v "$out/consumer":/consumer:ro -w /consumer --entrypoint timeout {{deno_image}} \
       60 deno eval --node-modules-dir=manual "$check"
 
+# what `npm publish` would upload, without uploading: the file list must be dist/, README, LICENSE and package.json only.
+# Same sandbox as `build` (no network); the registry is never contacted.
+publish-dry-run version=floor:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
+    docker build --quiet --target dev --build-arg NODE_VERSION={{version}} -f docker/dev.Dockerfile -t "hushscript-typescript-dev:node{{version}}" .
+    out="$(mktemp -d)"
+    trap 'rm -rf "$out"' EXIT
+    mkdir -p "$out/dist"
+    docker run {{sandbox}} --network none --user "$(id -u):$(id -g)" -e HOME=/tmp -e npm_config_cache=/tmp/npm \
+      -v "$out/dist":/work/dist "hushscript-typescript-dev:node{{version}}" \
+      sh -c 'cp tsup.config.ts /tmp/tsup.config.ts && timeout 600 tsup --config /tmp/tsup.config.ts \
+        && timeout 120 npm publish --dry-run --provenance=false --ignore-scripts \
+        && timeout 120 npm pack --dry-run --ignore-scripts --json > /tmp/pack.json \
+        && timeout 60 node scripts/check-publish-files.mjs /tmp/pack.json'
+
 # regenerate openapi.json and src/generated from the production spec, or from a local spec file (outbound network)
 regen spec="":
     #!/usr/bin/env bash

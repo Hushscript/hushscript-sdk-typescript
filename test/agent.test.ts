@@ -14,8 +14,9 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-const NEW_TOKEN = `hsr1:eu:pat.${"a1".repeat(16)}.${"b2".repeat(32)}`;
-const CLAIMED_TOKEN = `hsr1:eu:pat.${"c3".repeat(16)}.${"d4".repeat(32)}`;
+// Neither matches the usual token shape, so only a registered secret gets redacted.
+const NEW_TOKEN = "hsr1:eu:rotated-token-not-in-the-usual-shape-0123456789";
+const CLAIMED_TOKEN = "hsr1:eu:claimed-token-not-in-the-usual-shape-0123456789";
 const SIGNUP = {
   email: "agent@example.com",
   pack: "45min",
@@ -89,12 +90,16 @@ describe("Hushscript.agent.signup", () => {
 
   it("refuses a signup without acceptTerms, at compile time and at run time, before any request", async () => {
     const stub = stubFetch([{ status: 200, body: {} }]);
-    for (const request of [
-      // @ts-expect-error acceptTerms is required and is never defaulted
-      { email: SIGNUP.email, pack: SIGNUP.pack, agent: SIGNUP.agent, baseUrl: BASE },
-      { ...SIGNUP, acceptTerms: "", baseUrl: BASE },
-    ]) {
-      const error: unknown = await Hushscript.agent.signup(request).catch((e: unknown) => e);
+    const attempts = [
+      () =>
+        Hushscript.agent.signup(
+          // @ts-expect-error acceptTerms is required and is never defaulted
+          { email: SIGNUP.email, pack: SIGNUP.pack, agent: SIGNUP.agent, baseUrl: BASE },
+        ),
+      () => Hushscript.agent.signup({ ...SIGNUP, acceptTerms: "", baseUrl: BASE }),
+    ];
+    for (const attempt of attempts) {
+      const error: unknown = await attempt().catch((e: unknown) => e);
       expect(error).toBeInstanceOf(ValidationError);
       expect(error).toMatchObject({ code: "accept_terms_required", status: null });
     }
@@ -105,7 +110,11 @@ describe("Hushscript.agent.signup", () => {
     stubFetch([
       {
         status: 409,
-        body: { error: "policy_version_stale", code: 1043, details: { current_version: "2026-10-01" } },
+        body: {
+          error: "policy_version_stale",
+          code: 1043,
+          details: { current_version: "2026-10-01" },
+        },
       },
     ]);
     const error: unknown = await Hushscript.agent
@@ -157,7 +166,13 @@ describe("Hushscript.agent.claim", () => {
       token: CLAIMED_TOKEN,
       userId: "usr_1",
       scopes: ["account:read", "billing"],
-      balance: { seconds: 2700, minutes: 45, heldSeconds: 0, expiresAt: null, purchasesRemaining: null },
+      balance: {
+        seconds: 2700,
+        minutes: 45,
+        heldSeconds: 0,
+        expiresAt: null,
+        purchasesRemaining: null,
+      },
     });
     const request = stub.requests[0];
     expect(request?.headers.get("authorization")).toBeNull();
@@ -192,7 +207,12 @@ describe("hs.agent.rotateToken", () => {
     const stub = stubFetch([
       {
         status: 200,
-        body: { pat: NEW_TOKEN, pat_id: "pat_2", scopes: ["account:read"], expires_at: 1_800_000_000 },
+        body: {
+          pat: NEW_TOKEN,
+          pat_id: "pat_2",
+          scopes: ["account:read"],
+          expires_at: 1_800_000_000,
+        },
       },
       {
         status: 200,

@@ -20,5 +20,5 @@
     "verbatimModuleSyntax": true,
     "skipLibCheck": true
   },
-  "include": ["src", "test", "conformance", "smoke", "scripts/*.d.mts", "*.ts"]
+  "include": ["src", "test", "conformance", "smoke", "examples", "scripts/*.d.mts", "*.ts"]
 }

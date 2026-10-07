@@ -55,7 +55,10 @@ const ACCOUNT = {
   },
 };
 
-function purchaseBodies(stub: { requests: Request[]; bodies: string[] }): Record<string, unknown>[] {
+function purchaseBodies(stub: {
+  requests: Request[];
+  bodies: string[];
+}): Record<string, unknown>[] {
   return stub.requests.flatMap((request, index) =>
     new URL(request.url).pathname === "/v1/billing/purchase"
       ? [JSON.parse(stub.bodies[index] ?? "{}") as Record<string, unknown>]
@@ -137,12 +140,18 @@ describe("hs.billing cards", () => {
       { status: 502, text: "bad gateway" },
       {
         status: 200,
-        body: { checkout_url: "https://checkout.example.com/s/1", session_id: "cs_1", expires_at: 1 },
+        body: {
+          checkout_url: "https://checkout.example.com/s/1",
+          session_id: "cs_1",
+          expires_at: 1,
+        },
       },
     ]);
     expect(await client().billing.addCardUrl()).toBe("https://checkout.example.com/s/1");
     expect(stub.calls).toBe(2);
-    const keys = stub.bodies.map((body) => (JSON.parse(body) as { idempotency_key?: string }).idempotency_key);
+    const keys = stub.bodies.map(
+      (body) => (JSON.parse(body) as { idempotency_key?: string }).idempotency_key,
+    );
     expect(keys[0]).toMatch(/^[\da-f-]{36}$/);
     expect(keys[1]).toBe(keys[0]);
   });
@@ -186,7 +195,14 @@ describe("billing history", () => {
         status: 200,
         body: {
           entries: [
-            { id: 9, delta_seconds: -60, kind: "settle", job_id: "j1", note: null, created_at: 100 },
+            {
+              id: 9,
+              delta_seconds: -60,
+              kind: "settle",
+              job_id: "j1",
+              note: null,
+              created_at: 100,
+            },
           ],
           next_cursor: null,
         },
@@ -203,7 +219,14 @@ describe("billing history", () => {
     const entries = [];
     for await (const entry of hs.billing.ledger()) entries.push(entry);
     expect(entries).toEqual([
-      { id: 9, deltaSeconds: -60, kind: "settle", jobId: "j1", note: null, createdAt: new Date(100_000) },
+      {
+        id: 9,
+        deltaSeconds: -60,
+        kind: "settle",
+        jobId: "j1",
+        note: null,
+        createdAt: new Date(100_000),
+      },
     ]);
     const holds = [];
     for await (const hold of hs.billing.holds()) holds.push(hold);
@@ -263,7 +286,18 @@ describe("hs.buy", () => {
   });
 
   it("sends policy_ack true only when the caller acknowledges the no-refund notice", async () => {
-    const stub = stubFetch([cards("pm_a", [card("pm_a", true, true)]), PURCHASED, ACCOUNT]);
+    const stub = stubFetch([
+      (request) => {
+        const path = new URL(request.url).pathname;
+        const answer =
+          path === "/v1/billing/cards"
+            ? cards("pm_a", [card("pm_a", true, true)])
+            : path === "/v1/billing/purchase"
+              ? PURCHASED
+              : ACCOUNT;
+        return Response.json(answer.body, { status: answer.status });
+      },
+    ]);
     await client().buy("300min", { acknowledgeNoRefund: true });
     await client().buy("300min", { acknowledgeNoRefund: false });
     await client().buy("300min");
