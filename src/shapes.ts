@@ -3,11 +3,11 @@ import {
   anything,
   arrayOf,
   bool,
-  int,
   nullable,
   num,
   objectOf,
   optional,
+  positiveInt,
   recordOf,
   str,
   timestamp,
@@ -68,17 +68,17 @@ export const JOB_LIST: Shape = objectOf<Schemas["JobList"]>({
 });
 export const JOB_ONE: Shape = JOB;
 
-const PART_URL = objectOf<Schemas["PresignedPartUrl"]>({ n: int, url });
+const PART_URL = objectOf<Schemas["PresignedPartUrl"]>({ n: positiveInt, url });
 
 export const UPLOAD_CREATE: Shape = objectOf<Schemas["UploadCreateResponse"]>({
   job_id: str,
   state: str,
   upload: nullable(
     objectOf<NonNullable<Schemas["UploadCreateResponse"]["upload"]>>({
-      part_size_bytes: num,
-      total_parts: num,
+      part_size_bytes: positiveInt,
+      total_parts: positiveInt,
       part_urls: arrayOf(PART_URL),
-      next_part_number: nullable(int),
+      next_part_number: nullable(positiveInt),
     }),
   ),
 });
@@ -92,7 +92,7 @@ export const PART_URLS: Shape = nullable(
     next_part_number: unknown;
   }>({
     part_urls: arrayOf(PART_URL),
-    next_part_number: optional(nullable(int)),
+    next_part_number: optional(nullable(positiveInt)),
   }),
 );
 

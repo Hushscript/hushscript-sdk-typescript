@@ -53,14 +53,16 @@ async function main(): Promise<number> {
   return 0;
 }
 
+const REFUSALS: ReadonlySet<number> = new Set([400, 401, 402, 403, 404, 422, 429]);
+
 try {
   process.exitCode = await main();
 } catch (error) {
   if (!(error instanceof HushscriptError)) throw error;
   console.log(`${error.code}: ${error.hint ?? error.message}`);
-  // A refusal (4xx) charged nothing. Anything else after the request was sent may have: run it
-  // again with this key and it cannot charge twice.
-  const refused = error.status !== null && error.status < 500 && error.code !== "bad_response";
+  // Only these refusals charged nothing (the 402 family included). A 408, a 409 or anything else
+  // after the request was sent may have: run it again with this key and it cannot charge twice.
+  const refused = error.status !== null && REFUSALS.has(error.status);
   if (error.idempotencyKey !== null && !refused) {
     console.log(`The card may have been charged. Retry with: --key ${error.idempotencyKey}`);
   }
