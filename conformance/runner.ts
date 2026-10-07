@@ -11,6 +11,7 @@ import { Hushscript } from "../src/client.ts";
 import type { Clock } from "../src/clock.ts";
 import * as sdk from "../src/index.ts";
 import { probeDuration } from "../src/transcribe/probe.ts";
+import { sniff } from "../src/transcribe/sniff.ts";
 import { openSource } from "../src/transcribe/source.ts";
 import { goldens, renderGolden } from "./goldens.ts";
 
@@ -411,10 +412,18 @@ async function durations(): Promise<Record<string, number>> {
 async function probeAll(args: Obj): Promise<unknown> {
   const tolerance = Number(args["toleranceSeconds"] ?? 1);
   const expected = await durations();
+  const refuse = new Set(Array.isArray(args["refuse"]) ? args["refuse"].map(String) : []);
   const failures: Obj[] = [];
+  let refused = 0;
   for (const [name, seconds] of Object.entries(expected)) {
     const source = await openSource(await fixtureFile(`media/${name}`));
     try {
+      if (refuse.has(name)) {
+        // Refused by the sniffer: it must never reach the probe.
+        if (sniff(await source.head(64)) === null) refused += 1;
+        else failures.push({ file: name, expected: "refused", got: "accepted by the sniffer" });
+        continue;
+      }
       const got = await probeDuration(source);
       if (Math.abs(got - seconds) > tolerance)
         failures.push({ file: name, expected: seconds, got });
@@ -424,7 +433,7 @@ async function probeAll(args: Obj): Promise<unknown> {
       await source.close();
     }
   }
-  return { checked: Object.keys(expected).length, failures };
+  return { checked: Object.keys(expected).length - refuse.size, refused, failures };
 }
 
 async function fetchText(path: string): Promise<string> {
