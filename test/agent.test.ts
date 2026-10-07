@@ -344,10 +344,11 @@ describe("hs.agent.rotateToken", () => {
     }
   });
 
-  it("registers the trimmed token for redaction when the answer pads it with whitespace", async () => {
+  it("registers the trimmed token for redaction when a claim pads it with whitespace", async () => {
     const padded = "hsr1:eu:padded-token-not-in-the-usual-shape-0123456789";
-    stubFetch([{ status: 200, body: { pat: `  ${padded}\n`, pat_id: "pat_4", scopes: [] } }]);
-    expect((await client().agent.rotateToken()).token).toBe(padded);
+    stubFetch([{ status: 200, body: { pat: `  ${padded}\n`, user_id: "usr_1", scopes: [] } }]);
+    const claimed = await Hushscript.agent.claim("sg_1", "cs_secret", { baseUrl: BASE });
+    expect(claimed.token).toBe(padded);
     expect(redact(`leaked ${padded}`)).toBe(`leaked ${REDACTED}`);
   });
 
