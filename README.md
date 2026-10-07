@@ -93,8 +93,9 @@ the app.
 A purchase is retried at most once, on a network error, a 502 or a 503, with the same idempotency
 key, so those retries cannot charge you twice. When `buy()` still gives up after the request was
 sent (the connection dropped twice, or the answer was not one the SDK can use), the card may have
-been charged. Every such error carries `idempotencyKey`; ask again with it and the purchase can
-never happen twice:
+been charged. A 401 or 429 counts too: the server answers them before it replays a completed
+purchase, so after the retry they can follow a first attempt that did charge. Every such error
+carries `idempotencyKey`; ask again with it and the purchase can never happen twice:
 
 ```ts
 import { HushscriptError, type Purchase } from "@hushscript/sdk";
@@ -104,8 +105,12 @@ try {
   purchase = await hs.buy("300min", { acknowledgeNoRefund: true });
 } catch (error) {
   if (!(error instanceof HushscriptError) || error.idempotencyKey === null) throw error;
-  // A refusal (4xx) charged nothing, so only retry a lost or unusable answer.
-  if (error.status !== null && error.status < 500 && error.code !== "bad_response") throw error;
+  // Only these refusals charged nothing. A 401 or 429 can follow a charged first attempt (the server
+  // answers them before it replays a completed purchase), so they are retried like a lost answer.
+  const refused = [400, 402, 403, 404, 422];
+  if (error.status !== null && refused.includes(error.status) && error.code !== "bad_response") {
+    throw error;
+  }
   purchase = await hs.buy("300min", {
     acknowledgeNoRefund: true,
     idempotencyKey: error.idempotencyKey,
@@ -241,7 +246,10 @@ once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(t
   minutes.
 - **Waits and fetches.** It polls the job until it is done, raises `JobFailedError` if it fails,
   and gives you a `resumeToken` if the wait times out. The job keeps running.
-- **Redacts the token** from every error, log line and `toString`.
+- **Redacts the token** from every error, log line and `toString`. The results that hand you a
+  secret (`AgentSignup.claimSecret`, `AgentClaim.token`, `RotatedToken.token`) keep it readable as a
+  field, but `console.log`, `util.inspect`, `String()` and template strings show `[redacted]` in its
+  place; `JSON.stringify` is your own export and carries the value.
 
 ## Supported formats
 

@@ -9,6 +9,7 @@ import {
   optional,
   pathId,
   positiveInt,
+  positiveIntAtMost,
   recordOf,
   str,
   timestamp,
@@ -69,6 +70,9 @@ export const JOB_LIST: Shape = objectOf<Schemas["JobList"]>({
 });
 export const JOB_ONE: Shape = JOB;
 
+/** The API clamps any part size to 8-32 MiB; a larger one would break the memory bound (concurrency x part size). */
+export const MAX_PART_BYTES: number = 32 * 1024 * 1024;
+
 const PART_URL = objectOf<Schemas["PresignedPartUrl"]>({ n: positiveInt, url });
 
 export const UPLOAD_CREATE: Shape = objectOf<Schemas["UploadCreateResponse"]>({
@@ -76,7 +80,7 @@ export const UPLOAD_CREATE: Shape = objectOf<Schemas["UploadCreateResponse"]>({
   state: str,
   upload: nullable(
     objectOf<NonNullable<Schemas["UploadCreateResponse"]["upload"]>>({
-      part_size_bytes: positiveInt,
+      part_size_bytes: positiveIntAtMost(MAX_PART_BYTES),
       total_parts: positiveInt,
       part_urls: nullable(arrayOf(PART_URL)),
       next_part_number: nullable(positiveInt),

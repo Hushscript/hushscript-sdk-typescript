@@ -4,7 +4,7 @@ import { OutcomeUnknownError, ValidationError } from "../errors.ts";
 import type { components, paths } from "../generated/schema";
 import { createTransport } from "../http/transport.ts";
 import { toMoney, type Money } from "../money.ts";
-import { registerSecret } from "../redact.ts";
+import { registerSecret, withRedactedField } from "../redact.ts";
 import { describeProblem, timestamp } from "../shape.ts";
 import { AGENT_SIGNUP } from "../shapes.ts";
 import { badResponse, readBody, readObject } from "../transcribe/common.ts";
@@ -151,13 +151,17 @@ export const agentStatic: AgentStatic = {
       "POST /v1/agent/accounts",
       AGENT_SIGNUP,
     );
-    return {
-      signupId: body.signup_id,
-      claimSecret: body.claim_secret,
-      checkoutUrl: body.checkout_url,
-      price: toMoney(body.amount, body.currency),
-      expiresAt: new Date(body.expires_at * 1000),
-    };
+    return withRedactedField(
+      "AgentSignup",
+      {
+        signupId: body.signup_id,
+        claimSecret: body.claim_secret,
+        checkoutUrl: body.checkout_url,
+        price: toMoney(body.amount, body.currency),
+        expiresAt: new Date(body.expires_at * 1000),
+      },
+      "claimSecret",
+    );
   },
 
   async claim(signupId, claimSecret, options = {}) {
@@ -177,20 +181,24 @@ export const agentStatic: AgentStatic = {
     const seconds = body?.["balance_seconds"];
     const balanceSeconds = typeof seconds === "number" && Number.isInteger(seconds) ? seconds : 0;
     const userId = body?.["user_id"];
-    return {
-      token: pat,
-      userId: typeof userId === "string" ? userId : "",
-      scopes: strings(body?.["scopes"]),
-      // A fresh account has no holds; the claim answer carries no expiry, and a follow-up read
-      // could fail after the token was shown for the only time.
-      balance: {
-        seconds: balanceSeconds,
-        minutes: Math.trunc(balanceSeconds / 60),
-        heldSeconds: 0,
-        expiresAt: null,
-        purchasesRemaining: null,
+    return withRedactedField(
+      "AgentClaim",
+      {
+        token: pat,
+        userId: typeof userId === "string" ? userId : "",
+        scopes: strings(body?.["scopes"]),
+        // A fresh account has no holds; the claim answer carries no expiry, and a follow-up read
+        // could fail after the token was shown for the only time.
+        balance: {
+          seconds: balanceSeconds,
+          minutes: Math.trunc(balanceSeconds / 60),
+          heldSeconds: 0,
+          expiresAt: null,
+          purchasesRemaining: null,
+        },
       },
-    };
+      "token",
+    );
   },
 };
 
@@ -225,11 +233,15 @@ export class AgentResource {
     }
     this.#config.setToken(pat);
     const tokenId = body?.["pat_id"];
-    return {
-      token: pat,
-      tokenId: typeof tokenId === "string" ? tokenId : "",
-      scopes: strings(body?.["scopes"]),
-      expiresAt: typeof expiresAt === "number" ? new Date(expiresAt * 1000) : null,
-    };
+    return withRedactedField(
+      "RotatedToken",
+      {
+        token: pat,
+        tokenId: typeof tokenId === "string" ? tokenId : "",
+        scopes: strings(body?.["scopes"]),
+        expiresAt: typeof expiresAt === "number" ? new Date(expiresAt * 1000) : null,
+      },
+      "token",
+    );
   }
 }

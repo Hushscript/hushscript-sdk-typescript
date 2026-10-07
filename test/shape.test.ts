@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
 import { ApiError, HushscriptError, OutcomeUnknownError, UploadError } from "../src/errors";
 import { clearSecrets, redact } from "../src/redact";
-import { describeProblem, objectOf, str, timestamp, url } from "../src/shape";
+import { describeProblem, objectOf, positiveIntAtMost, str, timestamp, url } from "../src/shape";
 import {
   BASE,
   JOB_OPTIONS,
@@ -612,6 +612,16 @@ describe("the shape combinators", () => {
     expect(timestamp(1e15)).not.toBeNull();
     expect(url("https://a.test/x")).toBeNull();
     expect(url("http://")).not.toBeNull();
+  });
+
+  it("bound a whole number from 1 up to and including the maximum", () => {
+    const shape = positiveIntAtMost(33_554_432);
+    expect(shape(1)).toBeNull();
+    expect(shape(33_554_432)).toBeNull();
+    for (const value of [0, -1, 2.5, 33_554_433, "7", null]) expect(shape(value)).not.toBeNull();
+    expect(describeProblem(shape(33_554_433) ?? { path: [], expected: "" })).toBe(
+      "expected a positive whole number up to 33554432",
+    );
   });
 
   it("never echo a value, so a body with a secret in it is not copied into an error", async () => {
