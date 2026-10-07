@@ -18,7 +18,8 @@
     "noImplicitOverride": true,
     "noPropertyAccessFromIndexSignature": true,
     "verbatimModuleSyntax": true,
-    "skipLibCheck": true
+    "skipLibCheck": true,
+    "paths": { "@hushscript/sdk": ["./src/index.ts"] }
   },
   "include": ["src", "test", "conformance", "smoke", "examples", "scripts/*.d.mts", "*.ts"]
 }

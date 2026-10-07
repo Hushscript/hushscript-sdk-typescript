@@ -1,8 +1,15 @@
 import { writeFile } from "node:fs/promises";
-import { Hushscript } from "../src/index.ts";
+import { Hushscript, HushscriptError } from "@hushscript/sdk";
 
-const hs = new Hushscript();
-const transcript = await hs.transcribe(process.argv[2] ?? "meeting.mp3");
+const source = process.argv[2] ?? "meeting.mp3";
 const out = process.argv[3] ?? "meeting.srt";
-await writeFile(out, transcript.toSRT());
-console.log(`wrote ${out}`);
+try {
+  const hs = new Hushscript();
+  const transcript = await hs.transcribe(source);
+  await writeFile(out, transcript.toSRT());
+  console.log(`wrote ${out}`);
+} catch (error) {
+  if (!(error instanceof HushscriptError)) throw error;
+  console.log(`${error.code}: ${error.hint ?? error.message}`);
+  process.exitCode = 1;
+}

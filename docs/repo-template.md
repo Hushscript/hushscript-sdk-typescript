@@ -72,8 +72,9 @@ Everything runs in containers (spec 13.1). The facts the compose file relies on:
 
 ### The mock and the conformance repository
 
-`compose.yaml` builds the mock from
-`${CONFORMANCE_CONTEXT:-https://github.com/Hushscript/hushscript-sdk-conformance.git#v0.1.0}`. Until
+`compose.yaml` builds the mock from `${CONFORMANCE_CONTEXT}`, which the justfile always sets: by
+default the git URL of the conformance repository at the tag in `package.json` `config.conformanceRef`,
+the one place the ref is pinned. Until
 the conformance repository is public and tagged, set
 `CONFORMANCE_CONTEXT=../hushscript-sdk-conformance` (a sibling checkout) in the environment of every
 `just` call. Every workflow job that builds compose services builds the mock too, so its egress allow-list carries
@@ -81,7 +82,7 @@ the conformance repository is public and tagged, set
 (the mock's base image). `hints.json` is read from `$CONFORMANCE_DIR/hints.json` when `CONFORMANCE_DIR` is set (the
 `regen` recipe mounts it read-only at `/conformance` and rewrites the variable), otherwise from
 `raw.githubusercontent.com` at the tag in `package.json` `config.conformanceRef`. The other languages keep the tag in one place of their own (a manifest
-field or a constant in the generator); it must equal the compose default.
+field or a constant in the generator); the mock's build context and `hints.json` both follow it.
 
 ### Justfile
 

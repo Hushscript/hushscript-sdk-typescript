@@ -36,8 +36,8 @@ const args = {
   "transcribe.ts": [sample],
   "export-srt.ts": [sample, join(work, "meeting.srt")],
   "batch-folder.ts": [join(work, "recordings"), join(work, "transcripts")],
-  "buy.ts": ["300min"],
-  "agent-signup.ts": ["2026-10-01"],
+  "buy.ts": ["300min", "--yes"],
+  "agent-signup.ts": ["2026-10-01", join(work, "agent-token")],
 };
 
 let failed = false;
@@ -50,7 +50,13 @@ for (const file of readdirSync("examples")
   console.log(`== ${file}`);
   const run = spawnSync(
     process.execPath,
-    ["--disable-warning=ExperimentalWarning", join("examples", file), ...(args[file] ?? [])],
+    [
+      "--disable-warning=ExperimentalWarning",
+      "--import",
+      "./scripts/examples-register.mjs",
+      join("examples", file),
+      ...(args[file] ?? []),
+    ],
     {
       stdio: "inherit",
       timeout: 120_000,

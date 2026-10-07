@@ -4,6 +4,7 @@
     "scripts/generate.mjs",
     "scripts/run-examples.mjs",
     "scripts/check-publish-files.mjs",
+    "scripts/examples-register.mjs",
     "smoke/smoke.ts",
     "examples/*.ts"
   ],

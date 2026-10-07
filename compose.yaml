@@ -46,7 +46,7 @@ services:
   mock:
     <<: *hardening
     build:
-      context: ${CONFORMANCE_CONTEXT:-https://github.com/Hushscript/hushscript-sdk-conformance.git#v0.1.0}
+      context: ${CONFORMANCE_CONTEXT:?set by the justfile}
       dockerfile: Dockerfile
     image: hushscript-sdk-conformance-mock:pinned
     mem_limit: 512m
