@@ -5,7 +5,16 @@ import { HushscriptError, PaymentMethodRequiredError } from "../errors.ts";
 import type { components, paths } from "../generated/schema";
 import { toMoney, type Money } from "../money.ts";
 import { paginate } from "../paginate.ts";
-import { badResponse, guarded, present, readObject } from "../transcribe/common.ts";
+import {
+  CARDS,
+  HOLDS,
+  LEDGER,
+  PACKS,
+  SET_DEFAULT_CARD,
+  SETUP_SESSION,
+  TRANSACTIONS,
+} from "../shapes.ts";
+import { badResponse, readBody, readObject } from "../transcribe/common.ts";
 import { invalidOption } from "../transcribe/preflight.ts";
 
 /** A minute pack as the account can see it. */
@@ -138,20 +147,31 @@ export class BillingResource {
 
   /** The minute packs this account can buy, priced in its own currency. Needs the `billing` scope. */
   async packs(): Promise<Pack[]> {
-    const { data } = await guarded(this.#api.GET("/v1/billing/packs"), "GET /v1/billing/packs");
-    return present(data, "GET /v1/billing/packs").packs.map(packOf);
+    const body = await readBody<components["schemas"]["PacksResponse"]>(
+      this.#api.GET("/v1/billing/packs", { parseAs: "text" }),
+      "GET /v1/billing/packs",
+      PACKS,
+    );
+    return body.packs.map(packOf);
   }
 
   async cards(): Promise<Cards> {
-    const { data } = await guarded(this.#api.GET("/v1/billing/cards"), "GET /v1/billing/cards");
-    const body = present(data, "GET /v1/billing/cards");
+    const body = await readBody<components["schemas"]["CardsResponse"]>(
+      this.#api.GET("/v1/billing/cards", { parseAs: "text" }),
+      "GET /v1/billing/cards",
+      CARDS,
+    );
     return { defaultId: body.default_id, cards: body.methods.map((m) => camelize(m) as Card) };
   }
 
   async setDefaultCard(cardId: string): Promise<void> {
-    await guarded(
-      this.#api.POST("/v1/billing/cards/default", { body: { payment_method_id: cardId } }),
+    await readBody(
+      this.#api.POST("/v1/billing/cards/default", {
+        body: { payment_method_id: cardId },
+        parseAs: "text",
+      }),
       "POST /v1/billing/cards/default",
+      SET_DEFAULT_CARD,
     );
   }
 
@@ -160,11 +180,15 @@ export class BillingResource {
    * the single retry after a 502 lands on the same page.
    */
   async addCardUrl(): Promise<string> {
-    const { data } = await guarded(
-      this.#api.POST("/v1/billing/setup-session", { body: { idempotency_key: randomUUID() } }),
+    const body = await readBody<components["schemas"]["SetupSessionResponse"]>(
+      this.#api.POST("/v1/billing/setup-session", {
+        body: { idempotency_key: randomUUID() },
+        parseAs: "text",
+      }),
       "POST /v1/billing/setup-session",
+      SETUP_SESSION,
     );
-    return present(data, "POST /v1/billing/setup-session").checkout_url;
+    return body.checkout_url;
   }
 
   /**
@@ -208,14 +232,15 @@ export class BillingResource {
   /** Purchases, newest first. */
   transactions(options: { signal?: AbortSignal | undefined } = {}): AsyncIterable<Transaction> {
     return paginate(async (cursor) => {
-      const { data } = await guarded(
+      const page = await readBody<components["schemas"]["TransactionsResponse"]>(
         this.#api.GET("/v1/billing/transactions", {
           params: { query: cursor === null ? {} : { cursor } },
+          parseAs: "text",
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         }),
         "GET /v1/billing/transactions",
+        TRANSACTIONS,
       );
-      const page = present(data, "GET /v1/billing/transactions");
       return {
         items: page.transactions.map(
           (row) =>
@@ -232,14 +257,15 @@ export class BillingResource {
   /** Every hold, settle, release, purchase and refund that moved the balance, newest first. */
   ledger(options: { signal?: AbortSignal | undefined } = {}): AsyncIterable<LedgerEntry> {
     return paginate(async (cursor) => {
-      const { data } = await guarded(
+      const page = await readBody<components["schemas"]["CreditLedgerResponse"]>(
         this.#api.GET("/v1/billing/ledger", {
           params: { query: cursor === null ? {} : { cursor } },
+          parseAs: "text",
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         }),
         "GET /v1/billing/ledger",
+        LEDGER,
       );
-      const page = present(data, "GET /v1/billing/ledger");
       return {
         items: page.entries.map(
           (row) =>
@@ -256,14 +282,15 @@ export class BillingResource {
   /** The seconds currently reserved by work in flight, newest first. */
   holds(options: { signal?: AbortSignal | undefined } = {}): AsyncIterable<Hold> {
     return paginate(async (cursor) => {
-      const { data } = await guarded(
+      const page = await readBody<components["schemas"]["HoldsResponse"]>(
         this.#api.GET("/v1/billing/holds", {
           params: { query: cursor === null ? {} : { cursor } },
+          parseAs: "text",
           ...(options.signal === undefined ? {} : { signal: options.signal }),
         }),
         "GET /v1/billing/holds",
+        HOLDS,
       );
-      const page = present(data, "GET /v1/billing/holds");
       return {
         items: page.holds.map(
           (row) => ({ ...(camelize(row) as Hold), createdAt: date(row.created_at) }) satisfies Hold,

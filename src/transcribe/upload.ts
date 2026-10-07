@@ -3,7 +3,8 @@ import type { ResolvedConfig } from "../config.ts";
 import { AbortError, ApiError, HushscriptError, UploadError } from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { hardenedFetch } from "../http/fetch.ts";
-import { aborted } from "./common.ts";
+import { PART_URLS } from "../shapes.ts";
+import { aborted, readBody } from "./common.ts";
 import type { Source } from "./source.ts";
 
 /** Parts of a job with no direct plan: the API's own upper bound for a proxied part. */
@@ -18,6 +19,12 @@ interface UploadPlan {
   part_urls: { n: number; url: string }[];
   next_part_number: number | null;
 }
+
+/** The part-urls answer; `null` for a job that takes proxied parts only. */
+type PartUrlsBody = {
+  part_urls: { n: number; url: string }[];
+  next_part_number?: number | null;
+} | null;
 
 export interface PartAck {
   n: number;
@@ -86,10 +93,15 @@ class PartUrls {
     const running = this.#inflight.get(start);
     if (running !== undefined) return running;
     const request = (async (): Promise<boolean> => {
-      const { data } = await this.#api.GET("/v1/uploads/{job}/part-urls", {
-        params: { path: { job: this.#jobId }, query: { start } },
-        signal: this.#signal,
-      });
+      const data = await readBody<PartUrlsBody>(
+        this.#api.GET("/v1/uploads/{job}/part-urls", {
+          params: { path: { job: this.#jobId }, query: { start } },
+          signal: this.#signal,
+          parseAs: "text",
+        }),
+        "GET /v1/uploads/{job}/part-urls",
+        PART_URLS,
+      );
       const urls = data?.part_urls ?? [];
       if (urls.length === 0) {
         this.#direct = false;
@@ -156,6 +168,25 @@ function etagOf(response: Response): string {
     });
   }
   return etag;
+}
+
+/** One part from the source; a read that fails is `source_read_failed`, which carries the key and token like any upload error. */
+async function readPart(
+  source: Source,
+  offset: number,
+  length: number,
+  signal: AbortSignal,
+): Promise<Uint8Array> {
+  try {
+    return await source.read(offset, length, signal);
+  } catch (error) {
+    if (error instanceof HushscriptError) throw error;
+    throw new UploadError({
+      code: "source_read_failed",
+      message: `Reading the input failed at byte ${String(offset)}, part way through the upload.`,
+      cause: error,
+    });
+  }
 }
 
 /**
@@ -314,7 +345,7 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
       nextPart += 1;
       if (n > totalParts) return;
       const offset = (n - 1) * partSize;
-      const bytes = await source.read(offset, partSize, signal);
+      const bytes = await readPart(source, offset, partSize, signal);
       await sendPart(n, bytes);
       sent += bytes.byteLength;
       settings.onAcked(sent);

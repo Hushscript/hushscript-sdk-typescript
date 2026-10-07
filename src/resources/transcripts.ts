@@ -2,7 +2,8 @@ import type { Client } from "openapi-fetch";
 import type { components, paths } from "../generated/schema";
 import { paginate, type Page } from "../paginate.ts";
 import { Transcript } from "../transcript.ts";
-import { present } from "../transcribe/common.ts";
+import { DELETED_LIST, TRANSCRIPT_DETAIL, TRANSCRIPT_LIST } from "../shapes.ts";
+import { readBody } from "../transcribe/common.ts";
 import { invalidOption } from "../transcribe/preflight.ts";
 
 export interface TranscriptSummary {
@@ -85,6 +86,23 @@ function deletedOf(row: components["schemas"]["DeletedTranscript"]): DeletedTran
   };
 }
 
+/** One transcript body as the API sends it, checked; the transcribe pipeline reads it the same way. */
+export function readTranscript(
+  api: Client<paths>,
+  id: string,
+  signal?: AbortSignal,
+): Promise<components["schemas"]["TranscriptDetail"]> {
+  return readBody<components["schemas"]["TranscriptDetail"]>(
+    api.GET("/v1/transcripts/{id}", {
+      params: { path: { id } },
+      parseAs: "text",
+      ...signalOf(signal),
+    }),
+    "GET /v1/transcripts/{id}",
+    TRANSCRIPT_DETAIL,
+  );
+}
+
 export class TranscriptsResource {
   readonly #api: Client<paths>;
 
@@ -103,27 +121,34 @@ export class TranscriptsResource {
 
   /** One page of `list()`. */
   async page(options: PageRequest = {}): Promise<Page<TranscriptSummary>> {
-    const { data } = await this.#api.GET("/v1/transcripts", {
-      params: { query: query(options) },
-      ...signalOf(options.signal),
-    });
-    const body = present(data, "GET /v1/transcripts");
+    const body = await readBody<components["schemas"]["TranscriptList"]>(
+      this.#api.GET("/v1/transcripts", {
+        params: { query: query(options) },
+        parseAs: "text",
+        ...signalOf(options.signal),
+      }),
+      "GET /v1/transcripts",
+      TRANSCRIPT_LIST,
+    );
     return { items: body.transcripts.map(summaryOf), nextCursor: body.next_cursor };
   }
 
   async get(id: string): Promise<Transcript> {
-    const { data } = await this.#api.GET("/v1/transcripts/{id}", { params: { path: { id } } });
-    return Transcript.fromApi(present(data, "GET /v1/transcripts/{id}"));
+    return Transcript.fromApi(await readTranscript(this.#api, id));
   }
 
   /** Deletion records, by upload time, newest first. */
   deleted(options: { signal?: AbortSignal | undefined } = {}): AsyncIterable<DeletedTranscript> {
     return paginate(async (cursor) => {
-      const { data } = await this.#api.GET("/v1/transcripts/deleted", {
-        params: { query: cursor === null ? {} : { cursor } },
-        ...signalOf(options.signal),
-      });
-      const body = present(data, "GET /v1/transcripts/deleted");
+      const body = await readBody<components["schemas"]["DeletedTranscriptsResponse"]>(
+        this.#api.GET("/v1/transcripts/deleted", {
+          params: { query: cursor === null ? {} : { cursor } },
+          parseAs: "text",
+          ...signalOf(options.signal),
+        }),
+        "GET /v1/transcripts/deleted",
+        DELETED_LIST,
+      );
       return { items: body.deleted.map(deletedOf), nextCursor: body.next_cursor };
     }, options.signal);
   }

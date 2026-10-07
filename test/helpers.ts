@@ -8,6 +8,26 @@ export const TOKEN =
   "hsr1:eu:pat.0123456789abcdef0123456789abcdef.fedcba9876543210fedcba9876543210fedcba9876543210fedcba9876543210";
 export const BASE = "http://127.0.0.1:4010";
 
+/** The `limits` object of an account answer, with every field the API sends. */
+export const LIMITS = {
+  max_daily_seconds: 36_000,
+  max_active_jobs: 50,
+  active_jobs: 0,
+  used_today_seconds: 0,
+};
+
+/** The `options` summary of a job answer, with every field the API sends. */
+export const JOB_OPTIONS = {
+  language_code: null,
+  speaker_detection: true,
+  medical_mode: false,
+  multichannel: false,
+  translation_targets: [] as string[],
+  keyterms: false,
+  prompt: false,
+  auto_generate_insights: null,
+};
+
 export interface ManualClock extends Clock {
   /** Every sleep the code under test asked for, in ms. */
   sleeps: number[];

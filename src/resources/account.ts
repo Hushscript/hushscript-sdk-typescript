@@ -1,7 +1,8 @@
 import type { Client } from "openapi-fetch";
 import type { components, paths } from "../generated/schema";
 import { camelize } from "../camel.ts";
-import { present } from "../transcribe/common.ts";
+import { ACCOUNT } from "../shapes.ts";
+import { readBody } from "../transcribe/common.ts";
 
 /** `GET /v1/account` as the API sends it; `purchases_remaining_in_window` is not in the OpenAPI schema yet. */
 export type RawAccount = components["schemas"]["AccountResponse"];
@@ -77,7 +78,10 @@ export function toBalance(raw: RawAccount): Balance {
   };
 }
 
-export async function readAccount(api: Client<paths>): Promise<RawAccount> {
-  const { data } = await api.GET("/v1/account");
-  return present(data, "GET /v1/account");
+export function readAccount(api: Client<paths>, signal?: AbortSignal): Promise<RawAccount> {
+  return readBody<RawAccount>(
+    api.GET("/v1/account", { parseAs: "text", ...(signal === undefined ? {} : { signal }) }),
+    "GET /v1/account",
+    ACCOUNT,
+  );
 }

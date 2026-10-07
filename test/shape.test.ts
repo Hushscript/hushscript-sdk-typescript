@@ -1,0 +1,486 @@
+import fc from "fast-check";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Hushscript } from "../src/client";
+import { ApiError, HushscriptError, OutcomeUnknownError } from "../src/errors";
+import { describeProblem, objectOf, str, timestamp, url } from "../src/shape";
+import {
+  BASE,
+  JOB_OPTIONS,
+  LIMITS,
+  TEST_TIMEOUT_SECONDS,
+  TOKEN,
+  fakeClock,
+  stubFetch,
+  type Step,
+} from "./helpers";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function client(): Hushscript {
+  return new Hushscript({
+    token: TOKEN,
+    baseUrl: BASE,
+    clock: fakeClock(),
+    timeout: TEST_TIMEOUT_SECONDS,
+  });
+}
+
+async function drain(items: AsyncIterable<unknown>): Promise<void> {
+  const seen: unknown[] = [];
+  for await (const item of items) seen.push(item);
+}
+
+const CARD = {
+  id: "pm_1",
+  type: "card",
+  brand: "visa",
+  last4: "4242",
+  exp_month: 12,
+  exp_year: 2099,
+  email: null,
+  is_default: true,
+  fast_checkout_eligible: true,
+};
+const CARDS = { default_id: "pm_1", methods: [CARD] };
+const JOB = {
+  id: "job_1",
+  state: "done",
+  mode: "standard",
+  declared_seconds: 21,
+  verified_seconds: 20,
+  actual_seconds: 20,
+  billable_seconds: 20,
+  error: null,
+  failure_kind: null,
+  retry_of: null,
+  created_at: 1_760_000_000,
+  transcript_id: "tr_1",
+  private_result_expires_at: null,
+  private_result_available: false,
+  options: JOB_OPTIONS,
+};
+const UTTERANCES = { utterances: [{ speaker: "A", start_ms: 0, end_ms: 900, text: "hi" }] };
+const TRANSCRIPT = {
+  id: "tr_1",
+  title: "T",
+  language_detected: "en",
+  duration_seconds: 20,
+  speaker_names: { A: "Ana" },
+  tags: ["a"],
+  created_at: 1_760_000_000,
+  updated_at: 1_760_000_100,
+  auto_delete_at: null,
+  edited: false,
+  body: { version: 1, original: UTTERANCES, translations: { es: UTTERANCES } },
+};
+
+interface Case {
+  name: string;
+  valid: unknown;
+  /** One path whose value, replaced by an object, is the wrong type. */
+  wrong: (string | number)[];
+  run: (hs: Hushscript) => Promise<unknown>;
+  /** The requests the call makes; the answer under test is the last one. */
+  steps?: (answer: Step) => Step[];
+  /** The error a call raises for an unusable answer, where it is not a `bad_response` itself. */
+  lost?: boolean;
+}
+
+const CASES: Case[] = [
+  {
+    name: "hs.account",
+    valid: {
+      balance_seconds: 60,
+      held_seconds: 0,
+      credits_expire_at: 1_760_000_000,
+      card_on_file: true,
+      data_region: "eu",
+      limits: LIMITS,
+    },
+    wrong: ["limits", "max_daily_seconds"],
+    run: (hs) => hs.account(),
+  },
+  {
+    name: "hs.balance",
+    valid: {
+      balance_seconds: 60,
+      held_seconds: 0,
+      credits_expire_at: null,
+      card_on_file: true,
+      data_region: "eu",
+      limits: LIMITS,
+    },
+    wrong: ["balance_seconds"],
+    run: (hs) => hs.balance(),
+  },
+  {
+    name: "billing.packs",
+    valid: {
+      packs: [
+        { id: "300min", amount: 599, currency: "USD", seconds: 18_000, referral_bonus_seconds: 0 },
+      ],
+    },
+    wrong: ["packs", 0, "amount"],
+    run: (hs) => hs.billing.packs(),
+  },
+  {
+    name: "billing.cards",
+    valid: CARDS,
+    wrong: ["methods", 0, "fast_checkout_eligible"],
+    run: (hs) => hs.billing.cards(),
+  },
+  {
+    name: "billing.setDefaultCard",
+    valid: { ok: true },
+    wrong: ["ok"],
+    run: (hs) => hs.billing.setDefaultCard("pm_1"),
+  },
+  {
+    name: "billing.addCardUrl",
+    valid: {
+      checkout_url: "https://pay.example/c/1",
+      session_id: "cs_1",
+      expires_at: 1_760_000_000,
+    },
+    wrong: ["checkout_url"],
+    run: (hs) => hs.billing.addCardUrl(),
+  },
+  {
+    name: "billing.buy",
+    valid: { status: "ok", balance_seconds: 18_000 },
+    wrong: ["balance_seconds"],
+    steps: (answer) => [{ status: 200, body: CARDS }, answer],
+    run: (hs) => hs.buy("300min"),
+  },
+  {
+    name: "billing.transactions",
+    valid: {
+      transactions: [
+        {
+          id: 1,
+          seconds: 18_000,
+          amount_cents: 599,
+          amount_refunded_cents: 0,
+          currency: "usd",
+          status: "paid",
+          created_at: 1_760_000_000,
+          payment_method_type: "card",
+          payment_method_brand: "visa",
+          payment_method_last4: "4242",
+          receipt_number: "R-1",
+          initiated_via: "api",
+        },
+      ],
+      next_cursor: null,
+      account_reference: "acc",
+    },
+    wrong: ["transactions", 0, "created_at"],
+    run: (hs) => drain(hs.billing.transactions()),
+  },
+  {
+    name: "billing.ledger",
+    valid: {
+      entries: [
+        {
+          id: 1,
+          delta_seconds: -60,
+          kind: "settle",
+          job_id: "job_1",
+          note: null,
+          created_at: 1_760_000_000,
+        },
+      ],
+      next_cursor: null,
+    },
+    wrong: ["entries", 0, "delta_seconds"],
+    run: (hs) => drain(hs.billing.ledger()),
+  },
+  {
+    name: "billing.holds",
+    valid: {
+      holds: [{ id: "h1", kind: "transcription", seconds: 60, created_at: 1_760_000_000 }],
+      next_cursor: null,
+    },
+    wrong: ["holds", 0, "seconds"],
+    run: (hs) => drain(hs.billing.holds()),
+  },
+  {
+    name: "jobs.list",
+    valid: { jobs: [JOB], next_cursor: null },
+    wrong: ["jobs", 0, "options", "keyterms"],
+    run: (hs) => drain(hs.jobs.list()),
+  },
+  {
+    name: "jobs.get",
+    valid: JOB,
+    wrong: ["state"],
+    run: (hs) => hs.jobs.get("job_1"),
+  },
+  {
+    name: "transcripts.page",
+    valid: {
+      transcripts: [
+        {
+          id: "tr_1",
+          title: "T",
+          language_detected: null,
+          duration_seconds: 30,
+          created_at: 1_760_000_000,
+          auto_delete_at: null,
+          tags: ["a"],
+          options: JOB_OPTIONS,
+          insights_state: "none",
+        },
+      ],
+      next_cursor: null,
+    },
+    wrong: ["transcripts", 0, "tags"],
+    run: (hs) => hs.transcripts.page(),
+  },
+  {
+    name: "transcripts.get",
+    valid: TRANSCRIPT,
+    wrong: ["body", "original", "utterances", 0, "text"],
+    run: (hs) => hs.transcripts.get("tr_1"),
+  },
+  {
+    name: "transcripts.deleted",
+    valid: {
+      deleted: [
+        {
+          id: "tr_1",
+          title: "T",
+          duration_seconds: 30,
+          created_at: 1_760_000_000,
+          deleted_at: 1_760_000_500,
+          cause: "manual",
+          receipt: { type: "r", items: [] },
+        },
+      ],
+      next_cursor: null,
+    },
+    wrong: ["deleted", 0, "deleted_at"],
+    run: (hs) => drain(hs.transcripts.deleted()),
+  },
+  {
+    name: "agent.signup",
+    valid: {
+      signup_id: "hsr1:eu:abc",
+      claim_secret: "cs_1",
+      checkout_url: "https://pay.example/c/1",
+      pack: "45min",
+      amount: 599,
+      currency: "USD",
+      expires_at: 1_760_000_000,
+    },
+    wrong: ["amount"],
+    run: () =>
+      Hushscript.agent.signup({
+        email: "a@example.com",
+        pack: "45min",
+        acceptTerms: "v1",
+        agent: { name: "x", platform: "y" },
+        baseUrl: BASE,
+      }),
+  },
+  {
+    name: "agent.claim",
+    valid: {
+      user_id: "usr_1",
+      pat: "hsr1:eu:claimed-token-0123456789",
+      scopes: ["account:read"],
+      balance_seconds: 2700,
+    },
+    wrong: ["pat"],
+    lost: true,
+    run: () => Hushscript.agent.claim("hsr1:eu:abc", "cs_1", { baseUrl: BASE }),
+  },
+  {
+    name: "agent.rotateToken",
+    valid: {
+      pat: "hsr1:eu:rotated-token-0123456789",
+      pat_id: "pat_2",
+      scopes: ["account:read"],
+      expires_at: 1_800_000_000,
+    },
+    wrong: ["pat"],
+    lost: true,
+    run: (hs) => hs.agent.rotateToken(),
+  },
+];
+
+function stepsFor(testCase: Case, answer: Step): Step[] {
+  return testCase.steps?.(answer) ?? [answer];
+}
+
+function withAt(value: unknown, path: (string | number)[], replacement: unknown): unknown {
+  const [head, ...rest] = path;
+  if (head === undefined) return replacement;
+  const copy: unknown = structuredClone(value);
+  const holder = copy as Record<string | number, unknown>;
+  holder[head] = withAt(holder[head], rest, replacement);
+  return copy;
+}
+
+function withoutAt(value: unknown, path: (string | number)[]): unknown {
+  const copy: unknown = structuredClone(value);
+  const parent = path
+    .slice(0, -1)
+    .reduce<unknown>((at, key) => (at as Record<string | number, unknown>)[key], copy);
+  const last = path.at(-1);
+  if (last !== undefined) Reflect.deleteProperty(parent as object, last);
+  return copy;
+}
+
+function allPaths(value: unknown, prefix: (string | number)[] = []): (string | number)[][] {
+  if (typeof value !== "object" || value === null) return [];
+  return Object.entries(value).flatMap(([key, item]) => {
+    const path = [...prefix, Array.isArray(value) ? Number(key) : key];
+    return [path, ...allPaths(item, path)];
+  });
+}
+
+async function outcome(testCase: Case, answer: Step): Promise<unknown> {
+  stubFetch(stepsFor(testCase, answer));
+  return testCase.run(client()).then(
+    () => null,
+    (error: unknown) => error,
+  );
+}
+
+function expectBadResponse(testCase: Case, error: unknown): void {
+  if (testCase.lost === true) {
+    // A lost credential: the cause is a redacted copy of the bad_response.
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).cause).toMatchObject({
+      name: "ApiError",
+      code: "bad_response",
+    });
+    return;
+  }
+  expect(error).toBeInstanceOf(ApiError);
+  expect(error).toMatchObject({ code: "bad_response", status: 200, numericCode: null });
+}
+
+describe("every body the friendly layer maps", () => {
+  it.each(CASES)("$name answers a valid body", async (testCase) => {
+    expect(await outcome(testCase, { status: 200, body: testCase.valid })).toBeNull();
+  });
+
+  it.each(CASES)("$name raises bad_response for {}", async (testCase) => {
+    expectBadResponse(testCase, await outcome(testCase, { status: 200, body: {} }));
+  });
+
+  it.each(CASES)("$name raises bad_response for a wrong-typed field", async (testCase) => {
+    const body = withAt(testCase.valid, testCase.wrong, { not: "that" });
+    expectBadResponse(testCase, await outcome(testCase, { status: 200, body }));
+  });
+
+  it.each(CASES)("$name raises bad_response for a body that is not JSON", async (testCase) => {
+    expectBadResponse(testCase, await outcome(testCase, { status: 200, text: "<html></html>" }));
+  });
+
+  it.each(CASES)("$name raises bad_response for JSON null and an array", async (testCase) => {
+    expectBadResponse(testCase, await outcome(testCase, { status: 200, text: "null" }));
+    expectBadResponse(testCase, await outcome(testCase, { status: 200, body: [] }));
+  });
+
+  it.each(CASES)("$name raises bad_response when any one field is missing", async (testCase) => {
+    const missing = allPaths(testCase.valid).filter((path) => path.length === 1);
+    expect(missing.length).toBeGreaterThan(0);
+    for (const path of missing) {
+      const answer: Step = { status: 200, body: withoutAt(testCase.valid, path) };
+      const error = await outcome(testCase, answer);
+      // A field the SDK does not read may be missing; every other one must say so.
+      if (error !== null) expectBadResponse(testCase, error);
+    }
+  });
+
+  it("raises nothing but SDK errors for a random JSON object, whichever call reads it", async () => {
+    await fc.assert(
+      fc.asyncProperty(fc.constantFrom(...CASES), fc.jsonValue(), async (testCase, body) => {
+        const error = await outcome(testCase, { status: 200, body });
+        if (error !== null) expect(error).toBeInstanceOf(HushscriptError);
+      }),
+      { numRuns: 200 },
+    );
+  });
+
+  it("raises nothing but SDK errors when one field of a valid body is deleted or replaced", async () => {
+    const mutated = fc.constantFrom(...CASES).chain((testCase) =>
+      fc
+        .tuple(fc.constantFrom(...allPaths(testCase.valid)), fc.boolean(), fc.jsonValue())
+        .map(([path, drop, junk]) => ({
+          testCase,
+          body: drop ? withoutAt(testCase.valid, path) : withAt(testCase.valid, path, junk),
+        })),
+    );
+    await fc.assert(
+      fc.asyncProperty(mutated, async ({ testCase, body }) => {
+        const error = await outcome(testCase, { status: 200, body });
+        if (error !== null) expect(error).toBeInstanceOf(HushscriptError);
+      }),
+      { numRuns: 600 },
+    );
+  });
+});
+
+describe("a response with a currency the SDK cannot format", () => {
+  it("still answers packs, with the plain amount and code", async () => {
+    stubFetch([
+      {
+        status: 200,
+        body: {
+          packs: [
+            {
+              id: "45min",
+              amount: 599,
+              currency: "ZZZZ",
+              seconds: 2700,
+              referral_bonus_seconds: 0,
+            },
+          ],
+        },
+      },
+    ]);
+    const [pack] = await client().billing.packs();
+    expect(pack?.price).toEqual({ amount: 599, currency: "ZZZZ", formatted: "5.99 ZZZZ" });
+  });
+});
+
+describe("the shape combinators", () => {
+  it("name the path and what was expected", () => {
+    const shape = objectOf<{ a: unknown }>({
+      a: objectOf<{ b: unknown }>({ b: str }),
+    });
+    const found = shape({ a: { b: 1 } });
+    expect(found).not.toBeNull();
+    expect(describeProblem(found ?? { path: [], expected: "" })).toBe("a.b: expected a string");
+    expect(describeProblem({ path: [], expected: "an object" })).toBe("expected an object");
+    expect(describeProblem({ path: ["rows", 2, "id"], expected: "a string" })).toBe(
+      "rows[2].id: expected a string",
+    );
+  });
+
+  it("accept an out-of-range time and a URL that cannot be parsed only as failures", () => {
+    expect(timestamp(1_760_000_000)).toBeNull();
+    expect(timestamp(1e15)).not.toBeNull();
+    expect(url("https://a.test/x")).toBeNull();
+    expect(url("http://")).not.toBeNull();
+  });
+
+  it("never echo a value, so a body with a secret in it is not copied into an error", async () => {
+    const secret = "secret-value-that-must-not-leak";
+    stubFetch([{ status: 200, body: { packs: [{ id: secret, amount: secret }] } }]);
+    const error: unknown = await client()
+      .billing.packs()
+      .catch((e: unknown) => e);
+    const text = JSON.stringify([
+      (error as Error).message,
+      ((error as Error).cause as Error).message,
+    ]);
+    expect(text).not.toContain(secret);
+  });
+});

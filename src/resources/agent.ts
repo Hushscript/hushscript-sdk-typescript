@@ -1,11 +1,12 @@
 import createClient, { type Client } from "openapi-fetch";
-import { resolveTokenlessConfig, type ResolvedConfig } from "../config.ts";
+import { checkToken, resolveTokenlessConfig, type ResolvedConfig } from "../config.ts";
 import { OutcomeUnknownError, ValidationError } from "../errors.ts";
-import type { paths } from "../generated/schema";
+import type { components, paths } from "../generated/schema";
 import { createTransport } from "../http/transport.ts";
 import { toMoney, type Money } from "../money.ts";
 import { registerSecret } from "../redact.ts";
-import { badResponse, guarded, present, readObject } from "../transcribe/common.ts";
+import { AGENT_SIGNUP } from "../shapes.ts";
+import { badResponse, readBody, readObject } from "../transcribe/common.ts";
 import type { Balance } from "./account.ts";
 
 export interface AgentSignupRequest {
@@ -65,12 +66,36 @@ const CLAIM_ROUTE = "POST /v1/agent/accounts/{signup_id}/claim";
 const ROTATE_ROUTE = "POST /v1/agent/credentials/rotate";
 
 /** The answer was a 2xx but carried no token: the credential was minted and is lost, like a lost response. */
-function lostCredential(route: string, status: number, cause?: unknown): OutcomeUnknownError {
+function lostCredential(
+  route: string,
+  status: number,
+  received?: string,
+  cause?: unknown,
+): OutcomeUnknownError {
   return new OutcomeUnknownError({
     message: `${route} answered ${String(status)} without a usable token, so the token may be lost.`,
     hint: OutcomeUnknownError.hintFor(route),
     cause: badResponse(route, status, cause),
+    ...(received === undefined ? {} : { receivedToken: received }),
   });
+}
+
+/** The token a claim or rotate answer carries, checked like any token; anything else is a lost credential. */
+function tokenOf(
+  body: Record<string, unknown> | null,
+  route: string,
+  status: number,
+  keepReceived: boolean,
+): string {
+  const pat = body?.["pat"];
+  if (typeof pat !== "string") throw lostCredential(route, status);
+  // Remembered so it is redacted from whatever is printed, even when it is not a valid token.
+  if (!/\s/u.test(pat)) registerSecret(pat);
+  try {
+    return checkToken(pat);
+  } catch (error) {
+    throw lostCredential(route, status, keepReceived ? pat : undefined, error);
+  }
 }
 
 function strings(value: unknown): string[] {
@@ -102,7 +127,7 @@ export const agentStatic: AgentStatic = {
       });
     }
     const api = tokenlessApi(request.baseUrl);
-    const { data } = await guarded(
+    const body = await readBody<components["schemas"]["AgentSignupResponse"]>(
       api.POST("/v1/agent/accounts", {
         body: {
           contact_email: request.email,
@@ -118,10 +143,11 @@ export const agentStatic: AgentStatic = {
           ...(request.dataRegion === undefined ? {} : { data_region: request.dataRegion }),
           ...(request.dryRun === undefined ? {} : { dry_run: request.dryRun }),
         },
+        parseAs: "text",
       }),
       "POST /v1/agent/accounts",
+      AGENT_SIGNUP,
     );
-    const body = present(data, "POST /v1/agent/accounts");
     return {
       signupId: body.signup_id,
       claimSecret: body.claim_secret,
@@ -143,9 +169,7 @@ export const agentStatic: AgentStatic = {
       }),
       CLAIM_ROUTE,
     );
-    const pat = body?.["pat"];
-    if (typeof pat !== "string" || pat === "") throw lostCredential(CLAIM_ROUTE, status);
-    registerSecret(pat);
+    const pat = tokenOf(body, CLAIM_ROUTE, status, false);
     const seconds = body?.["balance_seconds"];
     const balanceSeconds = typeof seconds === "number" && Number.isInteger(seconds) ? seconds : 0;
     const userId = body?.["user_id"];
@@ -185,14 +209,8 @@ export class AgentResource {
       this.#api.POST("/v1/agent/credentials/rotate", { parseAs: "text" }),
       ROTATE_ROUTE,
     );
-    const pat = body?.["pat"];
-    if (typeof pat !== "string" || pat === "") throw lostCredential(ROTATE_ROUTE, status);
-    registerSecret(pat);
-    try {
-      this.#config.setToken(pat);
-    } catch (error) {
-      throw lostCredential(ROTATE_ROUTE, status, error);
-    }
+    const pat = tokenOf(body, ROTATE_ROUTE, status, true);
+    this.#config.setToken(pat);
     const tokenId = body?.["pat_id"];
     const expiresAt = body?.["expires_at"];
     return {

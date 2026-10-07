@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
 import { AbortError, AuthenticationError, HushscriptError } from "../src/errors";
-import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, stubFetch } from "./helpers";
+import { BASE, JOB_OPTIONS, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, stubFetch } from "./helpers";
 
 afterEach(() => {
   vi.unstubAllGlobals();
@@ -213,7 +213,7 @@ function job(
     transcript_id: null,
     private_result_expires_at: null,
     private_result_available: false,
-    options: {},
+    options: JOB_OPTIONS,
     ...extra,
   };
 }
