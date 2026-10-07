@@ -3,12 +3,12 @@ import type { ResolvedConfig } from "../config.ts";
 import { AbortError, ApiError, HushscriptError, UploadError } from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { hardenedFetch } from "../http/fetch.ts";
-import { PART_URLS } from "../shapes.ts";
+import { MAX_PART_BYTES, PART_URLS } from "../shapes.ts";
 import { aborted, readBody } from "./common.ts";
 import type { Source } from "./source.ts";
 
 /** Parts of a job with no direct plan: the API's own upper bound for a proxied part. */
-const PROXIED_PART_BYTES = 32 * 1024 * 1024;
+const PROXIED_PART_BYTES = MAX_PART_BYTES;
 /** Presigned URLs live 24 h; a page older than this is fetched again. */
 const URL_MAX_AGE_MS = 23 * 3600 * 1000;
 

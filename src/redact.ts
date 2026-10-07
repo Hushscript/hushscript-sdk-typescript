@@ -1,3 +1,5 @@
+import { inspect } from "node:util";
+
 export const REDACTED = "hsr…[redacted]";
 
 const TOKEN_SHAPE = /hsr\d+:[a-z]+:pat\.[0-9a-f]+\.[0-9a-f]+/g;
@@ -60,4 +62,18 @@ export function redactCause(cause: unknown): unknown {
   if (typeof code === "string") Object.assign(copy, { code });
   if (cause.cause !== undefined) copy.cause = redactCause(cause.cause);
   return copy;
+}
+
+/**
+ * Keeps `field` readable on a result that hands the caller a secret, but prints it as REDACTED in
+ * `inspect`, `console.log`, `String()` and template strings. `JSON.stringify` still carries it: that
+ * is the caller's own export. Both hooks are non-enumerable, so equality and spreads ignore them.
+ */
+export function withRedactedField<T extends object>(name: string, value: T, field: keyof T): T {
+  const printable = (): object => ({ ...value, [field]: REDACTED });
+  Object.defineProperty(value, inspect.custom, { value: printable });
+  Object.defineProperty(value, "toString", {
+    value: () => `${name} ${JSON.stringify(printable())}`,
+  });
+  return value;
 }

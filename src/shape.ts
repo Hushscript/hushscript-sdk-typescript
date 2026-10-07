@@ -29,6 +29,13 @@ export const num: Shape = (value) =>
 /** A count or a 1-based number: a whole number above zero. */
 export const positiveInt: Shape = (value) =>
   Number.isSafeInteger(value) && (value as number) > 0 ? null : problem("a positive whole number");
+/** A whole number from 1 up to and including `max`. */
+export function positiveIntAtMost(max: number): Shape {
+  return (value) =>
+    Number.isSafeInteger(value) && (value as number) > 0 && (value as number) <= max
+      ? null
+      : problem(`a positive whole number up to ${String(max)}`);
+}
 /** Whether `value` can stand as one URL path segment: a non-empty string that is not "." or "..", with no lone surrogate. */
 export function isPathSegment(value: unknown): value is string {
   // With the u flag a surrogate pair is one code point, so this only matches an unpaired one.

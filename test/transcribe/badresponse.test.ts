@@ -110,6 +110,11 @@ describe("a 2xx answer that does not fit its shape, at each call site that reads
 
   it.each([
     ["a part size of zero", { ...CREATE, upload: { ...CREATE.upload, part_size_bytes: 0 } }],
+    [
+      "a part size above 32 MiB",
+      { ...CREATE, upload: { ...CREATE.upload, part_size_bytes: 33_554_433 } },
+    ],
+    ["a part count of zero", { ...CREATE, upload: { ...CREATE.upload, total_parts: 0 } }],
     ["a fractional part count", { ...CREATE, upload: { ...CREATE.upload, total_parts: 2.5 } }],
   ])("raises bad_response when the create answers %s", async (_name, body) => {
     const { hs, run } = setup({ hooks: { create: answered(body) } });

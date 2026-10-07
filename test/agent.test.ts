@@ -448,3 +448,104 @@ describe("hs.agent.rotateToken", () => {
     ]);
   });
 });
+
+describe("results that hand the caller a secret", () => {
+  const SIGNUP_ANSWER = {
+    signup_id: "hsr1:eu:abc",
+    claim_secret: "cs_secret_value_0123456789",
+    checkout_url: "https://checkout.example.com/pay/abc",
+    pack: "45min",
+    amount: 599,
+    currency: "USD",
+    expires_at: 1_760_001_800,
+  };
+  const CLAIM_ANSWER = {
+    user_id: "usr_1",
+    pat: CLAIMED_TOKEN,
+    scopes: ["account:read"],
+    balance_seconds: 2700,
+  };
+  const ROTATE_ANSWER = { pat: NEW_TOKEN, pat_id: "pat_2", scopes: ["account:read"] };
+
+  const cases: [string, string, string, () => Promise<object>][] = [
+    [
+      "AgentSignup",
+      "claimSecret",
+      SIGNUP_ANSWER.claim_secret,
+      async () => {
+        stubFetch([{ status: 200, body: SIGNUP_ANSWER }]);
+        return Hushscript.agent.signup({ ...SIGNUP, baseUrl: BASE });
+      },
+    ],
+    [
+      "AgentClaim",
+      "token",
+      CLAIMED_TOKEN,
+      async () => {
+        stubFetch([{ status: 200, body: CLAIM_ANSWER }]);
+        return Hushscript.agent.claim("sg_1", "cs_secret", { baseUrl: BASE });
+      },
+    ],
+    [
+      "RotatedToken",
+      "token",
+      NEW_TOKEN,
+      async () => {
+        stubFetch([{ status: 200, body: ROTATE_ANSWER }]);
+        return client().agent.rotateToken();
+      },
+    ],
+  ];
+
+  describe.each(cases)("%s", (name, field, secret, make) => {
+    it("keeps the secret readable as a field and in JSON.stringify", async () => {
+      const result = await make();
+      expect((result as Record<string, unknown>)[field]).toBe(secret);
+      expect(JSON.parse(JSON.stringify(result)) as Record<string, unknown>).toHaveProperty(
+        field,
+        secret,
+      );
+    });
+
+    it("shows [redacted] in its place for inspect at any depth and console.log", async () => {
+      const result = await make();
+      for (const printed of [
+        inspect(result),
+        inspect({ outer: { result } }, { depth: 4 }),
+        inspect([result], { depth: 0 }),
+        inspect(result, { depth: 0 }),
+      ]) {
+        expect(printed).not.toContain(secret);
+      }
+      expect(inspect(result)).toContain(`${field}: '${REDACTED}'`);
+      expect(inspect({ outer: { result } }, { depth: 4 })).toContain(`${field}: '${REDACTED}'`);
+      const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+      console.log(result);
+      console.log("%s and %o and %j", result, result, "x");
+      const lines = log.mock.calls.flat().map(String);
+      log.mockRestore();
+      expect(lines.join("\n")).not.toContain(secret);
+      expect(lines.join("\n")).toContain(REDACTED);
+    });
+
+    it("shows [redacted] in String() and template strings", async () => {
+      const result = await make();
+      /* eslint-disable @typescript-eslint/no-base-to-string -- the result defines its own toString */
+      const printedForms = [String(result), `<${result as unknown as string}>`];
+      /* eslint-enable @typescript-eslint/no-base-to-string */
+      for (const printed of printedForms) {
+        expect(printed).not.toContain(secret);
+        expect(printed).toContain(name);
+        expect(printed).toContain(REDACTED);
+      }
+    });
+
+    it("leaves the hooks out of the keys, so spreads and equality ignore them", async () => {
+      const result = await make();
+      expect(Object.keys(result)).toContain(field);
+      expect(Object.keys(result)).not.toContain("toString");
+      expect(Object.prototype.propertyIsEnumerable.call(result, inspect.custom)).toBe(false);
+      expect(Object.keys({ ...result })).toEqual(Object.keys(result));
+    });
+  });
+});

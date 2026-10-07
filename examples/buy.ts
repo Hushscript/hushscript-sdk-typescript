@@ -6,6 +6,8 @@
 import { createInterface } from "node:readline/promises";
 import { Hushscript, HushscriptError } from "@hushscript/sdk";
 
+const REFUSALS = new Set([400, 402, 403, 404, 422]);
+
 const [pack, ...flags] = process.argv.slice(2);
 const keyAt = flags.indexOf("--key");
 const retryKey = keyAt === -1 ? undefined : flags[keyAt + 1];
@@ -58,9 +60,13 @@ try {
 } catch (error) {
   if (!(error instanceof HushscriptError)) throw error;
   console.log(`${error.code}: ${error.hint ?? error.message}`);
-  // A refusal (4xx) charged nothing. A 5xx, a lost answer or a body the SDK could not use may have:
-  // run it again with this key and it cannot charge twice.
-  const refused = error.status !== null && error.status < 500 && error.code !== "bad_response";
+  // Only an answer the server decides from the request alone (400, 403, 404, 422) or reaches after its
+  // completed-purchase replay (402) charged nothing. A 401 or 429 is answered before that replay, so
+  // after the SDK's one retry it can follow a first attempt that did charge; so can a 408, a 409, a
+  // 5xx, a lost answer or a body the SDK could not use. Run those again with this key and it cannot
+  // charge twice.
+  const refused =
+    error.status !== null && REFUSALS.has(error.status) && error.code !== "bad_response";
   if (error.idempotencyKey !== null && !refused) {
     console.log(`The card may have been charged. Retry with: --key ${error.idempotencyKey}`);
   }
