@@ -1,10 +1,11 @@
 import type { Client } from "openapi-fetch";
 import type { components, paths } from "../generated/schema";
 import { camelize } from "../camel.ts";
-import { paginate } from "../paginate.ts";
+import { nextCursorOf, paginate } from "../paginate.ts";
 import { JOB_LIST } from "../shapes.ts";
 import { readBody } from "../transcribe/common.ts";
 import type { JobWaitOptions } from "../transcribe/index.ts";
+import { checkPathId } from "../transcribe/preflight.ts";
 import { readJob, type RawJob } from "../transcribe/wait.ts";
 
 export type JobState = "uploading" | "fetching" | "queued" | "processing" | "done" | "failed";
@@ -89,16 +90,16 @@ export class JobsResource {
         "GET /v1/jobs",
         JOB_LIST,
       );
-      return { items: page.jobs.map(toJob), nextCursor: page.next_cursor };
+      return { items: page.jobs.map(toJob), nextCursor: nextCursorOf(page.next_cursor) };
     }, signal);
   }
 
   async get(id: string): Promise<Job> {
-    return toJob(await readJob(this.#api, id));
+    return toJob(await readJob(this.#api, checkPathId(id, "id")));
   }
 
   /** Polls until the job is done or failed; times out with a `WaitTimeoutError` that has no resume token. */
   async wait(id: string, options?: JobWaitOptions): Promise<Job> {
-    return toJob(await this.#wait(id, options));
+    return toJob(await this.#wait(checkPathId(id, "id"), options));
   }
 }

@@ -35,6 +35,39 @@ describe("redact", () => {
     expect(redact("abc abc")).toBe("abc abc");
   });
 
+  it("redacts an echo of only the secret segment, or of id and secret, of a registered token", () => {
+    const secretSegment = "c0ffee".repeat(10);
+    const idAndSecret = `${"ab12".repeat(4)}.${secretSegment}`;
+    registerSecret(`hsr1:eu:pat.${idAndSecret}`);
+    for (const text of [
+      `denied for ${secretSegment}.`,
+      `denied for ${idAndSecret}.`,
+      `{"detail":"${secretSegment}"}`,
+      `?t=${encodeURIComponent(secretSegment)}`,
+    ]) {
+      const out = redact(text);
+      expect(out, text).not.toContain(secretSegment);
+      expect(out, text).toContain(REDACTED);
+    }
+  });
+
+  it("keeps redacting the secret segment of a token a rotation replaced", () => {
+    const first = "a1b2c3".repeat(8);
+    const second = "d4e5f6".repeat(8);
+    registerSecret(`hsr1:eu:pat.${"11".repeat(8)}.${first}`);
+    registerSecret(`hsr1:eu:pat.${"22".repeat(8)}.${second}`);
+    const out = redact(`old ${first} new ${second}`);
+    expect(out).toBe(`old ${REDACTED} new ${REDACTED}`);
+  });
+
+  it("leaves a short secret segment alone, and still redacts the whole token", () => {
+    const token = "hsr1:eu:pat.abcd.shortsec";
+    registerSecret(token);
+    expect(redact("a shortsec in text")).toBe("a shortsec in text");
+    expect(redact("abcd.shortsec")).toBe("abcd.shortsec");
+    expect(redact(`token ${token}`)).toBe(`token ${REDACTED}`);
+  });
+
   it("walks values: strings, arrays, objects", () => {
     const value = { a: TOKEN, b: [TOKEN, 1, null, true], c: { d: `x ${TOKEN}` }, n: 3 };
     expect(redactValue(value)).toEqual({

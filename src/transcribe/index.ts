@@ -1,7 +1,13 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "openapi-fetch";
 import type { ResolvedConfig } from "../config.ts";
-import { AbortError, HushscriptError, NotFoundError, UploadError } from "../errors.ts";
+import {
+  AbortError,
+  HushscriptError,
+  NotFoundError,
+  UploadError,
+  asHushscriptError,
+} from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { Transcript } from "../transcript.ts";
 import { UPLOAD_COMPLETE, UPLOAD_CREATE } from "../shapes.ts";
@@ -256,7 +262,9 @@ export class Pipeline {
           cause: error,
           resumeToken: token,
         })
-      : error;
+      : key === null
+        ? error
+        : asHushscriptError(error);
     if (key !== null && out instanceof HushscriptError) {
       out.idempotencyKey = key;
       out.resumeToken ??= token;

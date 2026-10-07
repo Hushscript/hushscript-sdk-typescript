@@ -7,6 +7,11 @@ export interface Page<T> {
   nextCursor: string | null;
 }
 
+/** A page's `next_cursor` as the SDK hands it on: null and the empty string both mean the last page. */
+export function nextCursorOf(cursor: string | null): string | null {
+  return cursor === "" ? null : cursor;
+}
+
 // A function call, so the compiler does not carry an earlier `signal.aborted` check into the loop.
 function stopIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) throw aborted(signal);
@@ -31,7 +36,7 @@ export async function* paginate<T>(
       stopIfAborted(signal);
       yield item;
     }
-    cursor = page.nextCursor;
+    cursor = nextCursorOf(page.nextCursor);
     if (cursor !== null && cursor === sent) {
       throw new HushscriptError({
         code: "pagination_loop",

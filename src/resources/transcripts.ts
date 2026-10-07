@@ -1,10 +1,10 @@
 import type { Client } from "openapi-fetch";
 import type { components, paths } from "../generated/schema";
-import { paginate, type Page } from "../paginate.ts";
+import { nextCursorOf, paginate, type Page } from "../paginate.ts";
 import { Transcript } from "../transcript.ts";
 import { DELETED_LIST, TRANSCRIPT_DETAIL, TRANSCRIPT_LIST } from "../shapes.ts";
 import { readBody } from "../transcribe/common.ts";
-import { invalidOption } from "../transcribe/preflight.ts";
+import { checkPathId, invalidOption } from "../transcribe/preflight.ts";
 
 export interface TranscriptSummary {
   id: string;
@@ -130,11 +130,11 @@ export class TranscriptsResource {
       "GET /v1/transcripts",
       TRANSCRIPT_LIST,
     );
-    return { items: body.transcripts.map(summaryOf), nextCursor: body.next_cursor };
+    return { items: body.transcripts.map(summaryOf), nextCursor: nextCursorOf(body.next_cursor) };
   }
 
   async get(id: string): Promise<Transcript> {
-    return Transcript.fromApi(await readTranscript(this.#api, id));
+    return Transcript.fromApi(await readTranscript(this.#api, checkPathId(id, "id")));
   }
 
   /** Deletion records, by upload time, newest first. */
@@ -149,7 +149,7 @@ export class TranscriptsResource {
         "GET /v1/transcripts/deleted",
         DELETED_LIST,
       );
-      return { items: body.deleted.map(deletedOf), nextCursor: body.next_cursor };
+      return { items: body.deleted.map(deletedOf), nextCursor: nextCursorOf(body.next_cursor) };
     }, options.signal);
   }
 }

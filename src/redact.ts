@@ -3,12 +3,27 @@ export const REDACTED = "hsr…[redacted]";
 const TOKEN_SHAPE = /hsr\d+:[a-z]+:pat\.[0-9a-f]+\.[0-9a-f]+/g;
 // Shorter than any real token; keeps a stray tiny string from turning every message into noise.
 const MIN_SECRET_LENGTH = 8;
+// A fragment of a token (what follows "pat.", or the secret after the last dot) is redacted only when
+// it is long enough not to turn an ordinary short substring into noise.
+const MIN_SECRET_TAIL = 16;
 
 const secrets = new Set<string>();
 
 /** Remembers a token verbatim, so it is redacted even if the token format changes. */
 export function registerSecret(secret: string): void {
   if (secret.length < MIN_SECRET_LENGTH) return;
+  remember(secret);
+  // An API that echoes only what follows "pat." (the id and the secret), or only the secret after
+  // the last dot, leaks the token as much as the whole string does.
+  const marker = secret.indexOf("pat.");
+  if (marker === -1) return;
+  const tail = secret.slice(marker + "pat.".length);
+  for (const part of [tail, tail.slice(tail.lastIndexOf(".") + 1)]) {
+    if (part.length >= MIN_SECRET_TAIL) remember(part);
+  }
+}
+
+function remember(secret: string): void {
   secrets.add(secret);
   secrets.add(encodeURIComponent(secret));
 }

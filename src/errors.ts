@@ -107,6 +107,16 @@ export class HushscriptError extends Error {
   }
 }
 
+/** An error that is not an SDK error, wrapped (cause kept) so a caller after a sent request only ever catches `HushscriptError`. */
+export function asHushscriptError(error: unknown): HushscriptError {
+  if (error instanceof HushscriptError) return error;
+  return new HushscriptError({
+    code: "unexpected_error",
+    message: "The SDK failed unexpectedly after the request was sent.",
+    cause: error,
+  });
+}
+
 const MISSING_TOKEN_HINT =
   "Set HUSHSCRIPT_TOKEN or pass a token. Create one in the Hushscript app: Account → MCP (app.hushscript.com/account/mcp).";
 
@@ -266,8 +276,9 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
+/** Only a finite number counts: 1e400 parses to Infinity and is treated as absent. */
 function numberOf(value: unknown): number | undefined {
-  return typeof value === "number" ? value : undefined;
+  return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
 function hintValuesFor(
@@ -284,8 +295,7 @@ function hintValuesFor(
     balanceSeconds: numberOf(details["balanceSeconds"]),
     retryAfter,
     allowedPacks: Array.isArray(packs) ? (packs as string[]) : undefined,
-    currentVersion:
-      typeof version === "string" || typeof version === "number" ? version : undefined,
+    currentVersion: typeof version === "string" ? version : numberOf(version),
   });
 }
 
@@ -300,7 +310,7 @@ export function errorFromResponse(
 ): HushscriptError {
   const record = isRecord(body) ? body : {};
   const slug = typeof record["error"] === "string" ? record["error"] : null;
-  const numericCode = Number.isInteger(record["code"]) ? (record["code"] as number) : null;
+  const numericCode = Number.isSafeInteger(record["code"]) ? (record["code"] as number) : null;
   const code = slug ?? `http_${String(res.status)}`;
   const extras = Object.entries(record).filter(([key]) => key !== "error" && key !== "code");
   const details = camelize(Object.fromEntries(extras)) as Record<string, unknown>;
@@ -308,7 +318,9 @@ export function errorFromResponse(
   const bodyRetry = nested["retryAfterSeconds"];
   const retryAfter =
     parseRetryAfter(res.headers.get("retry-after")) ??
-    (typeof bodyRetry === "number" ? bodyRetry : null);
+    (typeof bodyRetry === "number" && Number.isSafeInteger(bodyRetry) && bodyRetry >= 0
+      ? bodyRetry
+      : null);
   const meaning = slug === null ? undefined : ERROR_CATALOG[slug]?.meaning;
   const message =
     meaning ??
