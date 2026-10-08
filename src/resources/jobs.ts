@@ -1,6 +1,6 @@
 import type { Client } from "openapi-fetch";
 import type { components, paths } from "../generated/schema";
-import { camelize } from "../camel.ts";
+import { camelize, unknownFields } from "../camel.ts";
 import { nextCursorOf, paginate } from "../paginate.ts";
 import { JOB_LIST } from "../shapes.ts";
 import { readBody } from "../transcribe/common.ts";
@@ -26,7 +26,10 @@ export interface JobOptions {
   autoGenerateInsights: boolean | null;
 }
 
-/** A job: camelCase fields and options. Private-result and from-url fetch fields are left out; `hs.api` still returns them. */
+/**
+ * A job: camelCase fields and options. Private-result and from-url fetch fields are left out; `hs.api`
+ * still returns them. A field the API adds later is kept on the object at run time, camelCased.
+ */
 export interface Job {
   id: string;
   /** A state the SDK does not know yet passes through as the API's own string. */
@@ -45,8 +48,33 @@ export interface Job {
   options: JobOptions;
 }
 
+// Every field the schema gives a job. The private-result and from-url fetch fields are known and
+// left out (see `Job`); any other field is kept on the result, camelized.
+const JOB_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "id",
+    "state",
+    "mode",
+    "declared_seconds",
+    "verified_seconds",
+    "actual_seconds",
+    "billable_seconds",
+    "error",
+    "failure_kind",
+    "retry_of",
+    "created_at",
+    "transcript_id",
+    "private_result_expires_at",
+    "private_result_available",
+    "options",
+    "fetched_bytes",
+    "fetch_total_bytes",
+  ] satisfies (keyof RawJob)[]),
+]);
+
 function toJob(raw: RawJob): Job {
   return {
+    ...unknownFields(raw, JOB_FIELDS),
     id: raw.id,
     state: raw.state,
     transcriptId: raw.transcript_id,

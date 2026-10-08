@@ -287,6 +287,13 @@ once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(t
   field, but `console.log`, `util.inspect`, `String()` and template strings show `[redacted]` in its
   place; `JSON.stringify` is your own export and carries the value.
 
+- **Keeps what it does not know.** A field the API adds to a result later (`Account`, `Balance`,
+  `Job`, `Pack`, `Cards`, `Card`, `Purchase`, `Transaction`, `LedgerEntry`, `Hold`,
+  `TranscriptSummary`, `DeletedTranscript`, the agent signup, claim and rotation results, and
+  utterances) is kept on the object at run time, camelCased and nested objects included. The
+  fields the SDK maps itself always win, and the few fields it leaves out on purpose (a job's
+  private-result and fetch fields) stay out; `hs.api` returns the raw body.
+
 ## Supported formats
 
 MP3, M4A, MP4 and MOV (the audio track of a video is used), WAV, FLAC, and OGG with Vorbis or Opus.

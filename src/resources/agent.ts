@@ -1,4 +1,5 @@
 import createClient, { type Client } from "openapi-fetch";
+import { unknownFields } from "../camel.ts";
 import { checkToken, resolveTokenlessConfig, type ResolvedConfig } from "../config.ts";
 import { OutcomeUnknownError, ValidationError } from "../errors.ts";
 import type { components, paths } from "../generated/schema";
@@ -26,6 +27,9 @@ export interface AgentSignupRequest {
   baseUrl?: string | undefined;
 }
 
+/**
+ * The signup answer. A field the API adds later is kept on the object at run time, camelCased.
+ */
 export interface AgentSignup {
   /** Pass it back to `claim` verbatim. */
   signupId: string;
@@ -37,6 +41,9 @@ export interface AgentSignup {
   expiresAt: Date;
 }
 
+/**
+ * The claim answer. A field the API adds later is kept on the object at run time, camelCased.
+ */
 export interface AgentClaim {
   /** The account's token, shown once. */
   token: string;
@@ -46,6 +53,9 @@ export interface AgentClaim {
   balance: Balance;
 }
 
+/**
+ * The rotation answer. A field the API adds later is kept on the object at run time, camelCased.
+ */
 export interface RotatedToken {
   /** The successor token, shown once; the client already uses it. */
   token: string;
@@ -101,6 +111,20 @@ function tokenOf(
   }
 }
 
+const SIGNUP_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "signup_id",
+    "claim_secret",
+    "checkout_url",
+    "pack",
+    "amount",
+    "currency",
+    "expires_at",
+  ] satisfies (keyof components["schemas"]["AgentSignupResponse"])[]),
+]);
+const CLAIM_FIELDS: ReadonlySet<string> = new Set(["pat", "balance_seconds", "user_id", "scopes"]);
+const ROTATE_FIELDS: ReadonlySet<string> = new Set(["pat", "pat_id", "scopes", "expires_at"]);
+
 function strings(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
@@ -154,6 +178,7 @@ export const agentStatic: AgentStatic = {
     return withRedactedField(
       "AgentSignup",
       {
+        ...unknownFields(body, SIGNUP_FIELDS),
         signupId: body.signup_id,
         claimSecret: body.claim_secret,
         checkoutUrl: body.checkout_url,
@@ -186,6 +211,7 @@ export const agentStatic: AgentStatic = {
     return withRedactedField(
       "AgentClaim",
       {
+        ...(body === null ? {} : unknownFields(body, CLAIM_FIELDS)),
         token: pat,
         userId: typeof userId === "string" ? userId : "",
         scopes: strings(body?.["scopes"]),
@@ -238,6 +264,7 @@ export class AgentResource {
     return withRedactedField(
       "RotatedToken",
       {
+        ...(body === null ? {} : unknownFields(body, ROTATE_FIELDS)),
         token: pat,
         tokenId: typeof tokenId === "string" ? tokenId : "",
         scopes: strings(body?.["scopes"]),

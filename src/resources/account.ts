@@ -1,6 +1,6 @@
 import type { Client } from "openapi-fetch";
 import type { components, paths } from "../generated/schema";
-import { camelize } from "../camel.ts";
+import { camelize, unknownFields } from "../camel.ts";
 import { ACCOUNT } from "../shapes.ts";
 import { readBody } from "../transcribe/common.ts";
 
@@ -19,7 +19,7 @@ export interface UploadLimits {
   usedTodaySeconds: number;
 }
 
-/** The account: balance, limits, card and region. */
+/** The account: balance, limits, card and region. A field the API adds later is kept on the object at run time, camelCased. */
 export interface Account {
   /** Net of holds and clawback debt; may be negative. */
   balanceSeconds: number;
@@ -34,6 +34,7 @@ export interface Account {
   purchasesRemainingInWindow: number | null;
 }
 
+/** The balance, with the same run-time extras as `Account`. */
 export interface Balance {
   /** Spendable now; may be negative (clawback debt). Holds for in-flight jobs are already deducted. */
   seconds: number;
@@ -45,6 +46,19 @@ export interface Balance {
   /** Agent accounts only, else null. */
   purchasesRemaining: number | null;
 }
+
+// Every field the account answer is known to carry; any other is kept on the result, camelized.
+const ACCOUNT_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "balance_seconds",
+    "held_seconds",
+    "credits_expire_at",
+    "card_on_file",
+    "data_region",
+    "limits",
+  ] satisfies (keyof RawAccount)[]),
+  "purchases_remaining_in_window",
+]);
 
 function expiry(raw: RawAccount): Date | null {
   return raw.credits_expire_at === null ? null : new Date(raw.credits_expire_at * 1000);
@@ -59,6 +73,7 @@ function purchasesRemaining(raw: RawAccount): number | null {
 
 export function toAccount(raw: RawAccount): Account {
   return {
+    ...unknownFields(raw, ACCOUNT_FIELDS),
     balanceSeconds: raw.balance_seconds,
     heldSeconds: raw.held_seconds,
     creditsExpireAt: expiry(raw),
@@ -71,6 +86,7 @@ export function toAccount(raw: RawAccount): Account {
 
 export function toBalance(raw: RawAccount): Balance {
   return {
+    ...unknownFields(raw, ACCOUNT_FIELDS),
     seconds: raw.balance_seconds,
     // `+ 0` turns the -0 that truncating -59 / 60 gives into 0.
     minutes: Math.trunc(raw.balance_seconds / 60) + 0,

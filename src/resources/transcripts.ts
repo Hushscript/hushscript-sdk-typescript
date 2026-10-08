@@ -1,4 +1,5 @@
 import type { Client } from "openapi-fetch";
+import { unknownFields } from "../camel.ts";
 import type { components, paths } from "../generated/schema";
 import { assertCursorAdvanced, nextCursorOf, paginate, type Page } from "../paginate.ts";
 import { Transcript } from "../transcript.ts";
@@ -6,6 +7,7 @@ import { DELETED_LIST, TRANSCRIPT_DETAIL, TRANSCRIPT_LIST } from "../shapes.ts";
 import { readBody } from "../transcribe/common.ts";
 import { checkPathId, invalidOption } from "../transcribe/preflight.ts";
 
+/** A field the API adds later is kept on the object at run time, camelCased. */
 export interface TranscriptSummary {
   id: string;
   title: string;
@@ -16,7 +18,7 @@ export interface TranscriptSummary {
   tags: string[];
 }
 
-/** The record kept after a transcript was removed; its content is gone. */
+/** The record kept after a transcript was removed; its content is gone. A field the API adds later is kept on the object at run time, camelCased. */
 export interface DeletedTranscript {
   id: string;
   title: string;
@@ -62,8 +64,35 @@ function query(options: PageRequest): { cursor?: string; limit?: number } {
   return out;
 }
 
+// Every field the schema gives a list row or a deletion record; any other is kept, camelized.
+const SUMMARY_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "id",
+    "title",
+    "language_detected",
+    "duration_seconds",
+    "created_at",
+    "auto_delete_at",
+    "tags",
+    "options",
+    "insights_state",
+  ] satisfies (keyof components["schemas"]["TranscriptListRow"])[]),
+]);
+const DELETED_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "id",
+    "title",
+    "duration_seconds",
+    "created_at",
+    "deleted_at",
+    "cause",
+    "receipt",
+  ] satisfies (keyof components["schemas"]["DeletedTranscript"])[]),
+]);
+
 function summaryOf(row: components["schemas"]["TranscriptListRow"]): TranscriptSummary {
   return {
+    ...unknownFields(row, SUMMARY_FIELDS),
     id: row.id,
     title: row.title,
     language: row.language_detected,
@@ -76,6 +105,7 @@ function summaryOf(row: components["schemas"]["TranscriptListRow"]): TranscriptS
 
 function deletedOf(row: components["schemas"]["DeletedTranscript"]): DeletedTranscript {
   return {
+    ...unknownFields(row, DELETED_FIELDS),
     id: row.id,
     title: row.title,
     durationSeconds: row.duration_seconds,
