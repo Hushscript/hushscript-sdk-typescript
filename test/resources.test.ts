@@ -403,14 +403,19 @@ describe("signal on lists", () => {
     expect(g.calls).toBe(1);
   });
 
-  it("raises pagination_loop through a real list when the API repeats a cursor", async () => {
-    stubFetch([
+  it("yields the looped page's items from transcripts.list, then raises pagination_loop", async () => {
+    const f = stubFetch([
       { status: 200, body: { transcripts: [row(1)], next_cursor: "c1" } },
-      { status: 200, body: { transcripts: [row(2)], next_cursor: "c1" } },
+      { status: 200, body: { transcripts: [row(2), row(3)], next_cursor: "c1" } },
     ]);
-    await expect(drain(client().transcripts.list())).rejects.toMatchObject({
-      code: "pagination_loop",
-    });
+    const seen: string[] = [];
+    const error = await (async () => {
+      for await (const item of client().transcripts.list()) seen.push(item.id);
+    })().catch((e: unknown) => e);
+    expect(seen).toEqual(["tr_1", "tr_2", "tr_3"]);
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).toMatchObject({ code: "pagination_loop", status: null });
+    expect(f.calls).toBe(2);
   });
 });
 

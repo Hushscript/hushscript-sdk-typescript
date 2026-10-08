@@ -110,17 +110,26 @@ export class TranscriptsResource {
     this.#api = api;
   }
 
-  /** Every finished transcript, newest first, fetching pages as it goes. Jobs still running are in `jobs.list({ active: true })`. */
+  /**
+   * Every finished transcript, newest first, fetching pages as it goes. Jobs still running are in `jobs.list({ active: true })`.
+   * A page whose `next_cursor` repeats the cursor sent is yielded whole, then the walk raises `pagination_loop`.
+   */
   list(options: PageOptions = {}): AsyncIterable<TranscriptSummary> {
     query(options);
     return paginate(
-      (cursor) => this.page({ ...options, ...(cursor === null ? {} : { cursor }) }),
+      (cursor) => this.#fetchPage({ ...options, ...(cursor === null ? {} : { cursor }) }),
       options.signal,
     );
   }
 
   /** One page of `list()`. Raises `pagination_loop` when the answer's `next_cursor` is the cursor sent. */
   async page(options: PageRequest = {}): Promise<Page<TranscriptSummary>> {
+    const page = await this.#fetchPage(options);
+    assertCursorAdvanced(options.cursor ?? null, page.nextCursor);
+    return page;
+  }
+
+  async #fetchPage(options: PageRequest): Promise<Page<TranscriptSummary>> {
     const body = await readBody<components["schemas"]["TranscriptList"]>(
       this.#api.GET("/v1/transcripts", {
         params: { query: query(options) },
@@ -130,9 +139,7 @@ export class TranscriptsResource {
       "GET /v1/transcripts",
       TRANSCRIPT_LIST,
     );
-    const nextCursor = nextCursorOf(body.next_cursor);
-    assertCursorAdvanced(options.cursor ?? null, nextCursor);
-    return { items: body.transcripts.map(summaryOf), nextCursor };
+    return { items: body.transcripts.map(summaryOf), nextCursor: nextCursorOf(body.next_cursor) };
   }
 
   async get(id: string): Promise<Transcript> {
