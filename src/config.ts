@@ -222,7 +222,9 @@ export function resolveConfig(
 ): ResolvedConfig {
   const env = internals.env ?? process.env;
   refuseBrowser(options.dangerouslyAllowBrowser);
-  const token = checkToken(options.token ?? env["HUSHSCRIPT_TOKEN"] ?? "");
+  const token = checkToken(
+    options.token === undefined ? (env["HUSHSCRIPT_TOKEN"] ?? "") : options.token,
+  );
   return build(token, options, env, internals);
 }
 

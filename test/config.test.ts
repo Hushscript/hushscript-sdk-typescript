@@ -23,6 +23,7 @@ describe("construction", () => {
     delete process.env["HUSHSCRIPT_TOKEN"];
   });
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (saved !== undefined) process.env["HUSHSCRIPT_TOKEN"] = saved;
     vi.unstubAllGlobals();
   });
@@ -59,7 +60,8 @@ describe("construction", () => {
     );
   });
 
-  it.each([42, {}, false])("refuses a non-string token %j before any request", (token) => {
+  it.each([42, {}, false, null])("refuses a non-string token %j before any request", (token) => {
+    vi.stubEnv("HUSHSCRIPT_TOKEN", TOKEN);
     const f = stubFetch([]);
     const error = failure(() => new Hushscript({ token: token as unknown as string }));
     expect(error).toBeInstanceOf(ConfigurationError);
