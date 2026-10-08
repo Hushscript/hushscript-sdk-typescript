@@ -25,6 +25,7 @@ import {
   UploadError,
   ValidationError,
   WaitTimeoutError,
+  asHushscriptError,
   errorFromResponse,
   hintValuesFrom,
   renderHint,
@@ -162,6 +163,27 @@ describe("class tree (spec 9.2)", () => {
       "The old token may already be revoked. Try a request with it; if it fails, the new token was lost and the account needs support.",
     );
     expect(OutcomeUnknownError.hintFor("POST /v1/agent/accounts")).toBeNull();
+  });
+});
+
+describe("asHushscriptError (R100)", () => {
+  const cause = new TypeError("boom");
+
+  it.each([
+    [true, "The SDK failed unexpectedly after the request was sent (TypeError: boom)."],
+    [false, "The SDK failed unexpectedly before the request was sent (TypeError: boom)."],
+    [undefined, "The SDK failed unexpectedly (TypeError: boom)."],
+  ])("with sent=%s states only what the call site knows", (sent, message) => {
+    const error = asHushscriptError(cause, sent);
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error.code).toBe("unexpected_error");
+    expect(error.message).toBe(message);
+    expect((error.cause as Error).message).toBe("boom");
+  });
+
+  it("hands an SDK error back untouched", () => {
+    const own = new NetworkError({ message: "x" });
+    expect(asHushscriptError(own, true)).toBe(own);
   });
 });
 

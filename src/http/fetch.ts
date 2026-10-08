@@ -344,7 +344,7 @@ export function hardenedFetch(
           cause: error,
         });
       }
-      throw asHushscriptError(error);
+      throw asHushscriptError(error, wire.sent);
     }
   };
 }

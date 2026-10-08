@@ -208,9 +208,30 @@ describe("R61: nothing but a HushscriptError escapes elsewhere", () => {
     expect(error).not.toBeInstanceOf(OutcomeUnknownError);
     expect(error).toMatchObject({ code: "unexpected_error" });
     expect((error as HushscriptError).message).toBe(
-      "The SDK failed unexpectedly after the request was sent (TypeError: clock broke).",
+      "The SDK failed unexpectedly before the request was sent (TypeError: clock broke).",
     );
     expect(fetchSpy.calls).toBe(0);
+  });
+
+  it("says the request was sent when an unexpected failure follows the response of a repeatable call", async () => {
+    let reads = 0;
+    const clock: Clock = {
+      ...fakeClock(),
+      now: () => {
+        reads += 1;
+        if (reads > 1) throw new TypeError("clock broke");
+        return 0;
+      },
+    };
+    const fetchSpy = stubFetch([{ status: 200, body: {} }]);
+    const error = await failure(client(clock).account());
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).not.toBeInstanceOf(OutcomeUnknownError);
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (TypeError: clock broke).",
+    );
+    expect(fetchSpy.calls).toBe(1);
   });
 
   const MEDIA = Uint8Array.from([0x49, 0x44, 0x33, ...Array.from({ length: 17 }, () => 0)]);
