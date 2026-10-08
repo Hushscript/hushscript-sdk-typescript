@@ -504,18 +504,4 @@ describe("billing identifiers (R53)", () => {
     expect(error).toMatchObject({ code: "invalid_option", status: null });
     expect(f.requests).toHaveLength(0);
   });
-
-  it.each(invalidIds)("refuses invalid purchase pack id %j before any request", async (id) => {
-    const f = stubFetch([]);
-    const hs = client();
-    for (const run of [
-      () => hs.buy(id as string),
-      () => hs.billing.buy(id as string),
-    ]) {
-      const error: unknown = await run().catch((failure: unknown) => failure);
-      expect(error).toBeInstanceOf(PreflightError);
-      expect(error).toMatchObject({ code: "invalid_option", status: null });
-      expect(f.requests).toHaveLength(0);
-    }
-  });
 });

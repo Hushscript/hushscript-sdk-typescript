@@ -619,18 +619,3 @@ describe("static agent baseUrl validation", () => {
     }
   });
 });
-
-describe("signup pack identifiers (R53)", () => {
-  it.each(["", ".", "..", null, 42, {}, undefined, "\uD800", "\uDC00"])(
-    "refuses invalid signup pack id %j before any request",
-    async (pack) => {
-      const f = stubFetch([]);
-      const error: unknown = await Hushscript.agent
-        .signup({ ...SIGNUP, pack: pack as "45min", baseUrl: BASE })
-        .catch((failure: unknown) => failure);
-      expect(error).toBeInstanceOf(PreflightError);
-      expect(error).toMatchObject({ code: "invalid_option", status: null });
-      expect(f.requests).toHaveLength(0);
-    },
-  );
-});

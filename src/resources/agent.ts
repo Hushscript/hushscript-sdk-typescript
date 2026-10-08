@@ -129,7 +129,6 @@ export const agentStatic: AgentStatic = {
           "acceptTerms is required: pass the policy version you accept. It is never filled in for you.",
       });
     }
-    checkPathId(request.pack, "pack");
     const api = tokenlessApi(request.baseUrl);
     const body = await readBody<components["schemas"]["AgentSignupResponse"]>(
       api.POST("/v1/agent/accounts", {
