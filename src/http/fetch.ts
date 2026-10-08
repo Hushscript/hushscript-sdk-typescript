@@ -25,9 +25,18 @@ interface Failure {
   error: unknown;
   sent: boolean;
   timedOut: boolean;
+  /** Thrown by fetch itself and not a transport failure: not a TypeError, and not the SDK's own timeout or the caller's abort. */
+  foreign: boolean;
 }
 
 type Outcome = { kind: "response"; response: Response } | { kind: "failure"; failure: Failure };
+
+/** What `fetch` throws for a failure of the connection or the response body: a TypeError (undici wraps them all) or a NetworkError DOMException. */
+function isTransportFailure(error: unknown): boolean {
+  return (
+    error instanceof TypeError || (error instanceof DOMException && error.name === "NetworkError")
+  );
+}
 
 function errorCode(error: unknown): string | undefined {
   let current: unknown = error;
@@ -188,7 +197,10 @@ async function attempt(
     // Once the body is fully written the request is sent, whatever the error code says.
     const connectPhase = NEVER_SENT.test(errorCode(error) ?? "");
     const sent = headersArrived || (!connectPhase && progress.done);
-    return { kind: "failure", failure: { error, sent, timedOut } };
+    // The SDK's own timeout and the caller's abort abort this controller; anything else that is not
+    // a transport failure is not the network's doing and is not retried as if it were.
+    const foreign = !controller.signal.aborted && !isTransportFailure(error);
+    return { kind: "failure", failure: { error, sent, timedOut, foreign } };
   } finally {
     stopTimer.abort();
     callerSignal.removeEventListener("abort", onCallerAbort);
@@ -222,7 +234,8 @@ function terminalFailure(
 
 /**
  * `fetch` with the SDK's hardening: per-request timeout, retries by class, pacing of
- * upload creates, typed errors for non-2xx answers, redacted debug lines. It adds no
+ * upload creates, typed errors for non-2xx answers, redacted debug lines. A TypeError from `fetch`
+ * is a network error; any other value it throws is an `unexpected_error` that names it, never retried. It adds no
  * credentials: direct-to-storage part PUTs must not carry an Authorization header.
  */
 export function hardenedFetch(
@@ -311,6 +324,12 @@ export function hardenedFetch(
       }
 
       const failure = outcome.failure;
+      if (failure.foreign) {
+        log("unexpected_error", null);
+        // Wrapped below as `unexpected_error`, naming its type; after a request that cannot be
+        // repeated went out, as an unknown outcome.
+        throw failure.error;
+      }
       if (isAborted(signal))
         throw terminalFailure(timeoutMs, retryClass, operation, failure, signal);
       const plan = planRetry({

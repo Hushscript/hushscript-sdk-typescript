@@ -203,26 +203,72 @@ describe("failure messages name the underlying error", () => {
     expect(((error as NetworkError).cause as Error).message).toBe("fetch failed");
   });
 
-  it("names the type alone when the error has no message and no code", async () => {
-    stubFetch([{ error: new RangeError("") }]);
-    const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
-      (e: unknown) => e,
+  it("raises unexpected_error, not NetworkError, for a RangeError from fetch, and does not retry it", async () => {
+    const f = stubFetch([{ error: new RangeError("") }, { status: 200, body: {} }]);
+    const error = await call("safe").catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(NetworkError);
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (RangeError).",
     );
-    expect((error as NetworkError).message).toBe(
-      "The request failed before a response arrived (RangeError).",
-    );
+    expect(((error as HushscriptError).cause as Error).name).toBe("RangeError");
+    expect(f.calls).toBe(1);
   });
 
-  it("names a thrown string as a string", async () => {
+  it("names a thrown string as a string, as unexpected_error", async () => {
     // A string is not an Error on purpose: the SDK must describe whatever a fetch throws.
     // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
     vi.stubGlobal("fetch", () => Promise.reject("boom"));
     const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
       (e: unknown) => e,
     );
-    expect((error as NetworkError).message).toBe(
-      "The request failed before a response arrived (thrown string: boom).",
+    expect(error).not.toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (thrown string: boom).",
     );
+    expect((error as HushscriptError).cause).toBe("boom");
+  });
+
+  it("names an error of a custom class", async () => {
+    class GatewayDown extends Error {}
+    stubFetch([{ error: new GatewayDown("upstream gone") }]);
+    const error = await call("safe").catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "unexpected_error" });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (Error: upstream gone).",
+    );
+  });
+
+  it("keeps a NetworkError for a TypeError and for a NetworkError DOMException", async () => {
+    stubFetch([{ error: new TypeError("terminated") }]);
+    const typeError = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect(typeError).toBeInstanceOf(NetworkError);
+    expect((typeError as NetworkError).message).toBe(
+      "The request failed before a response arrived (TypeError: terminated).",
+    );
+    const f = stubFetch([{ error: new DOMException("socket closed", "NetworkError") }]);
+    const dom = await call("safe", { cfg: config(fakeClock(), { maxRetries: 1 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect(dom).toBeInstanceOf(NetworkError);
+    expect((dom as NetworkError).message).toBe(
+      "The request failed before a response arrived (NetworkError: socket closed).",
+    );
+    expect(f.calls).toBe(2);
+  });
+
+  it("raises OutcomeUnknownError for a non-TypeError after a claim was sent", async () => {
+    const f = stubFetch([{ error: new RangeError("odd") }]);
+    const error = await call("never", CLAIM).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (RangeError: odd), so its outcome is unknown.",
+    );
+    expect(f.calls).toBe(1);
   });
 
   it("redacts a token inside the original message from the new message", async () => {

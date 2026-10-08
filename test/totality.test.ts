@@ -144,6 +144,23 @@ describe("R61: a purchase fails only as a HushscriptError that carries its key",
     }
   }
 
+  it("keeps the key, and names the type, when fetch throws a non-TypeError at the purchase", async () => {
+    const f = stubFetch([
+      (request) => {
+        if (new URL(request.url).pathname === "/v1/billing/cards") return Response.json(CARDS);
+        throw new RangeError("gateway shim broke");
+      },
+    ]);
+    const error = await failure(client().billing.buy("45min", { idempotencyKey: KEY }));
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).toMatchObject({ code: "unexpected_error", idempotencyKey: KEY });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (RangeError: gateway shim broke).",
+    );
+    expect(((error as HushscriptError).cause as Error).name).toBe("RangeError");
+    expect(f.calls).toBe(2);
+  });
+
   it("keeps the key when something unexpected fails after the purchase went out", async () => {
     let reads = 0;
     const clock: Clock = {
