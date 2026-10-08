@@ -1,7 +1,7 @@
 import { inspect } from "node:util";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
-import { resolveConfig } from "../src/config";
+import { resolveConfig, resolveTokenlessConfig } from "../src/config";
 import { ConfigurationError } from "../src/errors";
 import { TOKEN, fakeClock, stubFetch } from "./helpers";
 
@@ -44,15 +44,18 @@ describe("construction", () => {
     expect(() => new Hushscript()).not.toThrow();
   });
 
-  it.each(["", "   "])("refuses a missing token %j before any request", (token) => {
-    const f = stubFetch([]);
-    const error = failure(() => new Hushscript({ token }));
-    expect(error).toMatchObject({ code: "config_invalid", status: null });
-    expect(error.hint).toBe(
-      "Set HUSHSCRIPT_TOKEN or pass a token. Create one in the Hushscript app: Account → MCP (app.hushscript.com/account/mcp).",
-    );
-    expect(f.requests).toHaveLength(0);
-  });
+  it.each([undefined, null, "", "   ", "\t\n", "\u00a0\u2003"])(
+    "refuses a not-set token %j with no environment token, before any request",
+    (token) => {
+      const f = stubFetch([]);
+      const error = failure(() => new Hushscript({ token }));
+      expect(error).toMatchObject({ code: "config_invalid", status: null });
+      expect(error.hint).toBe(
+        "Set HUSHSCRIPT_TOKEN or pass a token. Create one in the Hushscript app: Account → MCP (app.hushscript.com/account/mcp).",
+      );
+      expect(f.requests).toHaveLength(0);
+    },
+  );
 
   it("reads the environment token when the option is undefined", () => {
     expect(
@@ -157,13 +160,6 @@ describe("baseUrl", () => {
     },
   );
 
-  it("rejects an explicitly empty baseUrl before any request", () => {
-    const f = stubFetch([]);
-    const error = failure(() => new Hushscript({ token: TOKEN, baseUrl: "" }));
-    expect(error).toMatchObject({ code: "config_invalid", status: null, hint: null });
-    expect(f.requests).toHaveLength(0);
-  });
-
   it.each([
     "http://api.hushscript.com",
     "http://localhost.evil.example",
@@ -188,6 +184,154 @@ describe("baseUrl", () => {
       expect(error.message).toMatch(/baseUrl/);
     }
     expect(f.requests).toHaveLength(0);
+  });
+});
+
+const BLANKS: [string, string | null | undefined][] = [
+  ["undefined", undefined],
+  ["null", null],
+  ["an empty string", ""],
+  ["spaces", "   "],
+  ["a tab and a line feed", "\t\n"],
+  ["Unicode whitespace", "\u00a0\u2003\u3000"],
+];
+const ENV_TOKEN = "hsr1:eu:pat.env.env";
+const MISSING_TOKEN_HINT =
+  "Set HUSHSCRIPT_TOKEN or pass a token. Create one in the Hushscript app: Account → MCP (app.hushscript.com/account/mcp).";
+
+describe("a blank option or environment value means not set", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  describe.each(BLANKS)("token option %s", (_label, blank) => {
+    it("falls back to the environment token", () => {
+      const cfg = resolveConfig({ token: blank }, { env: { HUSHSCRIPT_TOKEN: ENV_TOKEN } });
+      expect(cfg.authorization()).toBe(`Bearer ${ENV_TOKEN}`);
+    });
+
+    it.each(BLANKS)("with the environment token %s raises the missing-token error", (_l, env) => {
+      const error = failure(() =>
+        resolveConfig({ token: blank }, { env: { HUSHSCRIPT_TOKEN: env ?? undefined } }),
+      );
+      expect(error).toMatchObject({ code: "config_invalid", status: null, numericCode: null });
+      expect(error.message).toBe("No Hushscript token: set HUSHSCRIPT_TOKEN or pass a token.");
+      expect(error.hint).toBe(MISSING_TOKEN_HINT);
+    });
+  });
+
+  it.each(BLANKS)("a set token option beats an environment token that is %s", (_label, env) => {
+    const cfg = resolveConfig({ token: TOKEN }, { env: { HUSHSCRIPT_TOKEN: env ?? undefined } });
+    expect(cfg.authorization()).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("a blank option does not hide a bad environment token", () => {
+    const error = failure(() =>
+      resolveConfig({ token: "" }, { env: { HUSHSCRIPT_TOKEN: "sk_live_notahushscripttoken" } }),
+    );
+    expect(error.message).toBe("This doesn't look like a Hushscript token.");
+  });
+
+  describe.each(BLANKS)("baseUrl option %s", (_label, blank) => {
+    it("falls back to the environment base URL", () => {
+      const env = { HUSHSCRIPT_BASE_URL: "https://env.example.org/" };
+      expect(resolveConfig({ token: TOKEN, baseUrl: blank }, { env }).baseUrl).toBe(
+        "https://env.example.org",
+      );
+    });
+
+    it.each(BLANKS)("with the environment base URL %s uses the default host", (_l, env) => {
+      const cfg = resolveConfig(
+        { token: TOKEN, baseUrl: blank },
+        { env: { HUSHSCRIPT_BASE_URL: env ?? undefined } },
+      );
+      expect(cfg.baseUrl).toBe("https://api.hushscript.com");
+    });
+  });
+
+  it.each(BLANKS)("a set baseUrl option beats an environment base URL that is %s", (_l, env) => {
+    const cfg = resolveConfig(
+      { token: TOKEN, baseUrl: "https://opt.example.org" },
+      { env: { HUSHSCRIPT_BASE_URL: env ?? undefined } },
+    );
+    expect(cfg.baseUrl).toBe("https://opt.example.org");
+  });
+
+  it("a blank baseUrl does not hide a bad environment base URL", () => {
+    const error = failure(() =>
+      resolveConfig(
+        { token: TOKEN, baseUrl: "" },
+        { env: { HUSHSCRIPT_BASE_URL: "ftp://x.example" } },
+      ),
+    );
+    expect(error.message).toBe(
+      "baseUrl must be https://, or http:// to localhost, 127.0.0.1 or [::1].",
+    );
+  });
+
+  describe.each(BLANKS)("logLevel option %s", (_label, blank) => {
+    it("falls back to the environment log level", () => {
+      const cfg = resolveConfig(
+        { token: TOKEN, logLevel: blank as never },
+        { env: { HUSHSCRIPT_LOG: "debug" } },
+      );
+      expect(cfg.logLevel).toBe("debug");
+      expect(cfg.logger.enabled).toBe(true);
+    });
+
+    it.each(BLANKS)("with the environment log level %s is off", (_l, env) => {
+      const cfg = resolveConfig(
+        { token: TOKEN, logLevel: blank as never },
+        { env: { HUSHSCRIPT_LOG: env ?? undefined } },
+      );
+      expect(cfg.logLevel).toBe("off");
+      expect(cfg.logger.enabled).toBe(false);
+    });
+  });
+
+  it.each(BLANKS)("an explicit logLevel beats an environment log level that is %s", (_l, env) => {
+    const cfg = resolveConfig(
+      { token: TOKEN, logLevel: "debug" },
+      { env: { HUSHSCRIPT_LOG: env ?? undefined } },
+    );
+    expect(cfg.logLevel).toBe("debug");
+  });
+
+  it("a blank logLevel does not hide a bad environment log level", () => {
+    const error = failure(() =>
+      resolveConfig({ token: TOKEN, logLevel: "" as never }, { env: { HUSHSCRIPT_LOG: "trace" } }),
+    );
+    expect(error.message).toBe('The log level must be "off" or "debug".');
+  });
+
+  it("keeps rejecting a non-blank invalid value", () => {
+    expect(
+      failure(() => resolveConfig({ token: TOKEN, baseUrl: " x " }, { env: NO_ENV })).message,
+    ).toBe("baseUrl is not a valid URL.");
+    expect(
+      failure(() => resolveConfig({ token: TOKEN, logLevel: "x" as never }, { env: NO_ENV }))
+        .message,
+    ).toBe('The log level must be "off" or "debug".');
+  });
+
+  it("the tokenless config follows the same rule for baseUrl", () => {
+    expect(
+      resolveTokenlessConfig({ baseUrl: "  " }, { env: { HUSHSCRIPT_BASE_URL: "" } }).baseUrl,
+    ).toBe("https://api.hushscript.com");
+    expect(
+      resolveTokenlessConfig(
+        { baseUrl: null },
+        { env: { HUSHSCRIPT_BASE_URL: "https://e.example.org" } },
+      ).baseUrl,
+    ).toBe("https://e.example.org");
+  });
+
+  it("the client reads blank process.env values as not set", () => {
+    vi.stubEnv("HUSHSCRIPT_TOKEN", TOKEN);
+    vi.stubEnv("HUSHSCRIPT_BASE_URL", "   ");
+    vi.stubEnv("HUSHSCRIPT_LOG", "");
+    const hs = new Hushscript({ token: "", baseUrl: "" });
+    expect(hs.toJSON()).toEqual({ token: "hsr…[redacted]", baseUrl: "https://api.hushscript.com" });
   });
 });
 

@@ -143,6 +143,32 @@ describe("hs.account", () => {
     });
   });
 
+  it("keeps unknown fields of the limits object, camelCased", async () => {
+    stubFetch([
+      {
+        status: 200,
+        body: account({
+          limits: {
+            max_daily_seconds: 36_000,
+            max_active_jobs: 3,
+            active_jobs: 1,
+            used_today_seconds: 120,
+            max_file_bytes: 99,
+            burst: { per_minute: 4 },
+          },
+        }),
+      },
+    ]);
+    expect((await client().account()).limits).toEqual({
+      maxDailySeconds: 36_000,
+      maxActiveJobs: 3,
+      activeJobs: 1,
+      usedTodaySeconds: 120,
+      maxFileBytes: 99,
+      burst: { perMinute: 4 },
+    });
+  });
+
   it("has a null expiry and null purchasesRemainingInWindow when the API sends neither", async () => {
     stubFetch([{ status: 200, body: account() }]);
     const result = await client().account();

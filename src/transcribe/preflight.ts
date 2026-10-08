@@ -5,6 +5,7 @@ import {
   HushscriptError,
   PreflightError,
   UnsupportedMediaError,
+  describeError,
   hintValuesFrom,
 } from "../errors.ts";
 import type { paths } from "../generated/schema";
@@ -84,7 +85,7 @@ async function readHead(source: Source, signal: AbortSignal): Promise<Uint8Array
     if (error instanceof HushscriptError) throw error;
     throw new PreflightError({
       code: "file_unreadable",
-      message: "The input could not be read.",
+      message: `The input could not be read (${describeError(error)}).`,
       cause: error,
     });
   }

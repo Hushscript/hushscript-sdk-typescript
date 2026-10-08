@@ -1,3 +1,4 @@
+import { camelize } from "./camel.ts";
 import { renderSrt } from "./format/srt.ts";
 import { renderText, type TextFormatOptions } from "./format/txt.ts";
 import { renderVtt } from "./format/vtt.ts";
@@ -12,6 +13,7 @@ type TranscriptBody = components["schemas"]["TranscriptDetail"];
 const CLEANED_KEY = "cleaned";
 
 export interface Utterance {
+  // A field the API adds later is kept on the object at run time, camelCased, like `Account.limits`.
   /** The provider's raw label; empty for a transcript without speaker labels. */
   speaker: string;
   /** The saved name, else "Speaker {label}", else "" for an empty label. */
@@ -50,6 +52,8 @@ function utterancesOf(
   names: Record<string, string>,
 ): Utterance[] {
   return language.utterances.map((u) => ({
+    // Fields the API adds later stay on the utterance, camelCased; the known ones below win.
+    ...(camelize(u) as Record<string, unknown>),
     speaker: u.speaker,
     speakerName: displayName(u.speaker, names),
     startMs: u.start_ms,

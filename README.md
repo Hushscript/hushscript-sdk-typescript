@@ -34,6 +34,9 @@ const transcript = await hs.transcribe(response.body!, {
 });
 ```
 
+The stream stays yours: the SDK never cancels or closes it, on success, failure or abort. It only
+releases its reader, so you can read what is left or cancel it yourself.
+
 ## Check my balance
 
 ```ts
@@ -54,7 +57,9 @@ for await (const transcript of hs.transcripts.list()) {
 
 The list holds finished transcripts only. A recording that is still processing is a job, so look for
 it in `hs.jobs.list({ active: true })`. `hs.jobs.wait(id)` waits for one, and `hs.transcripts.get(id)`
-returns the full `Transcript` once it is done.
+returns the full `Transcript` once it is done. `hs.transcripts.page({ cursor })` fetches one page; a
+page whose `next_cursor` is the cursor you sent raises `pagination_loop`. The iterator yields that page's
+items first, then raises `pagination_loop`.
 
 ## Buy a pack
 
@@ -240,6 +245,19 @@ HushscriptError
 └─ OutcomeUnknownError
 ```
 
+Every error that wraps another one names the original's type and message in parentheses in its own
+message, with secrets redacted, and keeps the original as the `cause`: a failed request
+(`NetworkError`, `OutcomeUnknownError`, for example `(TypeError: fetch failed; code ECONNREFUSED)`),
+an unreadable input (`file_unreadable`, `source_read_failed`), an unreadable duration
+(`duration_unreadable`) and an unusable response (`bad_response`).
+
+Only a `TypeError` (what `fetch` throws for a failed connection or body) is a network failure. Any
+other value `fetch` throws (a `RangeError`, a string, an error of your own class) raises
+`HushscriptError` with code `unexpected_error`, is not retried, and its message names the type, for
+example `The SDK failed unexpectedly after the request was sent (RangeError: ...)`. After a claim or a
+rotation went out it is an `OutcomeUnknownError`. The message says "before" or "after the request was
+sent" only where the SDK knows, and is silent about it where it does not.
+
 An error raised after an upload started, or after a purchase was sent, carries `idempotencyKey`;
 once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(token, file)` to carry on without a second charge.
 
@@ -262,10 +280,19 @@ once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(t
   minutes.
 - **Waits and fetches.** It polls the job until it is done, raises `JobFailedError` if it fails,
   and gives you a `resumeToken` if the wait times out. The job keeps running.
-- **Redacts the token** from every error, log line and `toString`. The results that hand you a
+- **Redacts the token and the claim secret** from every error, log line and `toString`, and the query
+  string of any URL in an error message, hint or cause (`https://host/path?[redacted]`, so a presigned
+  URL's signature never prints while the host and path still say what failed). The results that hand you a
   secret (`AgentSignup.claimSecret`, `AgentClaim.token`, `RotatedToken.token`) keep it readable as a
   field, but `console.log`, `util.inspect`, `String()` and template strings show `[redacted]` in its
   place; `JSON.stringify` is your own export and carries the value.
+
+- **Keeps what it does not know.** A field the API adds to a result later (`Account`, `Balance`,
+  `Job`, `Pack`, `Cards`, `Card`, `Purchase`, `Transaction`, `LedgerEntry`, `Hold`,
+  `TranscriptSummary`, `DeletedTranscript`, the agent signup, claim and rotation results, and
+  utterances) is kept on the object at run time, camelCased and nested objects included. The
+  fields the SDK maps itself always win, and the few fields it leaves out on purpose (a job's
+  private-result and fetch fields) stay out; `hs.api` returns the raw body.
 
 ## Supported formats
 
@@ -289,7 +316,9 @@ ffmpeg -i input -vn -c:a libopus output.opus
 | `clock`                   | none                  | the system clock; pass a `Clock` in tests                            |
 | `dangerouslyAllowBrowser` | none                  | `false`; for tests only                                              |
 
-An explicit option beats its environment variable. The base URL must be `https://`, or `http://` to
+An explicit option beats its environment variable. A `null`, empty or whitespace-only option or
+variable counts as not set: the SDK falls back to the environment variable, then to the default (a
+token has no default, so it raises the missing-token `ConfigurationError`). The base URL must be `https://`, or `http://` to
 `localhost`, `127.0.0.1` or `[::1]`, with no path. Each upload part has its own 300 s timeout, which you cannot
 change.
 

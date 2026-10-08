@@ -1,10 +1,18 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AbortError, ApiError, NetworkError, OutcomeUnknownError } from "../src/errors";
+import {
+  AbortError,
+  ApiError,
+  HushscriptError,
+  NetworkError,
+  OutcomeUnknownError,
+} from "../src/errors";
 import type { Clock } from "../src/clock";
 import type { ResolvedConfig } from "../src/config";
 import { hardenedFetch } from "../src/http/fetch";
+import { REDACTED } from "../src/redact";
 import { Hushscript } from "../src/client";
 import { driven, fakeApi } from "./transcribe/fakeapi";
 import {
@@ -176,6 +184,119 @@ describe("network errors and the sent flag", () => {
   });
 });
 
+describe("failure messages name the underlying error", () => {
+  const CLAIM = {
+    method: "POST",
+    path: "/v1/agent/accounts/sg_1/claim",
+    body: JSON.stringify({ claim_secret: "x" }),
+  };
+
+  it("names the error type, its message and the nested cause code in a NetworkError", async () => {
+    stubFetch([{ error: networkError("ECONNREFUSED") }]);
+    const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(NetworkError);
+    expect((error as NetworkError).message).toBe(
+      "The request failed before a response arrived (TypeError: fetch failed; code ECONNREFUSED).",
+    );
+    expect(((error as NetworkError).cause as Error).name).toBe("TypeError");
+    expect(((error as NetworkError).cause as Error).message).toBe("fetch failed");
+  });
+
+  it("raises unexpected_error, not NetworkError, for a RangeError from fetch, and does not retry it", async () => {
+    const f = stubFetch([{ error: new RangeError("") }, { status: 200, body: {} }]);
+    const error = await call("safe").catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(NetworkError);
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (RangeError).",
+    );
+    expect(((error as HushscriptError).cause as Error).name).toBe("RangeError");
+    expect(f.calls).toBe(1);
+  });
+
+  it("names a thrown string as a string, as unexpected_error", async () => {
+    // A string is not an Error on purpose: the SDK must describe whatever a fetch throws.
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+    vi.stubGlobal("fetch", () => Promise.reject("boom"));
+    const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).not.toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (thrown string: boom).",
+    );
+    expect((error as HushscriptError).cause).toBe("boom");
+  });
+
+  it("names an error of a custom class", async () => {
+    class GatewayDown extends Error {}
+    stubFetch([{ error: new GatewayDown("upstream gone") }]);
+    const error = await call("safe").catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "unexpected_error" });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (Error: upstream gone).",
+    );
+  });
+
+  it("keeps a NetworkError for a TypeError and for a NetworkError DOMException", async () => {
+    stubFetch([{ error: new TypeError("terminated") }]);
+    const typeError = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect(typeError).toBeInstanceOf(NetworkError);
+    expect((typeError as NetworkError).message).toBe(
+      "The request failed before a response arrived (TypeError: terminated).",
+    );
+    const f = stubFetch([{ error: new DOMException("socket closed", "NetworkError") }]);
+    const dom = await call("safe", { cfg: config(fakeClock(), { maxRetries: 1 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect(dom).toBeInstanceOf(NetworkError);
+    expect((dom as NetworkError).message).toBe(
+      "The request failed before a response arrived (NetworkError: socket closed).",
+    );
+    expect(f.calls).toBe(2);
+  });
+
+  it("raises OutcomeUnknownError for a non-TypeError after a claim was sent", async () => {
+    const f = stubFetch([{ error: new RangeError("odd") }]);
+    const error = await call("never", CLAIM).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (RangeError: odd), so its outcome is unknown.",
+    );
+    expect(f.calls).toBe(1);
+  });
+
+  it("redacts a token inside the original message from the new message", async () => {
+    stubFetch([{ error: new TypeError(`fetch failed for ${TOKEN}`) }]);
+    const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect((error as NetworkError).message).toBe(
+      `The request failed before a response arrived (TypeError: fetch failed for ${REDACTED}).`,
+    );
+  });
+
+  it("names the underlying error in an OutcomeUnknownError, redacted", async () => {
+    stubFetch([{ error: networkError("ECONNRESET") }]);
+    const error = await call("never", CLAIM).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).message).toBe(
+      "The request failed before a response arrived (TypeError: fetch failed; code ECONNRESET). The request was sent, so its outcome is unknown.",
+    );
+    stubFetch([{ error: new TypeError(`reset ${TOKEN}`) }]);
+    const leaky = await call("never", CLAIM).catch((e: unknown) => e);
+    expect((leaky as OutcomeUnknownError).message).toBe(
+      `The request failed before a response arrived (TypeError: reset ${REDACTED}). The request was sent, so its outcome is unknown.`,
+    );
+  });
+});
+
 /* eslint-disable n/no-unsupported-features/node-builtins -- stable in every Node 22 release we test; the rule's table lags */
 /** A 200 whose body delivers one chunk and then fails, or never ends. */
 function brokenBody(mode: "error" | "stall"): Response {
@@ -189,6 +310,51 @@ function brokenBody(mode: "error" | "stall"): Response {
 }
 
 /* eslint-enable n/no-unsupported-features/node-builtins */
+
+describe("signed URLs and secrets stay out of wrapped messages (R96)", () => {
+  const SIG = "9f2c41d7a0b5c3e8f1a2b3c4d5e6f708";
+  const PART = `https://acct.r2.example.com/bucket/obj?partNumber=3&X-Amz-Signature=${SIG}`;
+
+  function expectNowhere(error: unknown, secret: string): void {
+    const wrapped = error as NetworkError;
+    const cause = wrapped.cause as Error;
+    expect(wrapped.message).not.toContain(secret);
+    expect(cause.message).not.toContain(secret);
+    expect(cause.stack).not.toContain(secret);
+    expect(inspect(wrapped, { depth: 6 })).not.toContain(secret);
+  }
+
+  it("redacts the signature a failing part PUT's message quotes", async () => {
+    stubFetch([{ error: new TypeError(`request to ${PART} failed, reason: socket hang up`) }]);
+    const error = await hardenedFetch(config(fakeClock(), { maxRetries: 0 }), "safe")(PART, {
+      method: "PUT",
+      body: new Uint8Array([1, 2, 3]),
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NetworkError);
+    expect((error as NetworkError).message).toBe(
+      "The request failed before a response arrived (TypeError: request to https://acct.r2.example.com/bucket/obj?[redacted] failed, reason: socket hang up).",
+    );
+    expect(((error as NetworkError).cause as Error).message).toBe(
+      "request to https://acct.r2.example.com/bucket/obj?[redacted] failed, reason: socket hang up",
+    );
+    expectNowhere(error, SIG);
+  });
+
+  it("redacts the signature of a URL the Request constructor refuses", async () => {
+    const stub = stubFetch([{ status: 200, body: {} }]);
+    const error = await hardenedFetch(config(fakeClock(), { maxRetries: 0 }), "safe")(
+      `http://[bad/obj?X-Amz-Signature=${SIG}`,
+      { method: "PUT", body: new Uint8Array([1]) },
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly before the request was sent (TypeError: Failed to parse URL from http://[bad/obj?[redacted]).",
+    );
+    expectNowhere(error, SIG);
+    expect(stub.calls).toBe(0);
+  });
+});
 
 describe("outcome unknown after a sent unrepeatable call (spec 7.4)", () => {
   const SIGNUP = { method: "POST", path: "/v1/agent/accounts", body: "{}" };

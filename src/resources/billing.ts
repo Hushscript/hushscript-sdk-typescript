@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "openapi-fetch";
-import { camelize } from "../camel.ts";
+import { camelizeKnown, unknownFields } from "../camel.ts";
 import { PaymentMethodRequiredError, asHushscriptError } from "../errors.ts";
 import type { components, paths } from "../generated/schema";
 import { toMoney, type Money } from "../money.ts";
@@ -17,7 +17,7 @@ import {
 import { badResponse, readBody, readObject } from "../transcribe/common.ts";
 import { checkPathId, invalidOption } from "../transcribe/preflight.ts";
 
-/** A minute pack as the account can see it. */
+/** A minute pack as the account can see it. A field the API adds later is kept on the object at run time, camelCased. */
 export interface Pack {
   /** `45min`, `300min`, `900min`, `1800min` or `6000min`. */
   id: string;
@@ -32,7 +32,7 @@ export interface Pack {
   available: boolean;
 }
 
-/** A saved payment method. */
+/** A saved payment method. A field the API adds later is kept on the object at run time, camelCased. */
 export interface Card {
   id: string;
   type: string;
@@ -46,12 +46,13 @@ export interface Card {
   fastCheckoutEligible: boolean;
 }
 
+/** The saved payment methods. A field the API adds later is kept on the object at run time, camelCased. */
 export interface Cards {
   defaultId: string | null;
   cards: Card[];
 }
 
-/** One purchase, as the API reports it (keys camelCased, timestamps as dates). */
+/** One purchase, as the API reports it (keys camelCased, timestamps as dates). A field the API adds later is kept on the object at run time, camelCased. */
 export interface Transaction {
   id: number;
   seconds: number;
@@ -68,7 +69,7 @@ export interface Transaction {
   initiatedVia: string | null;
 }
 
-/** One movement of the credit balance. */
+/** One movement of the credit balance. A field the API adds later is kept on the object at run time, camelCased. */
 export interface LedgerEntry {
   id: number;
   deltaSeconds: number;
@@ -78,7 +79,7 @@ export interface LedgerEntry {
   createdAt: Date;
 }
 
-/** Seconds reserved by work still running; already deducted from the balance. */
+/** Seconds reserved by work still running; already deducted from the balance. A field the API adds later is kept on the object at run time, camelCased. */
 export interface Hold {
   id: string;
   kind: "transcription" | "translation" | "insights" | "qa";
@@ -86,7 +87,7 @@ export interface Hold {
   createdAt: Date;
 }
 
-/** What a purchase left the account with, from the purchase answer alone. */
+/** What a purchase left the account with, from the purchase answer alone. A field the API adds later is kept on the object at run time, camelCased. */
 export interface Purchase {
   /** The balance after the purchase settled: spendable seconds, holds already deducted. */
   seconds: number;
@@ -108,8 +109,69 @@ function date(unixSeconds: number): Date {
   return new Date(unixSeconds * 1000);
 }
 
+const PACK_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "id",
+    "amount",
+    "currency",
+    "seconds",
+    "referral_bonus_seconds",
+    "available",
+  ] satisfies (keyof components["schemas"]["Pack"])[]),
+]);
+const CARD_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "id",
+    "type",
+    "brand",
+    "last4",
+    "exp_month",
+    "exp_year",
+    "email",
+    "is_default",
+    "fast_checkout_eligible",
+  ] satisfies (keyof components["schemas"]["Card"])[]),
+]);
+const TRANSACTION_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "id",
+    "seconds",
+    "amount_cents",
+    "amount_refunded_cents",
+    "currency",
+    "status",
+    "created_at",
+    "payment_method_type",
+    "payment_method_brand",
+    "payment_method_last4",
+    "receipt_number",
+    "initiated_via",
+  ] satisfies (keyof components["schemas"]["TransactionsResponse"]["transactions"][number])[]),
+]);
+const LEDGER_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "id",
+    "delta_seconds",
+    "kind",
+    "job_id",
+    "note",
+    "created_at",
+  ] satisfies (keyof components["schemas"]["CreditLedgerResponse"]["entries"][number])[]),
+]);
+const HOLD_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "id",
+    "kind",
+    "seconds",
+    "created_at",
+  ] satisfies (keyof components["schemas"]["HoldsResponse"]["holds"][number])[]),
+]);
+const CARDS_FIELDS: ReadonlySet<string> = new Set(["default_id", "methods"]);
+const PURCHASE_FIELDS: ReadonlySet<string> = new Set(["status", "balance_seconds"]);
+
 function packOf(raw: components["schemas"]["Pack"]): Pack {
   return {
+    ...unknownFields(raw, PACK_FIELDS),
     id: raw.id,
     seconds: raw.seconds,
     minutes: Math.trunc(raw.seconds / 60),
@@ -161,7 +223,11 @@ export class BillingResource {
       "GET /v1/billing/cards",
       CARDS,
     );
-    return { defaultId: body.default_id, cards: body.methods.map((m) => camelize(m) as Card) };
+    return {
+      ...unknownFields(body, CARDS_FIELDS),
+      defaultId: body.default_id,
+      cards: body.methods.map((m) => camelizeKnown(m, CARD_FIELDS) as unknown as Card),
+    };
   }
 
   async setDefaultCard(cardId: string): Promise<void> {
@@ -228,7 +294,11 @@ export class BillingResource {
       ) {
         throw badResponse(PURCHASE_ROUTE, status);
       }
-      return { seconds, minutes: Math.trunc(seconds / 60) + 0 };
+      return {
+        ...unknownFields(body, PURCHASE_FIELDS),
+        seconds,
+        minutes: Math.trunc(seconds / 60) + 0,
+      };
     } catch (error) {
       const failure = asHushscriptError(error);
       failure.idempotencyKey = key;
@@ -252,7 +322,7 @@ export class BillingResource {
         items: page.transactions.map(
           (row) =>
             ({
-              ...(camelize(row) as Transaction),
+              ...(camelizeKnown(row, TRANSACTION_FIELDS) as unknown as Transaction),
               createdAt: date(row.created_at),
             }) satisfies Transaction,
         ),
@@ -277,7 +347,7 @@ export class BillingResource {
         items: page.entries.map(
           (row) =>
             ({
-              ...(camelize(row) as LedgerEntry),
+              ...(camelizeKnown(row, LEDGER_FIELDS) as unknown as LedgerEntry),
               createdAt: date(row.created_at),
             }) satisfies LedgerEntry,
         ),
@@ -300,7 +370,11 @@ export class BillingResource {
       );
       return {
         items: page.holds.map(
-          (row) => ({ ...(camelize(row) as Hold), createdAt: date(row.created_at) }) satisfies Hold,
+          (row) =>
+            ({
+              ...(camelizeKnown(row, HOLD_FIELDS) as unknown as Hold),
+              createdAt: date(row.created_at),
+            }) satisfies Hold,
         ),
         nextCursor: nextCursorOf(page.next_cursor),
       };

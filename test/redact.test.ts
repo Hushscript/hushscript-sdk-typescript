@@ -117,3 +117,46 @@ describe("redact", () => {
     );
   });
 });
+
+describe("redact: URL query strings (R96)", () => {
+  const SIG = "9f2c41d7a0b5c3e8f1a2b3c4d5e6f708";
+
+  it.each([
+    [
+      `PUT https://acct.r2.example.com/bucket/obj?partNumber=3&X-Amz-Signature=${SIG} failed`,
+      "PUT https://acct.r2.example.com/bucket/obj?[redacted] failed",
+    ],
+    [`(see http://127.0.0.1:4010/v1/x?t=${SIG}).`, "(see http://127.0.0.1:4010/v1/x?[redacted])."],
+    [`got "https://h.example/p?a=1&b=2" back`, `got "https://h.example/p?[redacted]" back`],
+    [`https://h.example/p?a=1#frag`, `https://h.example/p?[redacted]#frag`],
+    [`https://h.example?a=1`, `https://h.example?[redacted]`],
+    [
+      `two https://a.example/x?k=1 and https://b.example/y?k=2.`,
+      `two https://a.example/x?[redacted] and https://b.example/y?[redacted].`,
+    ],
+  ])("keeps scheme, host and path and redacts the query of %s", (text, expected) => {
+    expect(redact(text)).toBe(expected);
+  });
+
+  it.each([
+    "https://h.example/p",
+    "https://h.example/p?",
+    "what?",
+    "a ? b",
+    "/relative/path?a=1",
+    "no url, just text",
+  ])("leaves %j alone", (text) => {
+    expect(redact(text)).toBe(text);
+  });
+
+  it("scrubs a URL in a cause message and stack", () => {
+    const cause = new TypeError(
+      `request to https://r2.example.com/b/o?X-Amz-Signature=${SIG} failed`,
+    );
+    const out = redactCause(cause) as Error;
+    expect(out.message).toBe("request to https://r2.example.com/b/o?[redacted] failed");
+    expect(out.stack).not.toContain(SIG);
+    expect(out.stack).toContain("https://r2.example.com/b/o?[redacted] failed");
+    expect(redactCause(`s https://h.example/p?x=${SIG}`)).toBe("s https://h.example/p?[redacted]");
+  });
+});

@@ -1,11 +1,13 @@
 import type { Client } from "openapi-fetch";
+import { unknownFields } from "../camel.ts";
 import type { components, paths } from "../generated/schema";
-import { nextCursorOf, paginate, type Page } from "../paginate.ts";
+import { assertCursorAdvanced, nextCursorOf, paginate, type Page } from "../paginate.ts";
 import { Transcript } from "../transcript.ts";
 import { DELETED_LIST, TRANSCRIPT_DETAIL, TRANSCRIPT_LIST } from "../shapes.ts";
 import { readBody } from "../transcribe/common.ts";
 import { checkPathId, invalidOption } from "../transcribe/preflight.ts";
 
+/** A field the API adds later is kept on the object at run time, camelCased. */
 export interface TranscriptSummary {
   id: string;
   title: string;
@@ -16,7 +18,7 @@ export interface TranscriptSummary {
   tags: string[];
 }
 
-/** The record kept after a transcript was removed; its content is gone. */
+/** The record kept after a transcript was removed; its content is gone. A field the API adds later is kept on the object at run time, camelCased. */
 export interface DeletedTranscript {
   id: string;
   title: string;
@@ -62,8 +64,35 @@ function query(options: PageRequest): { cursor?: string; limit?: number } {
   return out;
 }
 
+// Every field the schema gives a list row or a deletion record; any other is kept, camelized.
+const SUMMARY_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "id",
+    "title",
+    "language_detected",
+    "duration_seconds",
+    "created_at",
+    "auto_delete_at",
+    "tags",
+    "options",
+    "insights_state",
+  ] satisfies (keyof components["schemas"]["TranscriptListRow"])[]),
+]);
+const DELETED_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "id",
+    "title",
+    "duration_seconds",
+    "created_at",
+    "deleted_at",
+    "cause",
+    "receipt",
+  ] satisfies (keyof components["schemas"]["DeletedTranscript"])[]),
+]);
+
 function summaryOf(row: components["schemas"]["TranscriptListRow"]): TranscriptSummary {
   return {
+    ...unknownFields(row, SUMMARY_FIELDS),
     id: row.id,
     title: row.title,
     language: row.language_detected,
@@ -76,6 +105,7 @@ function summaryOf(row: components["schemas"]["TranscriptListRow"]): TranscriptS
 
 function deletedOf(row: components["schemas"]["DeletedTranscript"]): DeletedTranscript {
   return {
+    ...unknownFields(row, DELETED_FIELDS),
     id: row.id,
     title: row.title,
     durationSeconds: row.duration_seconds,
@@ -110,17 +140,26 @@ export class TranscriptsResource {
     this.#api = api;
   }
 
-  /** Every finished transcript, newest first, fetching pages as it goes. Jobs still running are in `jobs.list({ active: true })`. */
+  /**
+   * Every finished transcript, newest first, fetching pages as it goes. Jobs still running are in `jobs.list({ active: true })`.
+   * A page whose `next_cursor` repeats the cursor sent is yielded whole, then the walk raises `pagination_loop`.
+   */
   list(options: PageOptions = {}): AsyncIterable<TranscriptSummary> {
     query(options);
     return paginate(
-      (cursor) => this.page({ ...options, ...(cursor === null ? {} : { cursor }) }),
+      (cursor) => this.#fetchPage({ ...options, ...(cursor === null ? {} : { cursor }) }),
       options.signal,
     );
   }
 
-  /** One page of `list()`. */
+  /** One page of `list()`. Raises `pagination_loop` when the answer's `next_cursor` is the cursor sent. */
   async page(options: PageRequest = {}): Promise<Page<TranscriptSummary>> {
+    const page = await this.#fetchPage(options);
+    assertCursorAdvanced(options.cursor ?? null, page.nextCursor);
+    return page;
+  }
+
+  async #fetchPage(options: PageRequest): Promise<Page<TranscriptSummary>> {
     const body = await readBody<components["schemas"]["TranscriptList"]>(
       this.#api.GET("/v1/transcripts", {
         params: { query: query(options) },

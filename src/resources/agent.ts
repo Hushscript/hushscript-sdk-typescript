@@ -1,4 +1,5 @@
 import createClient, { type Client } from "openapi-fetch";
+import { unknownFields } from "../camel.ts";
 import { checkToken, resolveTokenlessConfig, type ResolvedConfig } from "../config.ts";
 import { OutcomeUnknownError, ValidationError } from "../errors.ts";
 import type { components, paths } from "../generated/schema";
@@ -23,9 +24,12 @@ export interface AgentSignupRequest {
   /** Validates the request without opening a checkout; the result cannot be claimed. */
   dryRun?: boolean | undefined;
   /** Falls back to HUSHSCRIPT_BASE_URL, then the production host. */
-  baseUrl?: string | undefined;
+  baseUrl?: string | null | undefined;
 }
 
+/**
+ * The signup answer. A field the API adds later is kept on the object at run time, camelCased.
+ */
 export interface AgentSignup {
   /** Pass it back to `claim` verbatim. */
   signupId: string;
@@ -37,6 +41,9 @@ export interface AgentSignup {
   expiresAt: Date;
 }
 
+/**
+ * The claim answer. A field the API adds later is kept on the object at run time, camelCased.
+ */
 export interface AgentClaim {
   /** The account's token, shown once. */
   token: string;
@@ -46,6 +53,9 @@ export interface AgentClaim {
   balance: Balance;
 }
 
+/**
+ * The rotation answer. A field the API adds later is kept on the object at run time, camelCased.
+ */
 export interface RotatedToken {
   /** The successor token, shown once; the client already uses it. */
   token: string;
@@ -60,7 +70,7 @@ export interface AgentStatic {
   claim(
     signupId: string,
     claimSecret: string,
-    options?: { baseUrl?: string | undefined },
+    options?: { baseUrl?: string | null | undefined },
   ): Promise<AgentClaim>;
 }
 
@@ -101,13 +111,27 @@ function tokenOf(
   }
 }
 
+const SIGNUP_FIELDS: ReadonlySet<string> = new Set([
+  ...([
+    "signup_id",
+    "claim_secret",
+    "checkout_url",
+    "pack",
+    "amount",
+    "currency",
+    "expires_at",
+  ] satisfies (keyof components["schemas"]["AgentSignupResponse"])[]),
+]);
+const CLAIM_FIELDS: ReadonlySet<string> = new Set(["pat", "balance_seconds", "user_id", "scopes"]);
+const ROTATE_FIELDS: ReadonlySet<string> = new Set(["pat", "pat_id", "scopes", "expires_at"]);
+
 function strings(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string")
     : [];
 }
 
-function tokenlessApi(baseUrl: string | undefined): Client<paths> {
+function tokenlessApi(baseUrl: string | null | undefined): Client<paths> {
   const config = resolveTokenlessConfig({ baseUrl });
   const api = createClient<paths>({ baseUrl: config.baseUrl, fetch: createTransport(config) });
   api.use({
@@ -154,6 +178,7 @@ export const agentStatic: AgentStatic = {
     return withRedactedField(
       "AgentSignup",
       {
+        ...unknownFields(body, SIGNUP_FIELDS),
         signupId: body.signup_id,
         claimSecret: body.claim_secret,
         checkoutUrl: body.checkout_url,
@@ -166,6 +191,8 @@ export const agentStatic: AgentStatic = {
 
   async claim(signupId, claimSecret, options = {}) {
     checkPathId(signupId, "signupId");
+    // Remembered like a token, so no error message, hint or cause raised by this call can print it.
+    if (typeof claimSecret === "string") registerSecret(claimSecret);
     const api = tokenlessApi(options.baseUrl);
     const { status, body } = await readObject(
       api.POST("/v1/agent/accounts/{signup_id}/claim", {
@@ -184,6 +211,7 @@ export const agentStatic: AgentStatic = {
     return withRedactedField(
       "AgentClaim",
       {
+        ...(body === null ? {} : unknownFields(body, CLAIM_FIELDS)),
         token: pat,
         userId: typeof userId === "string" ? userId : "",
         scopes: strings(body?.["scopes"]),
@@ -236,6 +264,7 @@ export class AgentResource {
     return withRedactedField(
       "RotatedToken",
       {
+        ...(body === null ? {} : unknownFields(body, ROTATE_FIELDS)),
         token: pat,
         tokenId: typeof tokenId === "string" ? tokenId : "",
         scopes: strings(body?.["scopes"]),

@@ -1298,10 +1298,39 @@ describe("a path input", () => {
 
   it("raises file_unreadable, with the OS error as the cause, for a missing path", async () => {
     const { hs, fake } = setup();
-    const error = await failure(hs.transcribe(join(await scratch(), "missing.mp3")));
+    const missing = join(await scratch(), "missing.mp3");
+    const error = await failure(hs.transcribe(missing));
     expect(error).toBeInstanceOf(PreflightError);
     expect(error).toMatchObject({ code: "file_unreadable" });
     expect((error as Error).cause).toMatchObject({ code: "ENOENT" });
+    expect((error as Error).message).toBe(
+      `${missing} cannot be read: it is missing, not a regular file or cannot be opened (Error: ENOENT: no such file or directory, stat '${missing}').`,
+    );
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it("names a directory as unreadable with no original error to name", async () => {
+    const { hs } = setup();
+    const directory = await scratch();
+    const error = await failure(hs.transcribe(directory));
+    expect((error as Error).message).toBe(
+      `${directory} cannot be read: it is missing, not a regular file or cannot be opened.`,
+    );
+    expect((error as Error).cause).toBeUndefined();
+  });
+
+  it("names the original error when the first bytes of the input cannot be read", async () => {
+    const { hs, fake } = setup();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.error(new Error("socket reset"));
+      },
+    });
+    const error = await failure(hs.transcribe(stream, { size: 1000, durationSeconds: 20 }));
+    expect(error).toBeInstanceOf(PreflightError);
+    expect(error).toMatchObject({ code: "file_unreadable", status: null });
+    expect((error as Error).message).toBe("The input could not be read (Error: socket reset).");
+    expect(((error as Error).cause as Error).message).toBe("socket reset");
     expect(fake.calls).toHaveLength(0);
   });
 
@@ -1408,6 +1437,9 @@ describe("a source that fails to read", () => {
     );
     expect(error).toBeInstanceOf(UploadError);
     expect(error).toMatchObject({ code: "source_read_failed", status: null });
+    expect((error as UploadError).message).toBe(
+      `Reading the input failed at byte ${String(partSize)}, part way through the upload (Error: socket reset).`,
+    );
     expect((error as UploadError).idempotencyKey).toBe(fake.creates[0]?.["idempotency_key"]);
     expect((error as UploadError).resumeToken).toBe(
       encodeResumeToken({
@@ -1418,5 +1450,183 @@ describe("a source that fails to read", () => {
       }),
     );
     expect(((error as Error).cause as Error).message).toBe("socket reset");
+  });
+});
+
+describe("a caller's stream is left open (spec 6.1, R88)", () => {
+  /** A stream over `bytes` that counts cancel() calls; `then` follows when the bytes run out. */
+  function observed(
+    bytes: Uint8Array,
+    then: "close" | "stall" = "close",
+  ): { stream: ReadableStream<Uint8Array>; cancels: unknown[]; stalled: Promise<void> } {
+    const cancels: unknown[] = [];
+    let offset = 0;
+    let markStalled = (): void => undefined;
+    // Settles when the stream is asked for more than it has and, in "stall" mode, never answers.
+    const stalled = new Promise<void>((resolve) => {
+      markStalled = resolve;
+    });
+    const stream = new ReadableStream<Uint8Array>(
+      {
+        pull(controller): void {
+          if (offset >= bytes.byteLength) {
+            if (then === "close") controller.close();
+            else markStalled();
+            return;
+          }
+          controller.enqueue(bytes.subarray(offset, offset + 4096));
+          offset += 4096;
+        },
+        cancel(reason): void {
+          cancels.push(reason);
+        },
+      },
+      { highWaterMark: 0 },
+    );
+    return { stream, cancels, stalled };
+  }
+
+  it("neither cancels nor keeps locked a stream that was uploaded in full", async () => {
+    const { hs, clock } = setup();
+    const { stream, cancels } = observed(mp3);
+    await driven(hs.transcribe(stream, { size: mp3.byteLength, durationSeconds: 20 }), clock);
+    expect(cancels).toEqual([]);
+    expect(stream.locked).toBe(false);
+    expect(await stream.getReader().read()).toEqual({ done: true, value: undefined });
+  });
+
+  it("leaves a stream longer than its size readable after stream_size_mismatch", async () => {
+    const { hs, clock } = setup();
+    const longer = new Uint8Array(mp3.byteLength + 20_000);
+    longer.set(mp3);
+    const { stream, cancels } = observed(longer);
+    const error = await failure(
+      driven(hs.transcribe(stream, { size: mp3.byteLength, durationSeconds: 20 }), clock),
+    );
+    expect(error).toMatchObject({ code: "stream_size_mismatch", status: null });
+    expect(cancels).toEqual([]);
+    expect(stream.locked).toBe(false);
+    const next = await stream.getReader().read();
+    expect(next.done).toBe(false);
+    expect(next.value?.byteLength).toBeGreaterThan(0);
+  });
+
+  it("leaves a stream that was cut short unlocked and uncanceled", async () => {
+    const { hs, clock } = setup();
+    const { stream, cancels } = observed(mp3.subarray(0, mp3.byteLength - 10));
+    const error = await failure(
+      driven(hs.transcribe(stream, { size: mp3.byteLength, durationSeconds: 20 }), clock),
+    );
+    expect(error).toMatchObject({ code: "stream_size_mismatch", status: null });
+    expect(cancels).toEqual([]);
+    expect(stream.locked).toBe(false);
+  });
+
+  it("unlocks a stream that failed with its own error", async () => {
+    const { hs, clock } = setup({ parts: 3 });
+    let sent = false;
+    const stream = new ReadableStream<Uint8Array>({
+      pull(controller) {
+        if (!sent) {
+          sent = true;
+          controller.enqueue(mp3.subarray(0, 1000));
+        } else {
+          controller.error(new Error("socket reset"));
+        }
+      },
+    });
+    const error = await failure(
+      driven(hs.transcribe(stream, { size: mp3.byteLength, durationSeconds: 20 }), clock),
+    );
+    expect(error).toMatchObject({ code: "source_read_failed" });
+    expect(stream.locked).toBe(false);
+  });
+
+  it("leaves the stream alone when the create is refused before any byte is read", async () => {
+    const { hs, clock } = setup({
+      hooks: { create: () => apiError("invalid_request", 1001, 400) },
+    });
+    const { stream, cancels } = observed(mp3);
+    const error = await failure(
+      driven(hs.transcribe(stream, { size: mp3.byteLength, durationSeconds: 20 }), clock),
+    );
+    expect(error).toBeInstanceOf(ApiError);
+    expect(cancels).toEqual([]);
+    expect(stream.locked).toBe(false);
+    expect((await stream.getReader().read()).done).toBe(false);
+  });
+
+  it("leaves a stream that stalled readable after the caller aborted", async () => {
+    const { hs, clock } = setup();
+    const { stream, cancels, stalled } = observed(mp3.subarray(0, 5000), "stall");
+    const stop = new AbortController();
+    const outcome = failure(
+      driven(
+        hs.transcribe(stream, {
+          size: mp3.byteLength,
+          durationSeconds: 20,
+          signal: stop.signal,
+        }),
+        clock,
+      ),
+    );
+    await stalled;
+    stop.abort();
+    expect(await outcome).toBeInstanceOf(AbortError);
+    expect(cancels).toEqual([]);
+    expect(stream.locked).toBe(false);
+    const reader = stream.getReader();
+    reader.releaseLock();
+  });
+
+  it("does not cancel or lock a stream passed to resume(), on success or on a short stream", async () => {
+    let hold = true;
+    const ref: { clock?: Clock } = {};
+    const { hs, clock, fake } = setup({
+      hooks: {
+        r2: async (call) => {
+          if (hold) await ref.clock?.sleep(10_000_000, call.signal);
+          return undefined;
+        },
+      },
+    });
+    ref.clock = clock;
+    const stop = new AbortController();
+    const interrupted = failure(hs.transcribe(mp3, { signal: stop.signal }));
+    for (let i = 0; i < 500 && fake.count("r2") === 0; i += 1) {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    stop.abort();
+    const token = ((await interrupted) as AbortError).resumeToken ?? "";
+    expect(token).not.toBe("");
+
+    hold = false;
+    const shortStream = observed(mp3.subarray(0, mp3.byteLength - 1));
+    const mismatch = await failure(driven(hs.resume(token, shortStream.stream), clock));
+    expect(mismatch).toMatchObject({ code: "stream_size_mismatch", status: null });
+    expect(shortStream.cancels).toEqual([]);
+    expect(shortStream.stream.locked).toBe(false);
+
+    const good = observed(mp3);
+    const transcript = await driven(hs.resume(token, good.stream), clock);
+    expect(transcript.id).toBe("tr_1");
+    expect(good.cancels).toEqual([]);
+    expect(good.stream.locked).toBe(false);
+    expect((await good.stream.getReader().read()).done).toBe(true);
+  });
+
+  it("does not cancel a stream passed to resume() when the job already left uploading", async () => {
+    const { hs, clock } = setup();
+    const token = encodeResumeToken({
+      jobId: "job_1",
+      idempotencyKey: "0123456789abcdefghij",
+      size: mp3.byteLength,
+      durationSeconds: 21,
+    });
+    const { stream, cancels } = observed(mp3);
+    await driven(hs.resume(token, stream), clock);
+    expect(cancels).toEqual([]);
+    expect(stream.locked).toBe(false);
+    expect((await stream.getReader().read()).done).toBe(false);
   });
 });

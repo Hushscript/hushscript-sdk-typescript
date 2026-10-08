@@ -12,6 +12,17 @@ export function nextCursorOf(cursor: string | null): string | null {
   return cursor === "" ? null : cursor;
 }
 
+/** A page that hands back the cursor it was asked with would repeat forever. */
+export function assertCursorAdvanced(sent: string | null, next: string | null): void {
+  if (next !== null && next === sent) {
+    throw new HushscriptError({
+      code: "pagination_loop",
+      message:
+        "The API returned the same page cursor it was sent; stopping instead of repeating the page.",
+    });
+  }
+}
+
 // A function call, so the compiler does not carry an earlier `signal.aborted` check into the loop.
 function stopIfAborted(signal: AbortSignal | undefined): void {
   if (signal?.aborted === true) throw aborted(signal);
@@ -37,12 +48,6 @@ export async function* paginate<T>(
       yield item;
     }
     cursor = nextCursorOf(page.nextCursor);
-    if (cursor !== null && cursor === sent) {
-      throw new HushscriptError({
-        code: "pagination_loop",
-        message:
-          "The API returned the same page cursor it was sent; stopping instead of repeating the page.",
-      });
-    }
+    assertCursorAdvanced(sent, cursor);
   } while (cursor !== null);
 }

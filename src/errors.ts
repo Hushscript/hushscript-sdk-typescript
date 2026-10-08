@@ -107,12 +107,26 @@ export class HushscriptError extends Error {
   }
 }
 
-/** An error that is not an SDK error, wrapped (cause kept) so a caller after a sent request only ever catches `HushscriptError`. */
-export function asHushscriptError(error: unknown): HushscriptError {
+/** What a wrapped value was: its error type and message ("TypeError: fetch failed"), for the wrapping error's message. */
+export function describeError(error: unknown): string {
+  if (error instanceof Error) {
+    return error.message === "" ? error.name : `${error.name}: ${error.message}`;
+  }
+  return typeof error === "string" ? `thrown string: ${error}` : `thrown ${typeof error}`;
+}
+
+/**
+ * An error that is not an SDK error, wrapped (cause kept) so a caller after a sent request only ever
+ * catches `HushscriptError`. `sent` says whether the request had gone out when it failed; the message
+ * states that only when the call site knows, and is neutral when `sent` is left out.
+ */
+export function asHushscriptError(error: unknown, sent?: boolean): HushscriptError {
   if (error instanceof HushscriptError) return error;
+  const when =
+    sent === undefined ? "" : sent ? " after the request was sent" : " before the request was sent";
   return new HushscriptError({
     code: "unexpected_error",
-    message: "The SDK failed unexpectedly after the request was sent.",
+    message: `The SDK failed unexpectedly${when} (${describeError(error)}).`,
     cause: error,
   });
 }
