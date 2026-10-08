@@ -59,6 +59,14 @@ describe("construction", () => {
     );
   });
 
+  it.each([42, {}, false])("refuses a non-string token %j before any request", (token) => {
+    const f = stubFetch([]);
+    const error = failure(() => new Hushscript({ token: token as unknown as string }));
+    expect(error).toBeInstanceOf(ConfigurationError);
+    expect(error).toMatchObject({ code: "config_invalid", status: null });
+    expect(f.requests).toHaveLength(0);
+  });
+
   it("prefers the option over the environment", () => {
     const cfg = resolveConfig({ token: TOKEN }, { env: { HUSHSCRIPT_TOKEN: "hsr1:eu:pat.aa.bb" } });
     expect(cfg.authorization()).toBe(`Bearer ${TOKEN}`);
