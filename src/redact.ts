@@ -9,6 +9,11 @@ const MIN_SECRET_LENGTH = 8;
 // it is long enough not to turn an ordinary short substring into noise.
 const MIN_SECRET_TAIL = 16;
 
+// scheme://host/path?query: the query (a presigned signature, a token) is replaced, the rest stays.
+// The query ends before any trailing sentence punctuation, so "(see https://h/p?x=1)." keeps its ").".
+const URL_QUERY = /\b([a-z][a-z\d+.-]*:\/\/[^\s?#"'<>]+)\?[^\s"'<>#]*[^\s"'<>#).,;:]/gi;
+const QUERY_REDACTED = "?[redacted]";
+
 const secrets = new Set<string>();
 
 /** Remembers a token verbatim, so it is redacted even if the token format changes. */
@@ -35,10 +40,15 @@ export function clearSecrets(): void {
   secrets.clear();
 }
 
+/**
+ * Replaces every remembered secret and token-shaped string, and the query string of any URL
+ * (`scheme://host/path?[redacted]`): a presigned URL's signature is a credential, and the host and
+ * path still name what failed.
+ */
 export function redact(text: string): string {
   let out = text;
   for (const secret of secrets) out = out.replaceAll(secret, REDACTED);
-  return out.replace(TOKEN_SHAPE, REDACTED);
+  return out.replace(TOKEN_SHAPE, REDACTED).replace(URL_QUERY, `$1${QUERY_REDACTED}`);
 }
 
 export function redactValue(value: unknown): unknown {

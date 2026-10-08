@@ -271,7 +271,9 @@ once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(t
   minutes.
 - **Waits and fetches.** It polls the job until it is done, raises `JobFailedError` if it fails,
   and gives you a `resumeToken` if the wait times out. The job keeps running.
-- **Redacts the token** from every error, log line and `toString`. The results that hand you a
+- **Redacts the token and the claim secret** from every error, log line and `toString`, and the query
+  string of any URL in an error message, hint or cause (`https://host/path?[redacted]`, so a presigned
+  URL's signature never prints while the host and path still say what failed). The results that hand you a
   secret (`AgentSignup.claimSecret`, `AgentClaim.token`, `RotatedToken.token`) keep it readable as a
   field, but `console.log`, `util.inspect`, `String()` and template strings show `[redacted]` in its
   place; `JSON.stringify` is your own export and carries the value.

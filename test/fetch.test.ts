@@ -1,7 +1,14 @@
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
+import { inspect } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AbortError, ApiError, NetworkError, OutcomeUnknownError } from "../src/errors";
+import {
+  AbortError,
+  ApiError,
+  HushscriptError,
+  NetworkError,
+  OutcomeUnknownError,
+} from "../src/errors";
 import type { Clock } from "../src/clock";
 import type { ResolvedConfig } from "../src/config";
 import { hardenedFetch } from "../src/http/fetch";
@@ -258,6 +265,51 @@ function brokenBody(mode: "error" | "stall"): Response {
 }
 
 /* eslint-enable n/no-unsupported-features/node-builtins */
+
+describe("signed URLs and secrets stay out of wrapped messages (R96)", () => {
+  const SIG = "9f2c41d7a0b5c3e8f1a2b3c4d5e6f708";
+  const PART = `https://acct.r2.example.com/bucket/obj?partNumber=3&X-Amz-Signature=${SIG}`;
+
+  function expectNowhere(error: unknown, secret: string): void {
+    const wrapped = error as NetworkError;
+    const cause = wrapped.cause as Error;
+    expect(wrapped.message).not.toContain(secret);
+    expect(cause.message).not.toContain(secret);
+    expect(cause.stack).not.toContain(secret);
+    expect(inspect(wrapped, { depth: 6 })).not.toContain(secret);
+  }
+
+  it("redacts the signature a failing part PUT's message quotes", async () => {
+    stubFetch([{ error: new TypeError(`request to ${PART} failed, reason: socket hang up`) }]);
+    const error = await hardenedFetch(config(fakeClock(), { maxRetries: 0 }), "safe")(PART, {
+      method: "PUT",
+      body: new Uint8Array([1, 2, 3]),
+    }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(NetworkError);
+    expect((error as NetworkError).message).toBe(
+      "The request failed before a response arrived (TypeError: request to https://acct.r2.example.com/bucket/obj?[redacted] failed, reason: socket hang up).",
+    );
+    expect(((error as NetworkError).cause as Error).message).toBe(
+      "request to https://acct.r2.example.com/bucket/obj?[redacted] failed, reason: socket hang up",
+    );
+    expectNowhere(error, SIG);
+  });
+
+  it("redacts the signature of a URL the Request constructor refuses", async () => {
+    const stub = stubFetch([{ status: 200, body: {} }]);
+    const error = await hardenedFetch(config(fakeClock(), { maxRetries: 0 }), "safe")(
+      `http://[bad/obj?X-Amz-Signature=${SIG}`,
+      { method: "PUT", body: new Uint8Array([1]) },
+    ).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly before the request was sent (TypeError: Failed to parse URL from http://[bad/obj?[redacted]).",
+    );
+    expectNowhere(error, SIG);
+    expect(stub.calls).toBe(0);
+  });
+});
 
 describe("outcome unknown after a sent unrepeatable call (spec 7.4)", () => {
   const SIGNUP = { method: "POST", path: "/v1/agent/accounts", body: "{}" };

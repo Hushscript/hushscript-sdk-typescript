@@ -245,6 +245,49 @@ describe("Hushscript.agent.claim", () => {
     expect(stub.calls).toBe(1);
   });
 
+  it("keeps the claim secret out of every part of an error that quotes it", async () => {
+    const secret = "cs_live_8f3a91c2d4e5b6a7c8d9e0f1";
+    stubFetch([
+      {
+        error: new TypeError(`write failed after sending {"claim_secret":"${secret}"}`, {
+          cause: Object.assign(new Error(`socket closed, last bytes ${secret}`), {
+            code: "ECONNRESET",
+          }),
+        }),
+      },
+    ]);
+    const error = (await Hushscript.agent
+      .claim("sg_1", secret, { baseUrl: BASE })
+      .catch((e: unknown) => e)) as OutcomeUnknownError;
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error.message).toBe(
+      `The request failed before a response arrived (TypeError: write failed after sending {"claim_secret":"${REDACTED}"}; code ECONNRESET). The request was sent, so its outcome is unknown.`,
+    );
+    const cause = error.cause as Error;
+    expect(cause.message).toBe(`write failed after sending {"claim_secret":"${REDACTED}"}`);
+    expect((cause.cause as Error).message).toBe(`socket closed, last bytes ${REDACTED}`);
+    for (const text of [
+      error.message,
+      error.hint ?? "",
+      cause.message,
+      cause.stack ?? "",
+      (cause.cause as Error).stack ?? "",
+      inspect(error, { depth: 6 }),
+    ]) {
+      expect(text).not.toContain(secret);
+    }
+  });
+
+  it("keeps the claim secret out of an API error body it is echoed in", async () => {
+    const secret = "cs_live_0a1b2c3d4e5f60718293a4b5";
+    stubFetch([{ status: 400, body: { error: "agent_claim_invalid", code: 1, echo: secret } }]);
+    const error = (await Hushscript.agent
+      .claim("sg_1", secret, { baseUrl: BASE })
+      .catch((e: unknown) => e)) as ApiError;
+    expect(error.details).toEqual({ echo: REDACTED });
+    expect(inspect(error, { depth: 6 })).not.toContain(secret);
+  });
+
   it("never retries a 5xx either", async () => {
     const stub = stubFetch([{ status: 503, text: "unavailable" }]);
     const error: unknown = await Hushscript.agent

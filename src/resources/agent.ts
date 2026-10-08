@@ -166,6 +166,8 @@ export const agentStatic: AgentStatic = {
 
   async claim(signupId, claimSecret, options = {}) {
     checkPathId(signupId, "signupId");
+    // Remembered like a token, so no error message, hint or cause raised by this call can print it.
+    if (typeof claimSecret === "string") registerSecret(claimSecret);
     const api = tokenlessApi(options.baseUrl);
     const { status, body } = await readObject(
       api.POST("/v1/agent/accounts/{signup_id}/claim", {
