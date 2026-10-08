@@ -183,6 +183,9 @@ describe("R61: nothing but a HushscriptError escapes elsewhere", () => {
       }).agent.rotateToken(),
     );
     expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (TypeError: clock broke), so its outcome is unknown.",
+    );
   });
 
   it("does not call a failure before the request went out an unknown outcome", async () => {
@@ -204,6 +207,9 @@ describe("R61: nothing but a HushscriptError escapes elsewhere", () => {
     expect(error).toBeInstanceOf(HushscriptError);
     expect(error).not.toBeInstanceOf(OutcomeUnknownError);
     expect(error).toMatchObject({ code: "unexpected_error" });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (TypeError: clock broke).",
+    );
     expect(fetchSpy.calls).toBe(0);
   });
 

@@ -6,6 +6,7 @@ import {
   NetworkError,
   OutcomeUnknownError,
   asHushscriptError,
+  describeError,
   errorFromResponse,
 } from "../errors.ts";
 import { describeTarget } from "../log.ts";
@@ -207,7 +208,7 @@ function terminalFailure(
     ? "The request was aborted."
     : failure.timedOut
       ? `The request timed out after ${String(timeoutMs / 1000)} s.`
-      : `The request failed before a response arrived${code === undefined ? "" : ` (${code})`}.`;
+      : `The request failed before a response arrived (${describeError(failure.error)}${code === undefined ? "" : `; code ${code}`}).`;
   if (retryClass === "never" && failure.sent) {
     return new OutcomeUnknownError({
       message: `${reason} The request was sent, so its outcome is unknown.`,
@@ -339,8 +340,7 @@ export function hardenedFetch(
       if (error instanceof HushscriptError) throw error;
       if (retryClass === "never" && wire.sent) {
         throw new OutcomeUnknownError({
-          message:
-            "The SDK failed unexpectedly after the request was sent, so its outcome is unknown.",
+          message: `The SDK failed unexpectedly after the request was sent (${describeError(error)}), so its outcome is unknown.`,
           cause: error,
         });
       }

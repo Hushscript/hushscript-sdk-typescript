@@ -240,6 +240,10 @@ HushscriptError
 └─ OutcomeUnknownError
 ```
 
+A `NetworkError` and an `OutcomeUnknownError` that wrap a failed request name the original error in
+their message, for example `(TypeError: fetch failed; code ECONNREFUSED)`, with secrets redacted; the
+original is the `cause`.
+
 An error raised after an upload started, or after a purchase was sent, carries `idempotencyKey`;
 once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(token, file)` to carry on without a second charge.
 

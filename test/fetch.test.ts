@@ -176,6 +176,75 @@ describe("network errors and the sent flag", () => {
   });
 });
 
+describe("failure messages name the underlying error", () => {
+  const CLAIM = {
+    method: "POST",
+    path: "/v1/agent/accounts/sg_1/claim",
+    body: JSON.stringify({ claim_secret: "x" }),
+  };
+
+  it("names the error type, its message and the nested cause code in a NetworkError", async () => {
+    stubFetch([{ error: networkError("ECONNREFUSED") }]);
+    const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(NetworkError);
+    expect((error as NetworkError).message).toBe(
+      "The request failed before a response arrived (TypeError: fetch failed; code ECONNREFUSED).",
+    );
+    expect(((error as NetworkError).cause as Error).name).toBe("TypeError");
+    expect(((error as NetworkError).cause as Error).message).toBe("fetch failed");
+  });
+
+  it("names the type alone when the error has no message and no code", async () => {
+    stubFetch([{ error: new RangeError("") }]);
+    const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect((error as NetworkError).message).toBe(
+      "The request failed before a response arrived (RangeError).",
+    );
+  });
+
+  it("names a thrown string as a string", async () => {
+    // A string is not an Error on purpose: the SDK must describe whatever a fetch throws.
+    // eslint-disable-next-line @typescript-eslint/prefer-promise-reject-errors
+    vi.stubGlobal("fetch", () => Promise.reject("boom"));
+    const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect((error as NetworkError).message).toBe(
+      "The request failed before a response arrived (thrown string: boom).",
+    );
+  });
+
+  it("redacts a token inside the original message from the new message", async () => {
+    stubFetch([{ error: new TypeError(`fetch failed for ${TOKEN}`) }]);
+    const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    const message = (error as NetworkError).message;
+    expect(message).toMatch(
+      /^The request failed before a response arrived \(TypeError: fetch failed for /,
+    );
+    expect(message).not.toContain(TOKEN);
+    expect(message).not.toContain(TOKEN.slice(12));
+  });
+
+  it("names the underlying error in an OutcomeUnknownError, redacted", async () => {
+    stubFetch([{ error: networkError("ECONNRESET") }]);
+    const error = await call("never", CLAIM).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect((error as OutcomeUnknownError).message).toBe(
+      "The request failed before a response arrived (TypeError: fetch failed; code ECONNRESET). The request was sent, so its outcome is unknown.",
+    );
+    stubFetch([{ error: new TypeError(`reset ${TOKEN}`) }]);
+    const leaky = await call("never", CLAIM).catch((e: unknown) => e);
+    expect((leaky as OutcomeUnknownError).message).not.toContain(TOKEN.slice(12));
+    expect((leaky as OutcomeUnknownError).message).toContain("(TypeError: reset ");
+  });
+});
+
 /* eslint-disable n/no-unsupported-features/node-builtins -- stable in every Node 22 release we test; the rule's table lags */
 /** A 200 whose body delivers one chunk and then fails, or never ends. */
 function brokenBody(mode: "error" | "stall"): Response {
