@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
 import { resolveConfig } from "../src/config";
 import { ConfigurationError } from "../src/errors";
-import { TOKEN, fakeClock } from "./helpers";
+import { TOKEN, fakeClock, stubFetch } from "./helpers";
 
 const NO_ENV: Record<string, string | undefined> = {};
 
@@ -23,6 +23,7 @@ describe("construction", () => {
     delete process.env["HUSHSCRIPT_TOKEN"];
   });
   afterEach(() => {
+    vi.unstubAllEnvs();
     if (saved !== undefined) process.env["HUSHSCRIPT_TOKEN"] = saved;
     vi.unstubAllGlobals();
   });
@@ -43,9 +44,36 @@ describe("construction", () => {
     expect(() => new Hushscript()).not.toThrow();
   });
 
-  it("treats an empty token as missing and trims a pasted one", () => {
-    expect(() => resolveConfig({ token: "" }, { env: NO_ENV })).toThrow(/HUSHSCRIPT_TOKEN/);
-    expect(() => resolveConfig({ token: `  ${TOKEN}\n` }, { env: NO_ENV })).not.toThrow();
+  it.each(["", "   "])("refuses a missing token %j before any request", (token) => {
+    const f = stubFetch([]);
+    const error = failure(() => new Hushscript({ token }));
+    expect(error).toMatchObject({ code: "config_invalid", status: null });
+    expect(error.hint).toBe(
+      "Set HUSHSCRIPT_TOKEN or pass a token. Create one in the Hushscript app: Account → MCP (app.hushscript.com/account/mcp).",
+    );
+    expect(f.requests).toHaveLength(0);
+  });
+
+  it("reads the environment token when the option is undefined", () => {
+    expect(
+      resolveConfig({ token: undefined }, { env: { HUSHSCRIPT_TOKEN: TOKEN } }).authorization(),
+    ).toBe(`Bearer ${TOKEN}`);
+  });
+
+  it("trims a pasted token", () => {
+    expect(resolveConfig({ token: `  ${TOKEN}\n` }, { env: NO_ENV }).authorization()).toBe(
+      `Bearer ${TOKEN}`,
+    );
+  });
+
+  it.each([42, {}, false])("refuses a non-string token %j before any request", (token) => {
+    vi.stubEnv("HUSHSCRIPT_TOKEN", TOKEN);
+    const f = stubFetch([]);
+    const error = failure(() => new Hushscript({ token: token as unknown as string }));
+    expect(error).toBeInstanceOf(ConfigurationError);
+    expect(error).toMatchObject({ code: "config_invalid", status: null, hint: null });
+    expect(error.message).toBe("token must be a string.");
+    expect(f.requests).toHaveLength(0);
   });
 
   it("prefers the option over the environment", () => {
@@ -54,8 +82,11 @@ describe("construction", () => {
   });
 
   it("rejects a token that does not start with hsr, without echoing it", () => {
+    const f = stubFetch([]);
     const secret = "sk_live_0123456789abcdefghij";
     const error = failure(() => resolveConfig({ token: secret }, { env: NO_ENV }));
+    expect(error).toMatchObject({ code: "config_invalid", status: null, hint: null });
+    expect(f.requests).toHaveLength(0);
     expect(error.message).toContain("doesn't look like a Hushscript token");
     expect(error.message).not.toContain(secret);
     expect(String(error.hint)).not.toContain(secret);
@@ -97,6 +128,11 @@ describe("construction", () => {
 });
 
 describe("baseUrl", () => {
+  afterEach(() => {
+    vi.unstubAllEnvs();
+    vi.unstubAllGlobals();
+  });
+
   it("defaults to the production host and strips a trailing slash", () => {
     expect(resolveConfig({ token: TOKEN }, { env: NO_ENV }).baseUrl).toBe(
       "https://api.hushscript.com",
@@ -121,6 +157,13 @@ describe("baseUrl", () => {
     },
   );
 
+  it("rejects an explicitly empty baseUrl before any request", () => {
+    const f = stubFetch([]);
+    const error = failure(() => new Hushscript({ token: TOKEN, baseUrl: "" }));
+    expect(error).toMatchObject({ code: "config_invalid", status: null, hint: null });
+    expect(f.requests).toHaveLength(0);
+  });
+
   it.each([
     "http://api.hushscript.com",
     "http://localhost.evil.example",
@@ -131,8 +174,20 @@ describe("baseUrl", () => {
     "https://api.hushscript.com/?region=us",
     "https://api.hushscript.com/#top",
   ])("rejects %s", (baseUrl) => {
-    const error = failure(() => resolveConfig({ token: TOKEN, baseUrl }, { env: NO_ENV }));
-    expect(error.message).toMatch(/baseUrl/);
+    const f = stubFetch([]);
+    for (const run of [
+      () => new Hushscript({ token: TOKEN, baseUrl }),
+      () => resolveConfig({ token: TOKEN }, { env: { HUSHSCRIPT_BASE_URL: baseUrl } }),
+      () => {
+        vi.stubEnv("HUSHSCRIPT_BASE_URL", baseUrl);
+        return new Hushscript({ token: TOKEN });
+      },
+    ]) {
+      const error = failure(run);
+      expect(error).toMatchObject({ code: "config_invalid", status: null, hint: null });
+      expect(error.message).toMatch(/baseUrl/);
+    }
+    expect(f.requests).toHaveLength(0);
   });
 });
 

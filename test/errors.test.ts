@@ -153,9 +153,13 @@ describe("class tree (spec 9.2)", () => {
       message: "m",
       hint: OutcomeUnknownError.hintFor("POST /v1/agent/accounts/{signup_id}/claim"),
     });
-    expect(claim.hint).toContain("Retrying will fail with agent_claim_invalid");
-    expect(OutcomeUnknownError.hintFor("POST /v1/agent/credentials/rotate")).toContain(
-      "The old token may already be revoked",
+    expect(claim).toBeInstanceOf(OutcomeUnknownError);
+    expect(claim).toMatchObject({ code: "outcome_unknown", status: null });
+    expect(claim.hint).toBe(
+      "The claim may have succeeded. Retrying will fail with agent_claim_invalid. If you have no token, contact support with the signup id.",
+    );
+    expect(OutcomeUnknownError.hintFor("POST /v1/agent/credentials/rotate")).toBe(
+      "The old token may already be revoked. Try a request with it; if it fails, the new token was lost and the account needs support.",
     );
     expect(OutcomeUnknownError.hintFor("POST /v1/agent/accounts")).toBeNull();
   });
@@ -232,8 +236,11 @@ describe("errorFromResponse", () => {
       { error: "insufficient_balance", code: 3001 },
       "POST /v1/uploads",
     );
-    expect(error.message).toMatch(/balance|minutes|credit/i);
-    expect(error.message.length).toBeGreaterThan(20);
+    expect(error).toBeInstanceOf(InsufficientBalanceError);
+    expect(error).toMatchObject({ code: "insufficient_balance", status: 402 });
+    expect(error.message).toBe(
+      "The account's balance cannot cover the requested seconds. The error body's needed_seconds and balance_seconds report the shortfall; top up before retrying.",
+    );
   });
 
   it("falls back to a plain message for an edge error that is not JSON", () => {

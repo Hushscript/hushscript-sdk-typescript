@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../../src/client";
-import { AbortError, JobFailedError, WaitTimeoutError } from "../../src/errors";
+import { AbortError, PreflightError, WaitTimeoutError } from "../../src/errors";
 import type { Progress } from "../../src/transcribe/types";
 import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock } from "../helpers";
 import { driven, fakeApi } from "./fakeapi";
@@ -55,6 +55,7 @@ describe("hs.jobs.wait", () => {
       (e: unknown) => e,
     );
     expect(error).toBeInstanceOf(WaitTimeoutError);
+    expect(error).toMatchObject({ code: "wait_timeout", status: null });
     expect((error as WaitTimeoutError).resumeToken).toBeNull();
     expect(clock.now()).toBe(20_000);
     expect(fake.count("job")).toBe(4);
@@ -67,17 +68,40 @@ describe("hs.jobs.wait", () => {
     const outcome = hs.jobs.wait("job_1", { signal: stop.signal }).catch((e: unknown) => e);
     for (let i = 0; i < 6; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
     stop.abort();
-    expect(await outcome).toBeInstanceOf(AbortError);
+    const error: unknown = await outcome;
+    expect(error).toBeInstanceOf(AbortError);
+    expect(error).toMatchObject({ code: "aborted", status: null });
   });
 
-  it("refuses a bad waitTimeout", async () => {
-    const { hs } = setup();
-    await expect(hs.jobs.wait("job_1", { waitTimeout: 0 })).rejects.toMatchObject({
-      code: "invalid_option",
-    });
-  });
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses waitTimeout %s before any request",
+    async (waitTimeout) => {
+      const { hs } = setup();
+      const fake = fakeApi();
+      const error: unknown = await hs.jobs.wait("job_1", { waitTimeout }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(fake.calls).toHaveLength(0);
+    },
+  );
 
-  it("is a JobFailedError only when transcribe turns it into one", () => {
-    expect(JobFailedError.name).toBe("JobFailedError");
-  });
+  it.each([new Error("caller failed"), "caller failed", null])(
+    "propagates a progress callback's thrown value unchanged (%#)",
+    async (thrown) => {
+      const { hs, clock } = setup();
+      const fake = fakeApi({ jobFlow: [{ state: "processing" }] });
+      const error: unknown = await driven(
+        hs.jobs.wait("job_1", {
+          onProgress: () => {
+            // eslint-disable-next-line @typescript-eslint/only-throw-error -- verifies primitive callback errors
+            throw thrown;
+          },
+        }),
+        clock,
+      ).catch((e: unknown) => e);
+      expect(error).toBe(thrown);
+      expect(fake.calls.map((entry) => entry.route)).toEqual(["job"]);
+      expect(clock.pending).toHaveLength(0);
+    },
+  );
 });

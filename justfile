@@ -30,8 +30,13 @@ test version=floor:
     {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
+    extra=()
+    if [ -n "${CONFORMANCE_DIR:-}" ]; then
+      conformance_dir="$(realpath "$CONFORMANCE_DIR")"
+      extra=(-v "$conformance_dir":/conformance:ro -e CONFORMANCE_DIR=/conformance)
+    fi
     docker compose build mock test
-    docker compose run --rm test
+    docker compose run --rm ${extra[@]+"${extra[@]}"} test
 
 # StrykerJS on src/http and src/transcribe (nightly)
 mutation version=floor:

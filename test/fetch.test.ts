@@ -5,6 +5,8 @@ import { AbortError, ApiError, NetworkError, OutcomeUnknownError } from "../src/
 import type { Clock } from "../src/clock";
 import type { ResolvedConfig } from "../src/config";
 import { hardenedFetch } from "../src/http/fetch";
+import { Hushscript } from "../src/client";
+import { driven, fakeApi } from "./transcribe/fakeapi";
 import {
   BASE,
   TEST_TIMEOUT_SECONDS,
@@ -31,7 +33,10 @@ describe("network errors and the sent flag", () => {
       body: JSON.stringify({ claim_secret: "x" }),
     }).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(OutcomeUnknownError);
-    expect((error as OutcomeUnknownError).hint).toContain("agent_claim_invalid");
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+    expect((error as OutcomeUnknownError).hint).toBe(
+      "The claim may have succeeded. Retrying will fail with agent_claim_invalid. If you have no token, contact support with the signup id.",
+    );
     expect((error as OutcomeUnknownError).cause).toBeInstanceOf(Error);
   });
 
@@ -41,7 +46,11 @@ describe("network errors and the sent flag", () => {
       method: "POST",
       path: "/v1/agent/credentials/rotate",
     }).catch((e: unknown) => e);
-    expect((error as OutcomeUnknownError).hint).toContain("old token may already be revoked");
+    expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+    expect((error as OutcomeUnknownError).hint).toBe(
+      "The old token may already be revoked. Try a request with it; if it fails, the new token was lost and the account needs support.",
+    );
   });
 
   it("raises NetworkError, not OutcomeUnknownError, when a never-class request never left", async () => {
@@ -130,7 +139,10 @@ describe("network errors and the sent flag", () => {
         path: "/v1/agent/credentials/rotate",
       }).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(OutcomeUnknownError);
-      expect((error as OutcomeUnknownError).hint).toContain("old token may already be revoked");
+      expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+      expect((error as OutcomeUnknownError).hint).toBe(
+        "The old token may already be revoked. Try a request with it; if it fails, the new token was lost and the account needs support.",
+      );
     },
   );
 
@@ -227,7 +239,10 @@ describe("outcome unknown after a sent unrepeatable call (spec 7.4)", () => {
   it("raises OutcomeUnknownError with the claim hint when the caller aborts after the body was sent", async () => {
     const error = await abortedCall(CLAIM, sentBy(stallAfterSend()));
     expect(error).toBeInstanceOf(OutcomeUnknownError);
-    expect((error as OutcomeUnknownError).hint).toContain("agent_claim_invalid");
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+    expect((error as OutcomeUnknownError).hint).toBe(
+      "The claim may have succeeded. Retrying will fail with agent_claim_invalid. If you have no token, contact support with the signup id.",
+    );
     expect(((error as OutcomeUnknownError).cause as Error).name).toBe("AbortError");
     expect(((error as OutcomeUnknownError).cause as { code?: string }).code).toBe("aborted");
   });
@@ -235,7 +250,10 @@ describe("outcome unknown after a sent unrepeatable call (spec 7.4)", () => {
   it("does the same for a bodyless rotate", async () => {
     const error = await abortedCall(ROTATE, sentBy(stallAfterSend()));
     expect(error).toBeInstanceOf(OutcomeUnknownError);
-    expect((error as OutcomeUnknownError).hint).toContain("old token may already be revoked");
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+    expect((error as OutcomeUnknownError).hint).toBe(
+      "The old token may already be revoked. Try a request with it; if it fails, the new token was lost and the account needs support.",
+    );
     expect(((error as OutcomeUnknownError).cause as Error).name).toBe("AbortError");
   });
 
@@ -352,15 +370,20 @@ describe("failures while the body is still arriving", () => {
 });
 
 describe("the part timeout (spec 3)", () => {
-  it("lets a caller pick the timeout for one fetch", async () => {
+  it.each([false, true])("wires 300 s to every upload PUT (proxied=%s)", async (proxied) => {
     const clock = fakeClock({ manual: true });
-    stubFetch([{ status: 200, body: {} }]);
-    await hardenedFetch(config(clock), "safe", { timeoutMs: 300_000 })(`${BASE}/v1/x`);
-    expect(clock.sleeps).toEqual([300_000]);
-  });
-
-  it("carries 300 s as the config's part timeout", () => {
-    expect(config().partTimeoutMs).toBe(300_000);
+    const fake = fakeApi({ proxied, parts: 3 });
+    const hs = new Hushscript({ token: TOKEN, baseUrl: BASE, clock });
+    const media = Uint8Array.from([0x49, 0x44, 0x33, ...new Uint8Array(27)]);
+    const transcript = await driven(
+      hs.transcribe(media, { durationSeconds: 20, concurrency: 1 }),
+      clock,
+    );
+    expect(transcript.id).toBe("tr_1");
+    expect(fake.count(proxied ? "part" : "r2")).toBe(proxied ? 1 : 3);
+    expect(clock.sleeps.filter((ms) => ms === 300_000)).toEqual(
+      proxied ? [300_000] : [300_000, 300_000, 300_000],
+    );
   });
 });
 
@@ -473,18 +496,25 @@ describe("logging (spec 10)", () => {
 
   it("logs network errors and never headers, bodies or query strings", async () => {
     const lines: string[] = [];
-    stubFetch([{ error: networkError("ECONNRESET") }]);
+    const transport = stubFetch([{ error: networkError("ECONNRESET") }]);
     await call("never", {
       method: "POST",
       path: "/v1/agent/credentials/rotate?x=1",
       body: JSON.stringify({ title: "my secret title" }),
+      headers: { Authorization: `Bearer ${TOKEN}`, "x-private-header": "private-header-value" },
       cfg: config(fakeClock(), { logLevel: "debug" }, lines),
     }).catch(() => undefined);
+    expect(transport.requests).toHaveLength(1);
+    expect(transport.requests[0]?.headers.get("authorization")).toBe(`Bearer ${TOKEN}`);
+    expect(lines).toEqual([
+      "hushscript POST /v1/agent/credentials/rotate status=network_error attempt=1 duration_ms=0",
+    ]);
     const text = lines.join("\n");
     expect(text).toContain("status=network_error");
     expect(text).not.toContain("secret title");
     expect(text).not.toContain("x=1");
     expect(text).not.toContain(TOKEN);
+    expect(text).not.toContain("private-header-value");
   });
 
   it("logs a direct-to-storage URL as r2:part/{n} without its signature", async () => {

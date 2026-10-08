@@ -302,15 +302,52 @@ describe("hs.buy", () => {
     const stub = stubFetch([cards("pm_a", [card("pm_a", true, true)]), PURCHASED]);
     await client().buy("300min", { idempotencyKey: "order_42-retry" });
     expect(purchaseBodies(stub)[0]).toMatchObject({ idempotency_key: "order_42-retry" });
-    const calls = stub.calls;
     for (const key of ["", "has space", "a".repeat(129), "ünï"]) {
+      const invalid = stubFetch([]);
       const error: unknown = await client()
         .buy("300min", { idempotencyKey: key })
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(PreflightError);
-      expect(error).toMatchObject({ code: "invalid_option" });
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(invalid.requests).toHaveLength(0);
     }
-    expect(stub.calls).toBe(calls);
+  });
+
+  it.each([[null], [42], [{}], [[]]])(
+    "refuses a nonstring purchase key %j before any request",
+    async (key) => {
+      const stub = stubFetch([]);
+      const error: unknown = await client()
+        .buy("300min", { idempotencyKey: key as unknown as string })
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({ code: "invalid_option", status: null, idempotencyKey: null });
+      expect(stub.requests).toHaveLength(0);
+    },
+  );
+
+  it.each(["a", "a".repeat(128)])("accepts the purchase key boundary %s", async (key) => {
+    const stub = stubFetch([cards("pm_a", [card("pm_a")]), PURCHASED]);
+    expect(await client().buy("300min", { idempotencyKey: key })).toEqual({
+      seconds: 18000,
+      minutes: 300,
+    });
+    expect(purchaseBodies(stub)[0]?.["idempotency_key"]).toBe(key);
+  });
+
+  it("carries the sent purchase key on a 401 without retrying", async () => {
+    const key = "purchase-401";
+    const stub = stubFetch([
+      cards("pm_a", [card("pm_a")]),
+      { status: 401, body: { error: "unauthorized", code: 2000 } },
+    ]);
+    const error: unknown = await client()
+      .buy("300min", { idempotencyKey: key })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AuthenticationError);
+    expect(error).toMatchObject({ code: "unauthorized", status: 401, idempotencyKey: key });
+    expect(purchaseBodies(stub).map((body) => body["idempotency_key"])).toEqual([key]);
+    expect(paths(stub)).toEqual(["/v1/billing/cards", "/v1/billing/purchase"]);
   });
 
   it("retries one 502 on the purchase with the same key and charges once", async () => {
@@ -362,10 +399,29 @@ describe("hs.buy", () => {
   });
 
   it.each([
+    [9007199254740991, 150119987579016],
+    [-9007199254740991, -150119987579016],
+    [0, 0],
+  ])("accepts safe purchase balance boundary %s", async (seconds, minutes) => {
+    const stub = stubFetch([
+      cards("pm_a", [card("pm_a")]),
+      { status: 200, body: { status: "ok", balance_seconds: seconds } },
+    ]);
+    expect(await client().buy("300min")).toEqual({ seconds, minutes });
+    expect(paths(stub)).toEqual(["/v1/billing/cards", "/v1/billing/purchase"]);
+  });
+
+  it.each([
     ["an empty body", { status: 200, text: "" }],
     ["a body that is not JSON", { status: 200, text: "<html>ok</html>" }],
     ["a JSON array", { status: 200, text: "[]" }],
     ["a status that is not ok", { status: 200, body: { status: "pending", balance_seconds: 1 } }],
+    [
+      "an unsafe balance",
+      { status: 200, body: { status: "ok", balance_seconds: 9007199254740992 } },
+    ],
+    ["a balance above int64", { status: 200, body: { status: "ok", balance_seconds: 1e20 } }],
+    ["a balance below int64", { status: 200, body: { status: "ok", balance_seconds: -1e20 } }],
     ["no balance", { status: 200, body: { status: "ok" } }],
     [
       "a balance that is not a whole number",
@@ -391,12 +447,13 @@ describe("hs.buy", () => {
     },
   );
 
-  it("is the same call as hs.billing.buy", async () => {
-    const stub = stubFetch([cards("pm_a", [card("pm_a", true, true)]), PURCHASED]);
+  it("delegates hs.buy arguments and its result to hs.billing.buy", async () => {
     const hs = client();
-    await hs.billing.buy("300min");
-    expect(purchaseBodies(stub)).toHaveLength(1);
-    expect(typeof hs.buy).toBe("function");
+    const purchase = { seconds: 123, minutes: 2 };
+    const buy = vi.spyOn(hs.billing, "buy").mockResolvedValue(purchase);
+    const options = { acknowledgeNoRefund: true, idempotencyKey: "alias-key" };
+    expect(await hs.buy("45min", options)).toBe(purchase);
+    expect(buy).toHaveBeenCalledExactlyOnceWith("45min", options);
   });
 
   it("does not catch an error from reading the cards", async () => {
@@ -432,5 +489,19 @@ describe("billing reads", () => {
     await expect(client().billing.setDefaultCard("pm_a")).rejects.toMatchObject({
       code: "bad_response",
     });
+  });
+});
+
+describe("billing identifiers (R53)", () => {
+  const invalidIds = ["", ".", "..", null, 42, {}, undefined, "\uD800", "\uDC00"];
+
+  it.each(invalidIds)("refuses invalid default-card id %j before any request", async (id) => {
+    const f = stubFetch([]);
+    const error: unknown = await client()
+      .billing.setDefaultCard(id as string)
+      .catch((failure: unknown) => failure);
+    expect(error).toBeInstanceOf(PreflightError);
+    expect(error).toMatchObject({ code: "invalid_option", status: null });
+    expect(f.requests).toHaveLength(0);
   });
 });

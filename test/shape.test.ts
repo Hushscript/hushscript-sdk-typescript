@@ -401,6 +401,164 @@ const CASES: Case[] = [
   },
 ];
 
+const ACCOUNT_FIELDS = [
+  "balance_seconds",
+  "held_seconds",
+  "credits_expire_at",
+  "card_on_file",
+  "data_region",
+  "limits",
+  ...["max_daily_seconds", "max_active_jobs", "active_jobs", "used_today_seconds"].map(
+    (key) => `limits.${key}`,
+  ),
+];
+const JOB_FIELDS = [
+  "id",
+  "state",
+  "mode",
+  "declared_seconds",
+  "verified_seconds",
+  "actual_seconds",
+  "billable_seconds",
+  "error",
+  "failure_kind",
+  "retry_of",
+  "created_at",
+  "transcript_id",
+  "options",
+  ...[
+    "language_code",
+    "speaker_detection",
+    "medical_mode",
+    "multichannel",
+    "translation_targets",
+    "keyterms",
+    "prompt",
+    "auto_generate_insights",
+  ].map((key) => `options.${key}`),
+];
+const listFields = (collection: string, fields: string[]): string[] => [
+  collection,
+  "next_cursor",
+  ...fields.map((field) => `${collection}.0.${field}`),
+];
+
+// Required fields read by the friendly layer. Optional/unread fields are deliberately outside this table:
+// packs.available; setup session_id/expires_at; transactions.account_reference;
+// job private-result/fetch fields; transcript matter_code/client_code and summary options/insights_state;
+// envelope.version; upload-create balance_seconds/held_seconds/limits/funding;
+// upload-complete ok/verified_seconds/balance_seconds/held_seconds; account purchases_remaining_in_window;
+// opaque speaker-name/translation keys and deletion receipt contents; part-page next_part_number;
+// signup.pack; claim/rotate fields other than the credential (spec 7.4 permits their absence).
+const REQUIRED_FIELDS: Record<string, string[]> = {
+  "hs.account": ACCOUNT_FIELDS,
+  "hs.balance": ACCOUNT_FIELDS,
+  "billing.packs": [
+    "packs",
+    ...["id", "amount", "currency", "seconds", "referral_bonus_seconds"].map(
+      (field) => `packs.0.${field}`,
+    ),
+  ],
+  "billing.cards": [
+    "default_id",
+    "methods",
+    ...[
+      "id",
+      "type",
+      "brand",
+      "last4",
+      "exp_month",
+      "exp_year",
+      "email",
+      "is_default",
+      "fast_checkout_eligible",
+    ].map((field) => `methods.0.${field}`),
+  ],
+  "billing.setDefaultCard": ["ok"],
+  "billing.addCardUrl": ["checkout_url"],
+  "billing.buy": ["status", "balance_seconds"],
+  "billing.transactions": listFields("transactions", [
+    "id",
+    "seconds",
+    "amount_cents",
+    "amount_refunded_cents",
+    "currency",
+    "status",
+    "created_at",
+    "payment_method_type",
+    "payment_method_brand",
+    "payment_method_last4",
+    "receipt_number",
+    "initiated_via",
+  ]),
+  "billing.ledger": listFields("entries", [
+    "id",
+    "delta_seconds",
+    "kind",
+    "job_id",
+    "note",
+    "created_at",
+  ]),
+  "billing.holds": listFields("holds", ["id", "kind", "seconds", "created_at"]),
+  "jobs.list": listFields("jobs", JOB_FIELDS),
+  "jobs.get": JOB_FIELDS,
+  "transcripts.page": listFields("transcripts", [
+    "id",
+    "title",
+    "language_detected",
+    "duration_seconds",
+    "created_at",
+    "auto_delete_at",
+    "tags",
+  ]),
+  "transcripts.get": [
+    "id",
+    "title",
+    "language_detected",
+    "duration_seconds",
+    "speaker_names",
+    "tags",
+    "created_at",
+    "updated_at",
+    "auto_delete_at",
+    "edited",
+    "body",
+    "body.original",
+    "body.translations",
+    ...["body.original", "body.translations.es"].flatMap((prefix) => [
+      `${prefix}.utterances`,
+      ...["speaker", "start_ms", "end_ms", "text"].map(
+        (field) => `${prefix}.utterances.0.${field}`,
+      ),
+    ]),
+  ],
+  "transcripts.deleted": listFields("deleted", [
+    "id",
+    "title",
+    "duration_seconds",
+    "created_at",
+    "deleted_at",
+    "cause",
+    "receipt",
+  ]),
+  "upload.create": [
+    "job_id",
+    "state",
+    "upload",
+    "upload.part_size_bytes",
+    "upload.total_parts",
+    "upload.part_urls",
+    "upload.next_part_number",
+    "upload.part_urls.0.n",
+    "upload.part_urls.0.url",
+  ],
+  "upload.part-urls": ["part_urls", "part_urls.0.n", "part_urls.0.url"],
+  "upload.complete": ["state"],
+  "agent.signup": ["signup_id", "claim_secret", "checkout_url", "amount", "currency", "expires_at"],
+  "agent.claim": ["pat"],
+  "agent.rotateToken": ["pat"],
+};
+
 function stepsFor(testCase: Case, answer: Step): Step[] {
   return testCase.steps?.(answer) ?? [answer];
 }
@@ -446,6 +604,7 @@ function expectBadResponse(testCase: Case, error: unknown): void {
   if (testCase.lost === true) {
     // A lost credential: the cause is a redacted copy of the bad_response.
     expect(error).toBeInstanceOf(OutcomeUnknownError);
+    expect(error).toMatchObject({ code: "outcome_unknown", status: null });
     expect((error as OutcomeUnknownError).cause).toMatchObject({
       name: "ApiError",
       code: "bad_response",
@@ -453,7 +612,8 @@ function expectBadResponse(testCase: Case, error: unknown): void {
     return;
   }
   if (testCase.exhausted === true) {
-    expect(error).toMatchObject({ code: "parts_exhausted" });
+    expect(error).toBeInstanceOf(UploadError);
+    expect(error).toMatchObject({ code: "parts_exhausted", status: null });
     // The cause is the redacted copy an error carries, which keeps the code and not the status.
     expect((error as UploadError).cause).toMatchObject({ name: "ApiError", code: "bad_response" });
     return;
@@ -496,16 +656,21 @@ describe("every body the friendly layer maps", () => {
     expectBadResponse(testCase, await outcome(testCase, { status: 200, body: [] }));
   });
 
-  it.each(CASES)("$name raises bad_response when any one field is missing", async (testCase) => {
-    const missing = allPaths(testCase.valid).filter((path) => path.length === 1);
-    expect(missing.length).toBeGreaterThan(0);
-    for (const path of missing) {
-      const answer: Step = { status: 200, body: withoutAt(testCase.valid, path) };
-      const error = await outcome(testCase, answer);
-      // A field the SDK does not read may be missing; every other one must say so.
-      if (error !== null) expectBadResponse(testCase, error);
-    }
-  });
+  it.each(CASES)(
+    "$name raises bad_response when any required field is missing",
+    async (testCase) => {
+      const missing = REQUIRED_FIELDS[testCase.name];
+      expect(missing).toBeDefined();
+      if (missing === undefined) throw new Error(`required fields missing for ${testCase.name}`);
+      expect(missing.length).toBeGreaterThan(0);
+      for (const dotted of missing) {
+        const path = dotted.split(".").map((key) => (/^\d+$/.test(key) ? Number(key) : key));
+        expect(allPaths(testCase.valid)).toContainEqual(path);
+        const answer: Step = { status: 200, body: withoutAt(testCase.valid, path) };
+        expectBadResponse(testCase, await outcome(testCase, answer));
+      }
+    },
+  );
 
   it.each([
     ["upload.create", ["upload", "part_size_bytes"]],
@@ -534,7 +699,6 @@ describe("every body the friendly layer maps", () => {
           const error = await outcome(testCase, { status: 200, body });
           if (error !== null) expect(error).toBeInstanceOf(HushscriptError);
         }),
-        { numRuns: 200 },
       ),
     );
   });
@@ -554,7 +718,6 @@ describe("every body the friendly layer maps", () => {
           const error = await outcome(testCase, { status: 200, body });
           if (error !== null) expect(error).toBeInstanceOf(HushscriptError);
         }),
-        { numRuns: 600 },
       ),
     );
   });

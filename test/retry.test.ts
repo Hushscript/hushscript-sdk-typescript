@@ -94,19 +94,36 @@ describe("retry class by operation (spec 7.2)", () => {
     expect(retryClassFor(method, path)).toBe(expected);
   });
 
-  it("classifies every operation of the committed spec, and only GETs are safe by default", () => {
-    for (const [path, item] of Object.entries(spec.paths)) {
-      for (const method of Object.keys(item)) {
-        if (!["get", "post", "put", "patch", "delete"].includes(method)) continue;
-        const cls = retryClassFor(method, path);
-        if (cls === "safe") {
-          expect(
-            method === "get" || /heartbeat|parts\/\{n\}|complete/.test(path),
-            `${method} ${path}`,
-          ).toBe(true);
-        }
-      }
+  it("classifies every operation of the committed spec by the spec 7.2 policy", () => {
+    const exceptional: Record<string, RetryClass> = {
+      "POST /v1/uploads": "upload-create",
+      "PUT /v1/uploads/{job}/parts/{n}": "idempotent",
+      "POST /v1/uploads/{job}/complete": "idempotent",
+      "POST /v1/uploads/{job}/heartbeat": "safe",
+      "POST /v1/billing/purchase": "purchase",
+      "POST /v1/billing/setup-session": "purchase",
+      "POST /v1/agent/accounts": "never",
+      "POST /v1/agent/accounts/{signup_id}/claim": "never",
+      "POST /v1/agent/credentials/rotate": "never",
+    };
+    const operations = Object.entries(spec.paths).flatMap(([path, item]) =>
+      Object.keys(item)
+        .filter((method) =>
+          ["get", "head", "post", "put", "patch", "delete", "options", "trace"].includes(method),
+        )
+        .map((method) => ({ method, path })),
+    );
+    expect(operations.length).toBeGreaterThan(0);
+    const visited = new Set<string>();
+    for (const { method, path } of operations) {
+      const operation = `${method.toUpperCase()} ${path}`;
+      const expected =
+        exceptional[operation] ?? (method === "get" || method === "head" ? "safe" : "mutate");
+      expect(retryClassFor(method, path), operation).toBe(expected);
+      visited.add(operation);
     }
+    for (const operation of Object.keys(exceptional))
+      expect(visited.has(operation), operation).toBe(true);
   });
 });
 

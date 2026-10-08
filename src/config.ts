@@ -163,6 +163,9 @@ function refuseBrowser(allowed: boolean | undefined): void {
 }
 
 export function checkToken(raw: string): string {
+  if (typeof raw !== "string") {
+    throw new ConfigurationError({ message: "token must be a string." });
+  }
   const token = raw.trim();
   if (token === "") throw ConfigurationError.missingToken();
   if (!token.startsWith("hsr")) {

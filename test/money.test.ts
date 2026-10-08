@@ -25,6 +25,34 @@ describe("toMoney", () => {
     expect(toMoney(amount, currency)).toEqual({ amount, currency, formatted: shown });
   });
 
+  it.each([
+    ["BIF", "1,500"],
+    ["CLP", "1,500"],
+    ["DJF", "1,500"],
+    ["GNF", "1,500"],
+    ["JPY", "1,500"],
+    ["KMF", "1,500"],
+    ["KRW", "1,500"],
+    ["MGA", "1,500"],
+    ["PYG", "1,500"],
+    ["RWF", "1,500"],
+    ["UGX", "1,500"],
+    ["VND", "1,500"],
+    ["VUV", "1,500"],
+    ["XAF", "1,500"],
+    ["XOF", "1,500"],
+    ["XPF", "1,500"],
+    ["BHD", "1.500"],
+    ["JOD", "1.500"],
+    ["KWD", "1.500"],
+    ["OMR", "1.500"],
+    ["TND", "1.500"],
+  ])("pins the complete spec 6.5 minor-unit table for %s", (currency, formatted) => {
+    const money = toMoney(1500, currency);
+    expect(money).toMatchObject({ amount: 1500, currency });
+    expect(money.formatted).toMatch(new RegExp(`${formatted.replace(".", "\\.")}$`));
+  });
+
   it("always shows the currency's full digits, never fewer", () => {
     expect(toMoney(500, "USD").formatted).toBe("$5.00");
     expect(toMoney(1000, "KWD").formatted).toBe(`KWD${NBSP}1.000`);

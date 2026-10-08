@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
-import { AbortError, AuthenticationError, HushscriptError } from "../src/errors";
+import { AbortError, AuthenticationError, HushscriptError, PreflightError } from "../src/errors";
 import { BASE, JOB_OPTIONS, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, stubFetch } from "./helpers";
 
 afterEach(() => {
@@ -79,12 +79,19 @@ describe("hs.transcripts", () => {
 
   it.each([0, -1, 1.5, Number.NaN])("refuses pageSize %s before any request", async (pageSize) => {
     const f = stubFetch([{ status: 200, body: { transcripts: [], next_cursor: null } }]);
-    expect(() => client().transcripts.list({ pageSize })).toThrow(
-      expect.objectContaining({ code: "invalid_option" }) as Error,
-    );
-    await expect(client().transcripts.page({ pageSize })).rejects.toMatchObject({
-      code: "invalid_option",
-    });
+    let listError: unknown;
+    try {
+      client().transcripts.list({ pageSize });
+    } catch (error) {
+      listError = error;
+    }
+    expect(listError).toBeInstanceOf(PreflightError);
+    expect(listError).toMatchObject({ code: "invalid_option", status: null });
+    const pageError: unknown = await client()
+      .transcripts.page({ pageSize })
+      .catch((error: unknown) => error);
+    expect(pageError).toBeInstanceOf(PreflightError);
+    expect(pageError).toMatchObject({ code: "invalid_option", status: null });
     expect(f.calls).toBe(0);
   });
 
@@ -360,5 +367,23 @@ describe("signal on lists", () => {
     await expect(drain(client().transcripts.list())).rejects.toMatchObject({
       code: "pagination_loop",
     });
+  });
+});
+
+describe("resource path identifiers (R52/R53)", () => {
+  it.each(["", ".", "..", null, 42, {}])("refuses invalid id %j before any request", async (id) => {
+    const f = stubFetch([]);
+    const hs = client();
+    const invalid = id as unknown as string;
+    for (const run of [
+      () => hs.jobs.get(invalid),
+      () => hs.jobs.wait(invalid),
+      () => hs.transcripts.get(invalid),
+    ]) {
+      const error: unknown = await run().catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(f.calls).toBe(0);
+    }
   });
 });
