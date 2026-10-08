@@ -600,7 +600,6 @@ describe("results that hand the caller a secret", () => {
 
 describe("static agent baseUrl validation", () => {
   it.each([
-    "",
     "http://api.hushscript.com",
     "https://api.hushscript.com/v1",
     "not a URL",
@@ -617,5 +616,49 @@ describe("static agent baseUrl validation", () => {
       expect(error).toMatchObject({ code: "config_invalid", status: null, hint: null });
       expect(stub.requests).toHaveLength(0);
     }
+  });
+});
+
+describe("a blank baseUrl on the static agent calls means not set", () => {
+  const SIGNUP_ANSWER = {
+    status: 200,
+    body: {
+      signup_id: "hsr1:eu:abc",
+      claim_secret: "cs_secret",
+      checkout_url: "https://checkout.example.com/pay/abc",
+      pack: "45min",
+      amount: 599,
+      currency: "USD",
+      expires_at: 1_760_001_800,
+    },
+  };
+
+  afterEach(() => {
+    vi.unstubAllEnvs();
+  });
+
+  it.each(["", "   ", "\t\n"])(
+    "falls back to HUSHSCRIPT_BASE_URL for baseUrl %j, signup and claim alike",
+    async (baseUrl) => {
+      vi.stubEnv("HUSHSCRIPT_BASE_URL", "https://env.example.org");
+      const signup = stubFetch([SIGNUP_ANSWER]);
+      await Hushscript.agent.signup({ ...SIGNUP, baseUrl });
+      expect(signup.requests[0]?.url).toBe("https://env.example.org/v1/agent/accounts");
+      const claim = stubFetch([
+        {
+          status: 200,
+          body: { pat: CLAIMED_TOKEN, user_id: "u_1", scopes: [], balance_seconds: 60 },
+        },
+      ]);
+      await Hushscript.agent.claim("sg_1", "cs_secret", { baseUrl });
+      expect(claim.requests[0]?.url).toBe("https://env.example.org/v1/agent/accounts/sg_1/claim");
+    },
+  );
+
+  it("uses the production host when the option and the variable are both blank", async () => {
+    vi.stubEnv("HUSHSCRIPT_BASE_URL", "  ");
+    const signup = stubFetch([SIGNUP_ANSWER]);
+    await Hushscript.agent.signup({ ...SIGNUP, baseUrl: "" });
+    expect(signup.requests[0]?.url).toBe("https://api.hushscript.com/v1/agent/accounts");
   });
 });

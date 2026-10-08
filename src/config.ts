@@ -16,16 +16,16 @@ const CREATE_WINDOW_MS = 60_000;
 const LOOPBACK_HOSTS: ReadonlySet<string> = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 export interface HushscriptOptions {
-  /** Falls back to HUSHSCRIPT_TOKEN. */
-  token?: string | undefined;
+  /** Falls back to HUSHSCRIPT_TOKEN when null, undefined, empty or only whitespace. */
+  token?: string | null | undefined;
   /** Falls back to HUSHSCRIPT_BASE_URL, then the production host. */
-  baseUrl?: string | undefined;
+  baseUrl?: string | null | undefined;
   /** Seconds per request; default 60, at most 3600. */
   timeout?: number | undefined;
   /** Retries after the first attempt, per request; default 3. */
   maxRetries?: number | undefined;
   /** Falls back to HUSHSCRIPT_LOG, then "off". */
-  logLevel?: LogLevel | undefined;
+  logLevel?: LogLevel | null | undefined;
   /** Lets the client be constructed where `window` and `document` exist (tests only). */
   dangerouslyAllowBrowser?: boolean | undefined;
   clock?: Clock | undefined;
@@ -34,7 +34,7 @@ export interface HushscriptOptions {
 /** What a call that needs no token (agent signup and claim) can configure. */
 export interface TokenlessOptions {
   /** Falls back to HUSHSCRIPT_BASE_URL, then the production host. */
-  baseUrl?: string | undefined;
+  baseUrl?: string | null | undefined;
 }
 
 /** Hooks for tests; not part of the public options. */
@@ -122,6 +122,13 @@ function runtime(): string {
   return `node/${process.versions.node}`;
 }
 
+/** An option or environment value that is null, undefined, empty or only whitespace counts as not set. */
+function setValue(value: unknown): string | undefined {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "string") return value as string;
+  return value.trim() === "" ? undefined : value;
+}
+
 function checkBaseUrl(raw: string): string {
   let url: URL;
   try {
@@ -200,10 +207,14 @@ function build(
     throw new ConfigurationError({ message: "maxRetries must be a whole number, 0 or more." });
   }
   const clock = options.clock ?? systemClock;
-  const logLevel = checkLogLevel(options.logLevel ?? env["HUSHSCRIPT_LOG"] ?? "off");
+  const logLevel = checkLogLevel(
+    setValue(options.logLevel) ?? setValue(env["HUSHSCRIPT_LOG"]) ?? "off",
+  );
   if (token !== null) registerSecret(token);
   return new ResolvedConfig(token, {
-    baseUrl: checkBaseUrl(options.baseUrl ?? env["HUSHSCRIPT_BASE_URL"] ?? DEFAULT_BASE_URL),
+    baseUrl: checkBaseUrl(
+      setValue(options.baseUrl) ?? setValue(env["HUSHSCRIPT_BASE_URL"]) ?? DEFAULT_BASE_URL,
+    ),
     timeoutMs: timeout * 1000,
     partTimeoutMs: PART_TIMEOUT_MS,
     maxRetries,
@@ -222,7 +233,7 @@ export function resolveConfig(
 ): ResolvedConfig {
   const env = internals.env ?? process.env;
   refuseBrowser(options.dangerouslyAllowBrowser);
-  const token = checkToken(options.token ?? env["HUSHSCRIPT_TOKEN"] ?? "");
+  const token = checkToken(setValue(options.token) ?? setValue(env["HUSHSCRIPT_TOKEN"]) ?? "");
   return build(token, options, env, internals);
 }
 

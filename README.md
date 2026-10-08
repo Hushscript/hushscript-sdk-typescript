@@ -289,7 +289,9 @@ ffmpeg -i input -vn -c:a libopus output.opus
 | `clock`                   | none                  | the system clock; pass a `Clock` in tests                            |
 | `dangerouslyAllowBrowser` | none                  | `false`; for tests only                                              |
 
-An explicit option beats its environment variable. The base URL must be `https://`, or `http://` to
+An explicit option beats its environment variable. A `null`, empty or whitespace-only option or
+variable counts as not set: the SDK falls back to the environment variable, then to the default (a
+token has no default, so it raises the missing-token `ConfigurationError`). The base URL must be `https://`, or `http://` to
 `localhost`, `127.0.0.1` or `[::1]`, with no path. Each upload part has its own 300 s timeout, which you cannot
 change.
 
