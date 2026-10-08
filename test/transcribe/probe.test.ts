@@ -119,6 +119,11 @@ describe("probeDuration", () => {
     );
     expect(error).toBeInstanceOf(UnsupportedMediaError);
     expect((error as UnsupportedMediaError).code).toBe("duration_unreadable");
+    const cause = (error as UnsupportedMediaError).cause as Error;
+    expect(cause).toBeInstanceOf(Error);
+    expect((error as UnsupportedMediaError).message).toBe(
+      `Could not read the duration (${cause.name}: ${cause.message}); pass durationSeconds.`,
+    );
   });
 
   it("raises duration_unreadable for a stream, which cannot be probed", async () => {
@@ -128,7 +133,13 @@ describe("probeDuration", () => {
       },
     });
     const source = await openSource(stream, 10);
-    await expect(probeDuration(source)).rejects.toMatchObject({ code: "duration_unreadable" });
+    const error = await probeDuration(source).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "duration_unreadable" });
+    // Nothing was thrown underneath, so there is no original to name.
+    expect((error as UnsupportedMediaError).message).toBe(
+      "Could not read the duration; pass durationSeconds.",
+    );
+    expect((error as UnsupportedMediaError).cause).toBeUndefined();
     await source.close();
   });
 });

@@ -1,6 +1,6 @@
 import type { Clock } from "../clock.ts";
 import { MAX_BODY_DEPTH, nestsDeeperThan } from "../depth.ts";
-import { AbortError, ApiError, HushscriptError } from "../errors.ts";
+import { AbortError, ApiError, HushscriptError, describeError } from "../errors.ts";
 import { describeProblem, type Shape } from "../shape.ts";
 
 export function aborted(signal: AbortSignal): AbortError {
@@ -21,7 +21,7 @@ export async function sleepOrAbort(clock: Clock, ms: number, signal: AbortSignal
 export function badResponse(route: string, status: number | null, cause?: unknown): ApiError {
   return new ApiError({
     code: "bad_response",
-    message: `${route} answered with a body the SDK cannot use.`,
+    message: `${route} answered with a body the SDK cannot use${cause === undefined ? "" : ` (${describeError(cause)})`}.`,
     status,
     ...(cause === undefined ? {} : { cause }),
   });

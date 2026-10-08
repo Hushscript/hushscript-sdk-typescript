@@ -1,6 +1,6 @@
 import type { Client } from "openapi-fetch";
 import type { ResolvedConfig } from "../config.ts";
-import { AbortError, ApiError, HushscriptError, UploadError } from "../errors.ts";
+import { AbortError, ApiError, HushscriptError, UploadError, describeError } from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { hardenedFetch } from "../http/fetch.ts";
 import { MAX_PART_BYTES, PART_URLS } from "../shapes.ts";
@@ -185,7 +185,7 @@ async function readPart(
     if (error instanceof HushscriptError) throw error;
     throw new UploadError({
       code: "source_read_failed",
-      message: `Reading the input failed at byte ${String(offset)}, part way through the upload.`,
+      message: `Reading the input failed at byte ${String(offset)}, part way through the upload (${describeError(error)}).`,
       cause: error,
     });
   }

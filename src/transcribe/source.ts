@@ -1,7 +1,7 @@
 /* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
 import type { Stats } from "node:fs";
 import { open, stat, type FileHandle } from "node:fs/promises";
-import { PreflightError, UploadError } from "../errors.ts";
+import { PreflightError, UploadError, describeError } from "../errors.ts";
 import { aborted } from "./common.ts";
 
 export type FileInput = string | Blob | Uint8Array | ReadableStream<Uint8Array>;
@@ -234,7 +234,7 @@ class StreamSource implements Source {
     return part;
   }
 
-  /** The stream belongs to the caller: releasing the lock leaves it uncancelled, unclosed and readable. */
+  /** The stream belongs to the caller: releasing the lock leaves it uncanceled, unclosed and readable. */
   close(): Promise<void> {
     this.#reader.releaseLock();
     return Promise.resolve();
@@ -248,7 +248,7 @@ function isStream(file: FileInput): file is ReadableStream<Uint8Array> {
 function unreadable(path: string, cause?: unknown): PreflightError {
   return new PreflightError({
     code: "file_unreadable",
-    message: `${path} cannot be read: it is missing, not a regular file or cannot be opened.`,
+    message: `${path} cannot be read: it is missing, not a regular file or cannot be opened${cause === undefined ? "" : ` (${describeError(cause)})`}.`,
     ...(cause === undefined ? {} : { cause }),
   });
 }

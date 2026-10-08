@@ -9,6 +9,7 @@ import {
   PermissionDeniedError,
   RateLimitError,
 } from "../src/errors";
+import { badResponse } from "../src/transcribe/common";
 import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, networkError, stubFetch } from "./helpers";
 
 afterEach(() => {
@@ -50,6 +51,34 @@ describe("hs.api", () => {
     expect(error).toBeInstanceOf(ApiError);
     expect(error).toMatchObject({ code: "bad_response" });
     expect((error as HushscriptError).message).toContain("GET /v1/account");
+  });
+
+  it("names the SyntaxError in the bad_response message, with its own text", async () => {
+    stubFetch([{ status: 200, text: "<html>maintenance</html>" }]);
+    const error = (await client()
+      .api.GET("/v1/account")
+      .catch((e: unknown) => e)) as ApiError;
+    const cause = error.cause as Error;
+    expect(cause.name).toBe("SyntaxError");
+    expect(error.message).toBe(
+      `GET /v1/account answered with a body the SDK cannot use (SyntaxError: ${cause.message}).`,
+    );
+  });
+
+  it("names the field in the bad_response message of a body that does not fit", async () => {
+    stubFetch([{ status: 200, body: {} }]);
+    const error = (await client()
+      .account()
+      .catch((e: unknown) => e)) as ApiError;
+    expect(error.message).toBe(
+      "GET /v1/account answered with a body the SDK cannot use (Error: balance_seconds: expected a number).",
+    );
+  });
+
+  it("adds nothing when a bad_response has no cause", () => {
+    expect(badResponse("GET /v1/account", 200).message).toBe(
+      "GET /v1/account answered with a body the SDK cannot use.",
+    );
   });
 
   it("redacts a token the non-JSON body echoes, in the error and its cause", async () => {

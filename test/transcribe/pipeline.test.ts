@@ -1298,10 +1298,39 @@ describe("a path input", () => {
 
   it("raises file_unreadable, with the OS error as the cause, for a missing path", async () => {
     const { hs, fake } = setup();
-    const error = await failure(hs.transcribe(join(await scratch(), "missing.mp3")));
+    const missing = join(await scratch(), "missing.mp3");
+    const error = await failure(hs.transcribe(missing));
     expect(error).toBeInstanceOf(PreflightError);
     expect(error).toMatchObject({ code: "file_unreadable" });
     expect((error as Error).cause).toMatchObject({ code: "ENOENT" });
+    expect((error as Error).message).toBe(
+      `${missing} cannot be read: it is missing, not a regular file or cannot be opened (Error: ENOENT: no such file or directory, stat '${missing}').`,
+    );
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  it("names a directory as unreadable with no original error to name", async () => {
+    const { hs } = setup();
+    const directory = await scratch();
+    const error = await failure(hs.transcribe(directory));
+    expect((error as Error).message).toBe(
+      `${directory} cannot be read: it is missing, not a regular file or cannot be opened.`,
+    );
+    expect((error as Error).cause).toBeUndefined();
+  });
+
+  it("names the original error when the first bytes of the input cannot be read", async () => {
+    const { hs, fake } = setup();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.error(new Error("socket reset"));
+      },
+    });
+    const error = await failure(hs.transcribe(stream, { size: 1000, durationSeconds: 20 }));
+    expect(error).toBeInstanceOf(PreflightError);
+    expect(error).toMatchObject({ code: "file_unreadable", status: null });
+    expect((error as Error).message).toBe("The input could not be read (Error: socket reset).");
+    expect(((error as Error).cause as Error).message).toBe("socket reset");
     expect(fake.calls).toHaveLength(0);
   });
 
@@ -1408,6 +1437,9 @@ describe("a source that fails to read", () => {
     );
     expect(error).toBeInstanceOf(UploadError);
     expect(error).toMatchObject({ code: "source_read_failed", status: null });
+    expect((error as UploadError).message).toBe(
+      `Reading the input failed at byte ${String(partSize)}, part way through the upload (Error: socket reset).`,
+    );
     expect((error as UploadError).idempotencyKey).toBe(fake.creates[0]?.["idempotency_key"]);
     expect((error as UploadError).resumeToken).toBe(
       encodeResumeToken({

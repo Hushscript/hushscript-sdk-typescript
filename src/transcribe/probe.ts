@@ -1,7 +1,7 @@
 // eslint-disable-next-line n/no-unsupported-features/node-builtins -- present, if flagged experimental, in every Node 22 release (since 19.8); the rule's table lags
 import { openAsBlob } from "node:fs";
 import { parseBlob, parseBuffer, type IAudioMetadata } from "music-metadata";
-import { AbortError, UnsupportedMediaError } from "../errors.ts";
+import { AbortError, UnsupportedMediaError, describeError } from "../errors.ts";
 import type { ProbeInput, Source } from "./source.ts";
 
 const ID3_HEADER_BYTES = 10;
@@ -99,7 +99,7 @@ async function hasDurationHeader(
 function unreadable(cause?: unknown): UnsupportedMediaError {
   return new UnsupportedMediaError({
     code: "duration_unreadable",
-    message: "Could not read the duration; pass durationSeconds.",
+    message: `Could not read the duration${cause === undefined ? "" : ` (${describeError(cause)})`}; pass durationSeconds.`,
     ...(cause === undefined ? {} : { cause }),
   });
 }

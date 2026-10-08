@@ -245,14 +245,18 @@ HushscriptError
 └─ OutcomeUnknownError
 ```
 
-A `NetworkError` and an `OutcomeUnknownError` that wrap a failed request name the original error in
-their message, for example `(TypeError: fetch failed; code ECONNREFUSED)`, with secrets redacted; the
-original is the `cause`. Only a `TypeError` (what `fetch` throws for a failed connection or body) is a
-network failure. Any other value `fetch` throws (a `RangeError`, a string, an error of your own
-class) raises `HushscriptError` with code `unexpected_error`, is not retried, and its message names
-the type, for example `The SDK failed unexpectedly after the request was sent (RangeError: ...)`;
-after a claim or rotation went out it is an `OutcomeUnknownError`. The message says "before" or
-"after the request was sent" only where the SDK knows, and nothing about it where it does not.
+Every error that wraps another one names the original's type and message in parentheses in its own
+message, with secrets redacted, and keeps the original as the `cause`: a failed request
+(`NetworkError`, `OutcomeUnknownError`, for example `(TypeError: fetch failed; code ECONNREFUSED)`),
+an unreadable input (`file_unreadable`, `source_read_failed`), an unreadable duration
+(`duration_unreadable`) and an unusable response (`bad_response`).
+
+Only a `TypeError` (what `fetch` throws for a failed connection or body) is a network failure. Any
+other value `fetch` throws (a `RangeError`, a string, an error of your own class) raises
+`HushscriptError` with code `unexpected_error`, is not retried, and its message names the type, for
+example `The SDK failed unexpectedly after the request was sent (RangeError: ...)`. After a claim or a
+rotation went out it is an `OutcomeUnknownError`. The message says "before" or "after the request was
+sent" only where the SDK knows, and is silent about it where it does not.
 
 An error raised after an upload started, or after a purchase was sent, carries `idempotencyKey`;
 once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(token, file)` to carry on without a second charge.
