@@ -422,6 +422,23 @@ describe("direct part retries", () => {
 });
 
 describe("heartbeat and complete", () => {
+  it("heartbeats every 120 s while parts are held, and stops once complete returned", async () => {
+    const ref: { clock?: Clock } = {};
+    const { hs, clock, fake } = setup({
+      parts: 8,
+      hooks: {
+        r2: async (call) => {
+          await ref.clock?.sleep(250_000, call.signal);
+          return undefined;
+        },
+      },
+    });
+    ref.clock = clock;
+    await driven(hs.transcribe(mp3, { concurrency: 2 }), clock);
+    expect(fake.count("heartbeat")).toBe(8);
+    expect(clock.pending).toHaveLength(0);
+  });
+
   it("stops heartbeating on wrong_state and carries on uploading", async () => {
     const ref: { clock?: Clock } = {};
     const { hs, clock, fake } = setup({
