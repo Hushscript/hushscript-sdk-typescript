@@ -8,6 +8,7 @@ import {
   asHushscriptError,
   describeError,
   errorFromResponse,
+  markNotSent,
 } from "../errors.ts";
 import { describeTarget } from "../log.ts";
 import { operationFor } from "./operations.ts";
@@ -247,7 +248,7 @@ export function hardenedFetch(
   const guarded = async (
     input: Parameters<typeof fetch>[0],
     init: Parameters<typeof fetch>[1],
-    wire: { sent: boolean },
+    wire: { sent: boolean; everSent: boolean },
   ): Promise<Response> => {
     // Bytes are used where they are: building a Request from them would copy every part.
     const direct = init?.body instanceof Uint8Array ? init.body : null;
@@ -282,6 +283,7 @@ export function hardenedFetch(
       const startedAt = cfg.clock.now();
       const outcome = await attempt(timeoutMs, cfg, prepared, signal);
       wire.sent = outcome.kind === "response" || outcome.failure.sent;
+      wire.everSent ||= wire.sent;
       const durationMs = cfg.clock.now() - startedAt;
       const log = (status: number | string, retryDelayMs: number | null): void => {
         cfg.logger.attempt({
@@ -352,18 +354,20 @@ export function hardenedFetch(
   // Whatever fails in here surfaces as an SDK error; after a request went out, for a call the
   // server cannot repeat, it is an unknown outcome, not a plain failure.
   return async (input, init) => {
-    const wire = { sent: false };
+    const wire = { sent: false, everSent: false };
     try {
       return await guarded(input, init, wire);
     } catch (error) {
-      if (error instanceof HushscriptError) throw error;
+      // `everSent` spans the retries: a failure on a later attempt can still follow a first one that went out.
+      if (error instanceof HushscriptError) throw wire.everSent ? error : markNotSent(error);
       if (retryClass === "never" && wire.sent) {
         throw new OutcomeUnknownError({
           message: `The SDK failed unexpectedly after the request was sent (${describeError(error)}), so its outcome is unknown.`,
           cause: error,
         });
       }
-      throw asHushscriptError(error, wire.sent);
+      const wrapped = asHushscriptError(error, wire.everSent);
+      throw wire.everSent ? wrapped : markNotSent(wrapped);
     }
   };
 }
