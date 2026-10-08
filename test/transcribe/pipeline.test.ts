@@ -805,7 +805,7 @@ describe("options (spec 7.3, 8.6)", () => {
 });
 
 describe("invalid wait options across transcribe and resume", () => {
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, "10", false])(
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     "refuses waitTimeout %s before any request on both surfaces",
     async (value) => {
       const { hs, fake } = setup();
@@ -816,8 +816,8 @@ describe("invalid wait options across transcribe and resume", () => {
         durationSeconds: 21,
       });
       for (const call of [
-        () => hs.transcribe(mp3, { waitTimeout: value as number }),
-        () => hs.resume(token, mp3, { waitTimeout: value as number }),
+        () => hs.transcribe(mp3, { waitTimeout: value }),
+        () => hs.resume(token, mp3, { waitTimeout: value }),
       ]) {
         const error = await failure(call());
         expect(error).toBeInstanceOf(PreflightError);

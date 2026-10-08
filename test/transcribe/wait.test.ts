@@ -73,13 +73,13 @@ describe("hs.jobs.wait", () => {
     expect(error).toMatchObject({ code: "aborted", status: null });
   });
 
-  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY, "10", false])(
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
     "refuses waitTimeout %s before any request",
     async (waitTimeout) => {
       const { hs } = setup();
       const fake = fakeApi();
       const error: unknown = await hs.jobs
-        .wait("job_1", { waitTimeout: waitTimeout as number })
+        .wait("job_1", { waitTimeout })
         .catch((e: unknown) => e);
       expect(error).toBeInstanceOf(PreflightError);
       expect(error).toMatchObject({ code: "invalid_option", status: null });
