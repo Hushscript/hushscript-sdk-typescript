@@ -78,9 +78,7 @@ describe("hs.jobs.wait", () => {
     async (waitTimeout) => {
       const { hs } = setup();
       const fake = fakeApi();
-      const error: unknown = await hs.jobs
-        .wait("job_1", { waitTimeout })
-        .catch((e: unknown) => e);
+      const error: unknown = await hs.jobs.wait("job_1", { waitTimeout }).catch((e: unknown) => e);
       expect(error).toBeInstanceOf(PreflightError);
       expect(error).toMatchObject({ code: "invalid_option", status: null });
       expect(fake.calls).toHaveLength(0);
