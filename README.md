@@ -57,7 +57,8 @@ for await (const transcript of hs.transcripts.list()) {
 
 The list holds finished transcripts only. A recording that is still processing is a job, so look for
 it in `hs.jobs.list({ active: true })`. `hs.jobs.wait(id)` waits for one, and `hs.transcripts.get(id)`
-returns the full `Transcript` once it is done.
+returns the full `Transcript` once it is done. `hs.transcripts.page({ cursor })` fetches one page; a
+page whose `next_cursor` is the cursor you sent raises `pagination_loop`, as the iterator does.
 
 ## Buy a pack
 

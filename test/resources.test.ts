@@ -77,6 +77,33 @@ describe("hs.transcripts", () => {
     expect(new URL(f.requests[0]?.url ?? "").searchParams.get("cursor")).toBe("c0");
   });
 
+  it("raises pagination_loop from a single page whose next_cursor is the cursor sent", async () => {
+    const f = stubFetch([{ status: 200, body: { transcripts: [row(1)], next_cursor: "c0" } }]);
+    const error = await client()
+      .transcripts.page({ cursor: "c0" })
+      .catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).toMatchObject({ code: "pagination_loop", status: null });
+    expect((error as HushscriptError).message).toBe(
+      "The API returned the same page cursor it was sent; stopping instead of repeating the page.",
+    );
+    expect(f.calls).toBe(1);
+  });
+
+  it.each([
+    ["no cursor sent, a cursor answered", undefined, "c0", "c0"],
+    ["a cursor sent, a different one answered", "c0", "c1", "c1"],
+    ["a cursor sent, the last page answered", "c0", null, null],
+    ["a cursor sent, an empty cursor answered (the last page)", "c0", "", null],
+    ["an empty cursor sent, an empty cursor answered", "", "", null],
+    ["a cursor sent, the same letters in another case answered", "c0", "C0", "C0"],
+  ])("does not call it a loop: %s", async (_label, sent, answered, expected) => {
+    stubFetch([{ status: 200, body: { transcripts: [row(1)], next_cursor: answered } }]);
+    const page = await client().transcripts.page(sent === undefined ? {} : { cursor: sent });
+    expect(page.nextCursor).toBe(expected);
+    expect(page.items).toHaveLength(1);
+  });
+
   it.each([0, -1, 1.5, Number.NaN])("refuses pageSize %s before any request", async (pageSize) => {
     const f = stubFetch([{ status: 200, body: { transcripts: [], next_cursor: null } }]);
     let listError: unknown;
@@ -298,6 +325,23 @@ describe("hs.jobs", () => {
         autoGenerateInsights: null,
       },
     });
+  });
+});
+
+describe("unknown nested fields (R90)", () => {
+  it("keeps unknown job option fields, camelCased", async () => {
+    stubFetch([
+      {
+        status: 200,
+        body: job("j1", "done", {
+          options: { ...JOB_OPTIONS, redact_pii: true, vocab: { boost_level: 2 } },
+        }),
+      },
+    ]);
+    const options = (await client().jobs.get("j1")).options as unknown as Record<string, unknown>;
+    expect(options["redactPii"]).toBe(true);
+    expect(options["vocab"]).toEqual({ boostLevel: 2 });
+    expect(options["languageCode"]).toBe(JOB_OPTIONS.language_code);
   });
 });
 

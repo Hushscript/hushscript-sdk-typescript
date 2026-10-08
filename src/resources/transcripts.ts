@@ -1,6 +1,6 @@
 import type { Client } from "openapi-fetch";
 import type { components, paths } from "../generated/schema";
-import { nextCursorOf, paginate, type Page } from "../paginate.ts";
+import { assertCursorAdvanced, nextCursorOf, paginate, type Page } from "../paginate.ts";
 import { Transcript } from "../transcript.ts";
 import { DELETED_LIST, TRANSCRIPT_DETAIL, TRANSCRIPT_LIST } from "../shapes.ts";
 import { readBody } from "../transcribe/common.ts";
@@ -119,7 +119,7 @@ export class TranscriptsResource {
     );
   }
 
-  /** One page of `list()`. */
+  /** One page of `list()`. Raises `pagination_loop` when the answer's `next_cursor` is the cursor sent. */
   async page(options: PageRequest = {}): Promise<Page<TranscriptSummary>> {
     const body = await readBody<components["schemas"]["TranscriptList"]>(
       this.#api.GET("/v1/transcripts", {
@@ -130,7 +130,9 @@ export class TranscriptsResource {
       "GET /v1/transcripts",
       TRANSCRIPT_LIST,
     );
-    return { items: body.transcripts.map(summaryOf), nextCursor: nextCursorOf(body.next_cursor) };
+    const nextCursor = nextCursorOf(body.next_cursor);
+    assertCursorAdvanced(options.cursor ?? null, nextCursor);
+    return { items: body.transcripts.map(summaryOf), nextCursor };
   }
 
   async get(id: string): Promise<Transcript> {
