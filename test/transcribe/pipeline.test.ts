@@ -1458,14 +1458,20 @@ describe("a caller's stream is left open (spec 6.1, R88)", () => {
   function observed(
     bytes: Uint8Array,
     then: "close" | "stall" = "close",
-  ): { stream: ReadableStream<Uint8Array>; cancels: unknown[] } {
+  ): { stream: ReadableStream<Uint8Array>; cancels: unknown[]; stalled: Promise<void> } {
     const cancels: unknown[] = [];
     let offset = 0;
+    let markStalled = (): void => undefined;
+    // Settles when the stream is asked for more than it has and, in "stall" mode, never answers.
+    const stalled = new Promise<void>((resolve) => {
+      markStalled = resolve;
+    });
     const stream = new ReadableStream<Uint8Array>(
       {
         pull(controller): void {
           if (offset >= bytes.byteLength) {
             if (then === "close") controller.close();
+            else markStalled();
             return;
           }
           controller.enqueue(bytes.subarray(offset, offset + 4096));
@@ -1477,7 +1483,7 @@ describe("a caller's stream is left open (spec 6.1, R88)", () => {
       },
       { highWaterMark: 0 },
     );
-    return { stream, cancels };
+    return { stream, cancels, stalled };
   }
 
   it("neither cancels nor keeps locked a stream that was uploaded in full", async () => {
@@ -1505,7 +1511,7 @@ describe("a caller's stream is left open (spec 6.1, R88)", () => {
     expect(next.value?.byteLength).toBeGreaterThan(0);
   });
 
-  it("leaves a stream that was cut short unlocked and uncancelled", async () => {
+  it("leaves a stream that was cut short unlocked and uncanceled", async () => {
     const { hs, clock } = setup();
     const { stream, cancels } = observed(mp3.subarray(0, mp3.byteLength - 10));
     const error = await failure(
@@ -1552,7 +1558,7 @@ describe("a caller's stream is left open (spec 6.1, R88)", () => {
 
   it("leaves a stream that stalled readable after the caller aborted", async () => {
     const { hs, clock } = setup();
-    const { stream, cancels } = observed(mp3.subarray(0, 5000), "stall");
+    const { stream, cancels, stalled } = observed(mp3.subarray(0, 5000), "stall");
     const stop = new AbortController();
     const outcome = failure(
       driven(
@@ -1564,11 +1570,13 @@ describe("a caller's stream is left open (spec 6.1, R88)", () => {
         clock,
       ),
     );
-    await new Promise<void>((resolve) => setTimeout(resolve, 50));
+    await stalled;
     stop.abort();
     expect(await outcome).toBeInstanceOf(AbortError);
     expect(cancels).toEqual([]);
     expect(stream.locked).toBe(false);
+    const reader = stream.getReader();
+    reader.releaseLock();
   });
 
   it("does not cancel or lock a stream passed to resume(), on success or on a short stream", async () => {

@@ -680,7 +680,7 @@ describe("a blank baseUrl on the static agent calls means not set", () => {
     vi.unstubAllEnvs();
   });
 
-  it.each(["", "   ", "\t\n"])(
+  it.each(["", "   ", "\t\n", null])(
     "falls back to HUSHSCRIPT_BASE_URL for baseUrl %j, signup and claim alike",
     async (baseUrl) => {
       vi.stubEnv("HUSHSCRIPT_BASE_URL", "https://env.example.org");

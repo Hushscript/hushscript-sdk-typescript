@@ -12,6 +12,7 @@ import {
 import type { Clock } from "../src/clock";
 import type { ResolvedConfig } from "../src/config";
 import { hardenedFetch } from "../src/http/fetch";
+import { REDACTED } from "../src/redact";
 import { Hushscript } from "../src/client";
 import { driven, fakeApi } from "./transcribe/fakeapi";
 import {
@@ -276,12 +277,9 @@ describe("failure messages name the underlying error", () => {
     const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
       (e: unknown) => e,
     );
-    const message = (error as NetworkError).message;
-    expect(message).toMatch(
-      /^The request failed before a response arrived \(TypeError: fetch failed for /,
+    expect((error as NetworkError).message).toBe(
+      `The request failed before a response arrived (TypeError: fetch failed for ${REDACTED}).`,
     );
-    expect(message).not.toContain(TOKEN);
-    expect(message).not.toContain(TOKEN.slice(12));
   });
 
   it("names the underlying error in an OutcomeUnknownError, redacted", async () => {
@@ -293,8 +291,9 @@ describe("failure messages name the underlying error", () => {
     );
     stubFetch([{ error: new TypeError(`reset ${TOKEN}`) }]);
     const leaky = await call("never", CLAIM).catch((e: unknown) => e);
-    expect((leaky as OutcomeUnknownError).message).not.toContain(TOKEN.slice(12));
-    expect((leaky as OutcomeUnknownError).message).toContain("(TypeError: reset ");
+    expect((leaky as OutcomeUnknownError).message).toBe(
+      `The request failed before a response arrived (TypeError: reset ${REDACTED}). The request was sent, so its outcome is unknown.`,
+    );
   });
 });
 

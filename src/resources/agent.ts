@@ -24,7 +24,7 @@ export interface AgentSignupRequest {
   /** Validates the request without opening a checkout; the result cannot be claimed. */
   dryRun?: boolean | undefined;
   /** Falls back to HUSHSCRIPT_BASE_URL, then the production host. */
-  baseUrl?: string | undefined;
+  baseUrl?: string | null | undefined;
 }
 
 /**
@@ -70,7 +70,7 @@ export interface AgentStatic {
   claim(
     signupId: string,
     claimSecret: string,
-    options?: { baseUrl?: string | undefined },
+    options?: { baseUrl?: string | null | undefined },
   ): Promise<AgentClaim>;
 }
 
@@ -131,7 +131,7 @@ function strings(value: unknown): string[] {
     : [];
 }
 
-function tokenlessApi(baseUrl: string | undefined): Client<paths> {
+function tokenlessApi(baseUrl: string | null | undefined): Client<paths> {
   const config = resolveTokenlessConfig({ baseUrl });
   const api = createClient<paths>({ baseUrl: config.baseUrl, fetch: createTransport(config) });
   api.use({
