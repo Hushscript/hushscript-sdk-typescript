@@ -71,7 +71,8 @@ for (const file of readdirSync("examples")
 /**
  * The error slug the mock answers the purchase with (its status comes from the catalog), and whether
  * buy.ts must say the card may have been charged. Only an answer decided from the request alone, or
- * after the completed-purchase replay (402), proves nothing was charged; a 401, a 429 and a 409 do not.
+ * after the completed-purchase replay (402), proves nothing was charged; a 401, a 429, a 409,
+ * and any 403 except 4021/4023 do not.
  * @type {[string, boolean][]}
  */
 const purchaseFailures = [

@@ -118,8 +118,8 @@ try {
   purchase = await hs.buy("300min", { acknowledgeNoRefund: true });
 } catch (error) {
   if (!(error instanceof HushscriptError) || error.idempotencyKey === null) throw error;
-  // Only these refusals charged nothing. A 401 or 429 can follow a charged first attempt (the server
-  // answers them before it replays a completed purchase), so they are retried like a lost answer.
+  // Only these refusals charged nothing. A 401, 429, or any 403 except 4021/4023 can follow a charged
+  // first attempt (the server answers them before replaying a purchase), so retry like a lost answer.
   const refused =
     error.code !== "bad_response" &&
     ((error.status !== null && [400, 402, 404, 422].includes(error.status)) ||
