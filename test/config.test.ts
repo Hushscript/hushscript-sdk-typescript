@@ -71,7 +71,8 @@ describe("construction", () => {
     const f = stubFetch([]);
     const error = failure(() => new Hushscript({ token: token as unknown as string }));
     expect(error).toBeInstanceOf(ConfigurationError);
-    expect(error).toMatchObject({ code: "config_invalid", status: null });
+    expect(error).toMatchObject({ code: "config_invalid", status: null, hint: null });
+    expect(error.message).toBe("token must be a string.");
     expect(f.requests).toHaveLength(0);
   });
 
