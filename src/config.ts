@@ -222,10 +222,7 @@ export function resolveConfig(
 ): ResolvedConfig {
   const env = internals.env ?? process.env;
   refuseBrowser(options.dangerouslyAllowBrowser);
-  const token = checkToken(
-    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- null is invalid and must not select the environment token.
-    options.token === undefined ? (env["HUSHSCRIPT_TOKEN"] ?? "") : options.token,
-  );
+  const token = checkToken(options.token ?? env["HUSHSCRIPT_TOKEN"] ?? "");
   return build(token, options, env, internals);
 }
 

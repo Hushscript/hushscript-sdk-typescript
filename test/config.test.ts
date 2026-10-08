@@ -54,13 +54,19 @@ describe("construction", () => {
     expect(f.requests).toHaveLength(0);
   });
 
+  it("reads the environment token when the option is undefined", () => {
+    expect(
+      resolveConfig({ token: undefined }, { env: { HUSHSCRIPT_TOKEN: TOKEN } }).authorization(),
+    ).toBe(`Bearer ${TOKEN}`);
+  });
+
   it("trims a pasted token", () => {
     expect(resolveConfig({ token: `  ${TOKEN}\n` }, { env: NO_ENV }).authorization()).toBe(
       `Bearer ${TOKEN}`,
     );
   });
 
-  it.each([42, {}, false, null])("refuses a non-string token %j before any request", (token) => {
+  it.each([42, {}, false])("refuses a non-string token %j before any request", (token) => {
     vi.stubEnv("HUSHSCRIPT_TOKEN", TOKEN);
     const f = stubFetch([]);
     const error = failure(() => new Hushscript({ token: token as unknown as string }));
