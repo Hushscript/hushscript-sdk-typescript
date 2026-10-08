@@ -368,6 +368,14 @@ The package is ESM-first: `import { ... } from "@hushscript/sdk"`. On Node 22.12
 export condition points at the same ESM build). TypeScript consumers need TypeScript 5.5 or newer;
 `just build` type-checks the packed declarations with exactly 5.5 in a container.
 
+## Links
+
+- Documentation: <https://hushscript.com/sdks>
+- REST API reference: <https://hushscript.com/developers>
+- Package on npm: <https://www.npmjs.com/package/@hushscript/sdk>
+- Source: <https://github.com/Hushscript/hushscript-typescript>
+- Other Hushscript SDKs: [Python](https://github.com/Hushscript/hushscript-python), [Go](https://github.com/Hushscript/hushscript-go), [PHP](https://github.com/Hushscript/hushscript-php), [CLI](https://github.com/Hushscript/hushscript-cli)
+
 ## Releases
 
 Releases come from release-please. The package is published to npm by `publish.yml` through npm
