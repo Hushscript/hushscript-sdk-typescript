@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { TOKEN } from "./helpers";
 
 const KEY = "purchase-example-retry-key";
+const REQUEST_KEY_PREFIX = "purchase idempotency_key: ";
 const ROOT = fileURLToPath(new URL("..", import.meta.url));
 
 describe("buy example refusals (R80)", () => {
@@ -19,6 +20,7 @@ describe("buy example refusals (R80)", () => {
     ["404", 404, null, false],
     ["422", 422, null, false],
     ["500", 500, null, true],
+    ["2xx bad_response", 200, null, true],
     ["network failure after send", null, null, true],
   ])("uses the correct retry-key path for %s", (_name, status, numericCode, mayHaveCharged) => {
     const bootstrap = `
@@ -32,13 +34,14 @@ describe("buy example refusals (R80)", () => {
         } else if (path === "/v1/billing/cards") {
           body = { default_id: "pm_1", methods: [] };
         } else if (path === "/v1/billing/purchase") {
-          await request.arrayBuffer();
+          const purchaseBody = await request.json();
+          console.log(${JSON.stringify(REQUEST_KEY_PREFIX)} + JSON.stringify(purchaseBody.idempotency_key));
           if (${JSON.stringify(status)} === null) {
             throw Object.assign(new TypeError("fetch failed"), {
               cause: Object.assign(new Error("connection reset"), { code: "ECONNRESET" })
             });
           }
-          return Response.json({ error: "purchase_failed", code: ${JSON.stringify(numericCode)} }, { status: ${JSON.stringify(status)} });
+          return Response.json(${JSON.stringify(status)} === 200 ? {} : { error: "purchase_failed", code: ${JSON.stringify(numericCode)} }, { status: ${JSON.stringify(status)} });
         } else {
           throw new Error("unexpected request: " + path);
         }
@@ -71,7 +74,15 @@ describe("buy example refusals (R80)", () => {
     expect(result.error).toBeUndefined();
     expect(result.stderr).toBe("");
     expect(result.status).toBe(1);
-    expect(result.stdout).toContain(status === null ? "network_error:" : "purchase_failed:");
+    const requestKeys = result.stdout
+      .split("\n")
+      .filter((line) => line.startsWith(REQUEST_KEY_PREFIX))
+      .map((line) => JSON.parse(line.slice(REQUEST_KEY_PREFIX.length)) as unknown);
+    expect(requestKeys.length).toBeGreaterThan(0);
+    for (const requestKey of requestKeys) expect(requestKey).toBe(KEY);
+    expect(result.stdout).toContain(
+      status === null ? "network_error:" : status === 200 ? "bad_response:" : "purchase_failed:",
+    );
     const warning = `The card may have been charged. Retry with: --key ${KEY}`;
     if (mayHaveCharged) expect(result.stdout).toContain(warning);
     else expect(result.stdout).not.toContain("The card may have been charged.");
