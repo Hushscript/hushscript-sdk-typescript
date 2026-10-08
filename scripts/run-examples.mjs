@@ -77,7 +77,9 @@ for (const file of readdirSync("examples")
 const purchaseFailures = [
   ["bad_request", false],
   ["insufficient_balance", false],
-  ["account_suspended", false],
+  ["account_suspended", true],
+  ["pat_purchase_requires_app", false],
+  ["pat_purchase_requires_authentication", false],
   ["not_found", false],
   ["unknown_pack", false],
   ["unauthorized", true],

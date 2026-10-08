@@ -106,8 +106,8 @@ the app.
 A purchase is retried at most once, on a network error, a 502 or a 503, with the same idempotency
 key, so those retries cannot charge you twice. When `buy()` still gives up after the request was
 sent (the connection dropped twice, or the answer was not one the SDK can use), the card may have
-been charged. A 401 or 429 counts too: the server answers them before it replays a completed
-purchase, so after the retry they can follow a first attempt that did charge. Every such error
+been charged. A 401, 429, or any 403 other than the two refusals above counts too: after the retry
+it can follow a first attempt that did charge. Every such error
 carries `idempotencyKey`; ask again with it and the purchase can never happen twice:
 
 ```ts
@@ -120,8 +120,11 @@ try {
   if (!(error instanceof HushscriptError) || error.idempotencyKey === null) throw error;
   // Only these refusals charged nothing. A 401 or 429 can follow a charged first attempt (the server
   // answers them before it replays a completed purchase), so they are retried like a lost answer.
-  const refused = [400, 402, 403, 404, 422];
-  if (error.status !== null && refused.includes(error.status) && error.code !== "bad_response") {
+  const refused =
+    error.code !== "bad_response" &&
+    ((error.status !== null && [400, 402, 404, 422].includes(error.status)) ||
+      (error.status === 403 && (error.numericCode === 4021 || error.numericCode === 4023)));
+  if (refused) {
     throw error;
   }
   purchase = await hs.buy("300min", {
