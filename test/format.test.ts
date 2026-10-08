@@ -172,6 +172,67 @@ describe("Transcript model", () => {
     expect(JSON.parse(JSON.stringify(t))).toMatchObject({ x_unknown_field: { nested: true } });
   });
 
+  it("keeps unknown utterance fields, camelCased, in the original and every translation", () => {
+    const extra = { confidence: 0.9, word_count: 2, lang_hint: "en" };
+    const t = Transcript.fromApi(
+      body([{ speaker: "A", start_ms: 0, end_ms: 1500, text: "Hello", ...extra }], {
+        speaker_names: { A: "Dana" },
+        body: {
+          version: 1,
+          original: {
+            utterances: [{ speaker: "A", start_ms: 0, end_ms: 1500, text: "Hello", ...extra }],
+          },
+          translations: {
+            es: {
+              utterances: [{ speaker: "A", start_ms: 0, end_ms: 1500, text: "Hola", ...extra }],
+            },
+          },
+        },
+      }),
+    );
+    expect(t.utterances).toEqual([
+      {
+        speaker: "A",
+        speakerName: "Dana",
+        startMs: 0,
+        endMs: 1500,
+        text: "Hello",
+        confidence: 0.9,
+        wordCount: 2,
+        langHint: "en",
+      },
+    ]);
+    expect(t.utterancesFor("es")).toEqual([
+      {
+        speaker: "A",
+        speakerName: "Dana",
+        startMs: 0,
+        endMs: 1500,
+        text: "Hola",
+        confidence: 0.9,
+        wordCount: 2,
+        langHint: "en",
+      },
+    ]);
+  });
+
+  it("lets the known utterance fields win over an unknown field that camelCases to the same key", () => {
+    const t = Transcript.fromApi(
+      body([
+        {
+          speaker: "A",
+          start_ms: 5,
+          end_ms: 9,
+          text: "Hi",
+          speaker_name: "Mallory",
+        } as Body["body"]["original"]["utterances"][number],
+      ]),
+    );
+    expect(t.utterances).toEqual([
+      { speaker: "A", speakerName: "Speaker A", startMs: 5, endMs: 9, text: "Hi" },
+    ]);
+  });
+
   it("renders an empty transcript as empty text and bare headers", () => {
     const t = Transcript.fromApi(body([]));
     expect(t.toText()).toBe("");
