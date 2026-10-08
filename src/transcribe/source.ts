@@ -141,7 +141,7 @@ class StreamSource implements Source {
     this.size = size;
   }
 
-  /** One read, given up with the SDK's `AbortError` when `signal` fires; the stream itself is cancelled by `close()`. */
+  /** One read, given up with the SDK's `AbortError` when `signal` fires; `close()` releases the reader and leaves the stream itself alone. */
   #next(
     signal: AbortSignal | undefined,
   ): ReturnType<ReadableStreamDefaultReader<Uint8Array>["read"]> {
@@ -234,8 +234,10 @@ class StreamSource implements Source {
     return part;
   }
 
-  async close(): Promise<void> {
-    await this.#reader.cancel().catch(() => undefined);
+  /** The stream belongs to the caller: releasing the lock leaves it uncancelled, unclosed and readable. */
+  close(): Promise<void> {
+    this.#reader.releaseLock();
+    return Promise.resolve();
   }
 }
 

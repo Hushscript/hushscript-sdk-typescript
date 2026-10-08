@@ -34,6 +34,9 @@ const transcript = await hs.transcribe(response.body!, {
 });
 ```
 
+The stream stays yours: the SDK never cancels or closes it, on success, failure or abort. It only
+releases its reader, so you can read what is left or cancel it yourself.
+
 ## Check my balance
 
 ```ts
