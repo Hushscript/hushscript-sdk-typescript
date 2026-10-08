@@ -118,10 +118,10 @@ describe("preflight", () => {
     ["a fractional concurrency", { concurrency: 1.5 }],
     ["a negative waitTimeout", { waitTimeout: -1 }],
   ])("refuses %s before any request", async (_name, options) => {
-    const { hs } = client();
+    const { hs, clock } = client();
     const f = stubFetch([{ status: 500 }]);
     const bytes = await fixtureBytes("cbr-20s.mp3");
-    const error = await refusal(hs.transcribe(bytes, options));
+    const error = await refusal(driven(hs.transcribe(bytes, options), clock));
     expect(error).toBeInstanceOf(PreflightError);
     expect((error as PreflightError).code).toBe("invalid_option");
     expect((error as PreflightError).status).toBeNull();
