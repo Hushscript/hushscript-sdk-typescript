@@ -498,7 +498,7 @@ describe("billing identifiers (R53)", () => {
   it.each(invalidIds)("refuses invalid default-card id %j before any request", async (id) => {
     const f = stubFetch([]);
     const error: unknown = await client()
-      .billing.setDefaultCard(id as unknown as string)
+      .billing.setDefaultCard(id as string)
       .catch((failure: unknown) => failure);
     expect(error).toBeInstanceOf(PreflightError);
     expect(error).toMatchObject({ code: "invalid_option", status: null });
@@ -509,8 +509,8 @@ describe("billing identifiers (R53)", () => {
     const f = stubFetch([]);
     const hs = client();
     for (const run of [
-      () => hs.buy(id as unknown as string),
-      () => hs.billing.buy(id as unknown as string),
+      () => hs.buy(id as string),
+      () => hs.billing.buy(id as string),
     ]) {
       const error: unknown = await run().catch((failure: unknown) => failure);
       expect(error).toBeInstanceOf(PreflightError);

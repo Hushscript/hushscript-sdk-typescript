@@ -626,7 +626,7 @@ describe("signup pack identifiers (R53)", () => {
     async (pack) => {
       const f = stubFetch([]);
       const error: unknown = await Hushscript.agent
-        .signup({ ...SIGNUP, pack: pack as unknown as "45min", baseUrl: BASE })
+        .signup({ ...SIGNUP, pack: pack as "45min", baseUrl: BASE })
         .catch((failure: unknown) => failure);
       expect(error).toBeInstanceOf(PreflightError);
       expect(error).toMatchObject({ code: "invalid_option", status: null });

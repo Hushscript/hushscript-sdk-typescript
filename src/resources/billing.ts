@@ -200,6 +200,7 @@ export class BillingResource {
    */
   async buy(packId: string, options: BuyOptions = {}): Promise<Purchase> {
     checkPathId(packId, "packId");
+    // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- null is invalid and must not select a generated key.
     const key = options.idempotencyKey === undefined ? randomUUID() : options.idempotencyKey;
     if (typeof key !== "string" || !PURCHASE_KEY.test(key)) {
       throw invalidOption(
