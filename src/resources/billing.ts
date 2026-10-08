@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "openapi-fetch";
 import { camelizeKnown, unknownFields } from "../camel.ts";
-import { PaymentMethodRequiredError, asHushscriptError } from "../errors.ts";
+import { PaymentMethodRequiredError, asHushscriptError, wasNotSent } from "../errors.ts";
 import type { components, paths } from "../generated/schema";
 import { toMoney, type Money } from "../money.ts";
 import { nextCursorOf, paginate } from "../paginate.ts";
@@ -261,8 +261,9 @@ export class BillingResource {
   /**
    * Buys `packId` with the default card and returns the balance the purchase answer reports. It
    * makes no request after the charge, so nothing can fail once the money has moved. Every error
-   * raised after the purchase request was sent carries `idempotencyKey`; pass it back as
-   * `idempotencyKey` to retry without any chance of a second charge.
+   * raised once the purchase request may have been sent carries `idempotencyKey`; pass it back as
+   * `idempotencyKey` to retry without any chance of a second charge. One raised before any attempt
+   * was sent carries none: nothing can have been charged.
    */
   async buy(packId: string, options: BuyOptions = {}): Promise<Purchase> {
     // eslint-disable-next-line @typescript-eslint/prefer-nullish-coalescing -- null is invalid and must not select a generated key.
@@ -301,7 +302,7 @@ export class BillingResource {
       };
     } catch (error) {
       const failure = asHushscriptError(error);
-      failure.idempotencyKey = key;
+      if (!wasNotSent(failure)) failure.idempotencyKey = key;
       throw failure;
     }
   }

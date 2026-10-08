@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../src/client";
+import type { Clock } from "../src/clock";
 import {
   ApiError,
   AuthenticationError,
@@ -396,6 +397,114 @@ describe("hs.buy", () => {
     expect(purchaseBodies(stub).map((body) => body["idempotency_key"])).toEqual([key, key]);
     await hs.buy("300min", { idempotencyKey: key ?? undefined });
     expect(purchaseBodies(stub)[2]?.["idempotency_key"]).toBe(key);
+  });
+
+  describe("R103: a purchase that provably failed before any attempt was sent carries no key", () => {
+    it("carries none when the connection is refused on both attempts", async () => {
+      const stub = stubFetch([
+        cards("pm_a", [card("pm_a", true, true)]),
+        { error: networkError("ECONNREFUSED") },
+        { error: networkError("ECONNREFUSED") },
+      ]);
+      const error: unknown = await client()
+        .buy("300min")
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(NetworkError);
+      expect(error).toMatchObject({ code: "network_error", idempotencyKey: null });
+      expect((error as NetworkError).message).toBe(
+        "The request failed before a response arrived (TypeError: fetch failed; code ECONNREFUSED).",
+      );
+      expect(purchaseBodies(stub)).toHaveLength(2);
+    });
+
+    it("carries none when the SDK fails unexpectedly before the request is sent, and says so", async () => {
+      let reads = 0;
+      const clock: Clock = {
+        ...fakeClock(),
+        now: () => {
+          reads += 1;
+          if (reads === 3) throw new TypeError("clock broke");
+          return 0;
+        },
+      };
+      const stub = stubFetch([cards("pm_a", [card("pm_a", true, true)]), PURCHASED]);
+      const error: unknown = await new Hushscript({
+        token: TOKEN,
+        baseUrl: BASE,
+        clock,
+        timeout: TEST_TIMEOUT_SECONDS,
+      })
+        .buy("300min")
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(HushscriptError);
+      expect(error).toMatchObject({ code: "unexpected_error", idempotencyKey: null });
+      expect((error as HushscriptError).message).toBe(
+        "The SDK failed unexpectedly before the request was sent (TypeError: clock broke).",
+      );
+      expect(paths(stub)).toEqual(["/v1/billing/cards"]);
+    });
+
+    it("keeps the key when a refused retry follows a first attempt that went out", async () => {
+      const stub = stubFetch([
+        cards("pm_a", [card("pm_a", true, true)]),
+        { error: networkError("ECONNRESET") },
+        { error: networkError("ECONNREFUSED") },
+      ]);
+      const error: unknown = await client()
+        .buy("300min")
+        .catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(NetworkError);
+      const [first, second] = purchaseBodies(stub);
+      expect(second?.["idempotency_key"]).toBe(first?.["idempotency_key"]);
+      expect((error as NetworkError).idempotencyKey).toBe(first?.["idempotency_key"]);
+    });
+
+    it("keeps the key, and says after, when an unexpected failure on the retry follows a first attempt that went out", async () => {
+      let reads = 0;
+      const clock: Clock = {
+        ...fakeClock(),
+        now: () => {
+          reads += 1;
+          if (reads === 5) throw new TypeError("clock broke");
+          return 0;
+        },
+      };
+      const stub = stubFetch([
+        cards("pm_a", [card("pm_a", true, true)]),
+        { status: 502, text: "bad gateway" },
+        PURCHASED,
+      ]);
+      const error: unknown = await new Hushscript({
+        token: TOKEN,
+        baseUrl: BASE,
+        clock,
+        timeout: TEST_TIMEOUT_SECONDS,
+      })
+        .buy("300min")
+        .catch((e: unknown) => e);
+      expect(error).toMatchObject({
+        code: "unexpected_error",
+        idempotencyKey: purchaseBodies(stub)[0]?.["idempotency_key"],
+      });
+      expect((error as HushscriptError).message).toBe(
+        "The SDK failed unexpectedly after the request was sent (TypeError: clock broke).",
+      );
+      expect(purchaseBodies(stub)).toHaveLength(1);
+    });
+
+    it("keeps the key on an answer the SDK cannot use (the request was sent)", async () => {
+      const stub = stubFetch([
+        cards("pm_a", [card("pm_a", true, true)]),
+        { status: 200, text: "<html>ok</html>" },
+      ]);
+      const error: unknown = await client()
+        .buy("300min")
+        .catch((e: unknown) => e);
+      expect(error).toMatchObject({
+        code: "bad_response",
+        idempotencyKey: purchaseBodies(stub)[0]?.["idempotency_key"],
+      });
+    });
   });
 
   it.each([

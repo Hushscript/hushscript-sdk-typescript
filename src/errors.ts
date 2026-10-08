@@ -87,7 +87,7 @@ export class HushscriptError extends Error {
   hint: string | null;
   details: Record<string, unknown>;
   retryAfter: number | null;
-  /** Set on an error `transcribe()` raised after its create was sent, or `buy()` after its purchase was sent: passing it back replays the same job or purchase instead of making a second one. */
+  /** Set on an error `transcribe()` raised after its create was sent, or `buy()` after its purchase may have been sent (a failure provably before any attempt went out carries none): passing it back replays the same job or purchase instead of making a second one. */
   idempotencyKey: string | null = null;
   /** Set once the job id is known; `resume()` takes it. */
   resumeToken: string | null = null;
@@ -105,6 +105,19 @@ export class HushscriptError extends Error {
     this.details = redactValue(init.details ?? {}) as Record<string, unknown>;
     this.retryAfter = init.retryAfter ?? null;
   }
+}
+
+const failedBeforeSending = new WeakSet<HushscriptError>();
+
+/** Internal, not exported from the package: records that no attempt of the call put its request on the wire. */
+export function markNotSent(error: HushscriptError): HushscriptError {
+  failedBeforeSending.add(error);
+  return error;
+}
+
+/** Whether `markNotSent` recorded that the request provably never went out. */
+export function wasNotSent(error: HushscriptError): boolean {
+  return failedBeforeSending.has(error);
 }
 
 /** What a wrapped value was: its error type and message ("TypeError: fetch failed"), for the wrapping error's message. */

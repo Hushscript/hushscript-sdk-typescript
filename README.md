@@ -139,6 +139,10 @@ try {
 }
 ```
 
+A `buy()` that failed before any attempt was sent (for example the connection was refused, or the
+SDK failed unexpectedly "before the request was sent") carries no `idempotencyKey`: nothing can have
+been charged, so ask again as a new purchase.
+
 A key you pass yourself must be 1 to 128 characters from `A-Za-z0-9_-`. Do not reuse a key for a
 different pack.
 
@@ -258,7 +262,7 @@ example `The SDK failed unexpectedly after the request was sent (RangeError: ...
 rotation went out it is an `OutcomeUnknownError`. The message says "before" or "after the request was
 sent" only where the SDK knows, and is silent about it where it does not.
 
-An error raised after an upload started, or after a purchase was sent, carries `idempotencyKey`;
+An error raised after an upload started, or after a purchase may have been sent, carries `idempotencyKey`;
 once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(token, file)` to carry on without a second charge.
 
 ## What the SDK does for you
