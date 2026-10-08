@@ -15,7 +15,7 @@ import {
   TRANSACTIONS,
 } from "../shapes.ts";
 import { badResponse, readBody, readObject } from "../transcribe/common.ts";
-import { invalidOption } from "../transcribe/preflight.ts";
+import { checkPathId, invalidOption } from "../transcribe/preflight.ts";
 
 /** A minute pack as the account can see it. */
 export interface Pack {
@@ -165,6 +165,7 @@ export class BillingResource {
   }
 
   async setDefaultCard(cardId: string): Promise<void> {
+    checkPathId(cardId, "cardId");
     await readBody(
       this.#api.POST("/v1/billing/cards/default", {
         body: { payment_method_id: cardId },
@@ -198,6 +199,7 @@ export class BillingResource {
    * `idempotencyKey` to retry without any chance of a second charge.
    */
   async buy(packId: string, options: BuyOptions = {}): Promise<Purchase> {
+    checkPathId(packId, "packId");
     const key = options.idempotencyKey === undefined ? randomUUID() : options.idempotencyKey;
     if (typeof key !== "string" || !PURCHASE_KEY.test(key)) {
       throw invalidOption(
