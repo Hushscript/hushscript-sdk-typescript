@@ -79,12 +79,19 @@ describe("hs.transcripts", () => {
 
   it.each([0, -1, 1.5, Number.NaN])("refuses pageSize %s before any request", async (pageSize) => {
     const f = stubFetch([{ status: 200, body: { transcripts: [], next_cursor: null } }]);
-    expect(() => client().transcripts.list({ pageSize })).toThrow(
-      expect.objectContaining({ code: "invalid_option" }) as Error,
-    );
-    await expect(client().transcripts.page({ pageSize })).rejects.toMatchObject({
-      code: "invalid_option",
-    });
+    let listError: unknown;
+    try {
+      client().transcripts.list({ pageSize });
+    } catch (error) {
+      listError = error;
+    }
+    expect(listError).toBeInstanceOf(PreflightError);
+    expect(listError).toMatchObject({ code: "invalid_option", status: null });
+    const pageError: unknown = await client()
+      .transcripts.page({ pageSize })
+      .catch((error: unknown) => error);
+    expect(pageError).toBeInstanceOf(PreflightError);
+    expect(pageError).toMatchObject({ code: "invalid_option", status: null });
     expect(f.calls).toBe(0);
   });
 
