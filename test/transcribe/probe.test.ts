@@ -2,7 +2,8 @@
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { setImmediate } from "node:timers";
+import { describe, expect, it, vi } from "vitest";
 import { AbortError, UnsupportedMediaError } from "../../src/errors";
 import { probeDuration } from "../../src/transcribe/probe";
 import { openSource, type Source } from "../../src/transcribe/source";
@@ -50,6 +51,88 @@ describe("probeDuration", () => {
     };
     await expect(probeDuration(stalled, controller.signal)).rejects.toBeInstanceOf(AbortError);
     await inner.close();
+  });
+
+  it.each(["path", "blob", "bytes"] as const)(
+    "does no parser reads for a pre-aborted %s probe",
+    async (kind) => {
+      const bytes = await fixtureBytes("vbr-noxing-20s.mp3");
+      const source = await openSource(
+        kind === "path"
+          ? await fixturePath("vbr-noxing-20s.mp3")
+          : kind === "blob"
+            ? new Blob([bytes])
+            : bytes,
+      );
+      const read = vi.spyOn(source, "read");
+      const stop = new AbortController();
+      stop.abort("caller stopped");
+      try {
+        await expect(probeDuration(source, stop.signal)).rejects.toMatchObject({
+          name: "AbortError",
+          cause: "caller stopped",
+        });
+        expect(read).not.toHaveBeenCalled();
+      } finally {
+        await source.close();
+      }
+    },
+  );
+
+  it.each(["path", "blob", "bytes"] as const)(
+    "stops an active %s duration scan at a read boundary",
+    async (kind) => {
+      const bytes = await fixtureBytes("vbr-noxing-20s.mp3");
+      const source = await openSource(
+        kind === "path"
+          ? await fixturePath("vbr-noxing-20s.mp3")
+          : kind === "blob"
+            ? new Blob([bytes])
+            : bytes,
+      );
+      const stop = new AbortController();
+      const original = source.read.bind(source);
+      let scan = false;
+      let afterAbort = 0;
+      vi.spyOn(source, "read").mockImplementation(async (offset, length, signal) => {
+        expect(signal).toBe(stop.signal);
+        if (stop.signal.aborted) afterAbort += 1;
+        const bytes = await original(offset, length, signal);
+        if (scan) stop.abort();
+        // The MP3 header check precedes the second (full-duration) parse.
+        if (length === 4096) scan = true;
+        return bytes;
+      });
+      try {
+        await expect(probeDuration(source, stop.signal)).rejects.toBeInstanceOf(AbortError);
+        expect(scan).toBe(true);
+        expect(stop.signal.aborted).toBe(true);
+        expect(afterAbort).toBe(0);
+        expect((await original(0, 4)).length).toBe(4);
+      } finally {
+        await source.close();
+      }
+    },
+  );
+
+  it("lets an externally scheduled abort stop a long in-memory parser scan", async () => {
+    const source = await openSource(await fixtureBytes("vbr-noxing-61s.mp3"));
+    const stop = new AbortController();
+    const original = source.read.bind(source);
+    let scheduled = false;
+    let afterAbort = 0;
+    vi.spyOn(source, "read").mockImplementation((offset, length, signal) => {
+      if (stop.signal.aborted) afterAbort += 1;
+      if (length === 4096 && !scheduled) {
+        scheduled = true;
+        setImmediate(() => stop.abort());
+      }
+      return original(offset, length, signal);
+    });
+    await expect(probeDuration(source, stop.signal)).rejects.toBeInstanceOf(AbortError);
+    expect(scheduled).toBe(true);
+    expect(afterAbort).toBe(0);
+    await source.close();
   });
 
   it("reads Blob and Uint8Array inputs the same way as a path", async () => {

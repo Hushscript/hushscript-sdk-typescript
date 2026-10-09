@@ -19,9 +19,9 @@ export interface Source {
   readonly probeInput: ProbeInput | null;
   /** A stream is read once, in order, one part at a time. */
   readonly sequential: boolean;
-  /** The first `length` bytes (fewer when the file is shorter), without consuming them. `signal` stops a wait on a stream. */
+  /** The first `length` bytes (fewer when the file is shorter), without consuming them. `signal` checks cancellation around reads. */
   head(length: number, signal?: AbortSignal): Promise<Uint8Array>;
-  /** `signal` stops a wait on a stream that has stopped producing; the other inputs read at once. */
+  /** `signal` checks cancellation around reads and stops a wait on a stalled stream. */
   read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array>;
   close(): Promise<void>;
 }
@@ -42,11 +42,12 @@ class MemorySource implements Source {
     this.probeInput = { kind: "bytes", bytes };
   }
 
-  head(length: number): Promise<Uint8Array> {
-    return this.read(0, length);
+  head(length: number, signal?: AbortSignal): Promise<Uint8Array> {
+    return this.read(0, length, signal);
   }
 
-  read(offset: number, length: number): Promise<Uint8Array> {
+  read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array> {
+    if (signal?.aborted) return Promise.reject(aborted(signal));
     return Promise.resolve(
       this.#bytes.subarray(offset, offset + clampLength(this.size, offset, length)),
     );
@@ -70,13 +71,16 @@ class BlobSource implements Source {
     this.probeInput = { kind: "blob", blob: blob.slice(0, blob.size, "") };
   }
 
-  head(length: number): Promise<Uint8Array> {
-    return this.read(0, length);
+  head(length: number, signal?: AbortSignal): Promise<Uint8Array> {
+    return this.read(0, length, signal);
   }
 
-  async read(offset: number, length: number): Promise<Uint8Array> {
+  async read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array> {
+    if (signal?.aborted) throw aborted(signal);
     const end = offset + clampLength(this.size, offset, length);
-    return new Uint8Array(await this.#blob.slice(offset, end).arrayBuffer());
+    const bytes = new Uint8Array(await this.#blob.slice(offset, end).arrayBuffer());
+    if (signal?.aborted) throw aborted(signal);
+    return bytes;
   }
 
   close(): Promise<void> {
@@ -96,11 +100,12 @@ class FileSource implements Source {
     this.probeInput = { kind: "path", path };
   }
 
-  head(length: number): Promise<Uint8Array> {
-    return this.read(0, length);
+  head(length: number, signal?: AbortSignal): Promise<Uint8Array> {
+    return this.read(0, length, signal);
   }
 
-  async read(offset: number, length: number): Promise<Uint8Array> {
+  async read(offset: number, length: number, signal?: AbortSignal): Promise<Uint8Array> {
+    if (signal?.aborted) throw aborted(signal);
     const wanted = clampLength(this.size, offset, length);
     const buffer = new Uint8Array(wanted);
     let filled = 0;
@@ -111,6 +116,7 @@ class FileSource implements Source {
         wanted - filled,
         offset + filled,
       );
+      if (signal?.aborted) throw aborted(signal);
       if (bytesRead === 0) break;
       filled += bytesRead;
     }

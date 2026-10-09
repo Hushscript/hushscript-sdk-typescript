@@ -39,6 +39,23 @@ describe("random-access sources", () => {
     await source.close();
   });
 
+  it.each([
+    ["a path", async () => openSource(await file())],
+    ["bytes", async () => openSource(DATA)],
+    ["a Blob", async () => openSource(new Blob([DATA]))],
+  ])("honors a pre-aborted signal for %s ranges and headers", async (_name, make) => {
+    const source = await make();
+    const stop = new AbortController();
+    stop.abort();
+    try {
+      await expect(source.read(0, 10, stop.signal)).rejects.toBeInstanceOf(AbortError);
+      await expect(source.head(10, stop.signal)).rejects.toBeInstanceOf(AbortError);
+      expect(await source.read(0, 10)).toEqual(DATA.subarray(0, 10));
+    } finally {
+      await source.close();
+    }
+  });
+
   it("refuses a directory", async () => {
     await expect(openSource(tmpdir())).rejects.toBeInstanceOf(PreflightError);
   });

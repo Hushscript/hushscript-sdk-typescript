@@ -75,8 +75,9 @@ The packs are `45min`, `300min`, `900min`, `1800min` and `6000min`. Prices depen
 so read them from `pack.price` and never hard-code one.
 
 `buy()` charges your saved default card, or the only card that can be charged when there is no
-default, and returns a `Purchase`: the `seconds` and `minutes` you have after it settled. It makes
-no request after the charge, so nothing can fail once the money has moved. With no usable card it
+default, and returns a `Purchase`: the `seconds` and `minutes` from the purchase response, without a
+follow-up request. A lost or unusable response can still raise an error after payment; retry with
+the `idempotencyKey` attached to that error. With no usable card it
 raises `PaymentMethodRequiredError` and sends nothing: `no_default_card` when there is none (add one
 at the URL from `hs.billing.addCardUrl()` or in the app), `default_card_required` when several
 cards could be charged and none is the default (pick one with `hs.billing.setDefaultCard(id)`).
