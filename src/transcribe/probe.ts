@@ -1,8 +1,8 @@
-// eslint-disable-next-line n/no-unsupported-features/node-builtins -- present, if flagged experimental, in every Node 22 release (since 19.8); the rule's table lags
-import { openAsBlob } from "node:fs";
-import { parseBlob, parseBuffer, type IAudioMetadata } from "music-metadata";
+import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { parseBlob, type IAudioMetadata } from "music-metadata";
 import { AbortError, UnsupportedMediaError, describeError } from "../errors.ts";
-import type { ProbeInput, Source } from "./source.ts";
+import { aborted } from "./common.ts";
+import type { Source } from "./source.ts";
 
 const ID3_HEADER_BYTES = 10;
 const MAX_ID3_TAGS = 4;
@@ -28,21 +28,66 @@ async function opusPreSkipSeconds(
   return preSkip / OPUS_SAMPLE_RATE;
 }
 
-/**
- * Parses the real input, never a hand-built stand-in: a path becomes a lazily read Blob, and every
- * input is handed over without a MIME type, so the file extension or a Blob's own type cannot
- * pick the parser (a WebM named .mp3 must not parse as MP3).
- */
-async function parse(input: ProbeInput, duration: boolean): Promise<IAudioMetadata> {
-  const options = { duration, skipCovers: true };
-  switch (input.kind) {
-    case "path":
-      return parseBlob(await openAsBlob(input.path), options);
-    case "blob":
-      return parseBlob(input.blob, options);
-    case "bytes":
-      return parseBuffer(input.bytes, undefined, options);
+// The tokenizer only uses size, type, slice() and arrayBuffer(). Read through the source so
+// every parser range observes cancellation, without copying the whole input into a Blob.
+class ProbeBlob extends Blob {
+  readonly source: Source;
+  readonly signal: AbortSignal | undefined;
+  readonly offset: number;
+  readonly length: number;
+  readonly progress: { reads: number };
+
+  constructor(
+    source: Source,
+    signal: AbortSignal | undefined,
+    offset = 0,
+    length = source.size,
+    progress = { reads: 0 },
+  ) {
+    super();
+    this.source = source;
+    this.signal = signal;
+    this.offset = offset;
+    this.length = length;
+    this.progress = progress;
   }
+
+  override get size(): number {
+    return this.length;
+  }
+
+  override slice(start = 0, end = this.size): Blob {
+    const clamp = (at: number): number =>
+      Math.min(this.size, Math.max(0, at < 0 ? this.size + at : at));
+    const from = clamp(start);
+    return new ProbeBlob(
+      this.source,
+      this.signal,
+      this.offset + from,
+      Math.max(0, clamp(end) - from),
+      this.progress,
+    );
+  }
+
+  override async arrayBuffer(): Promise<ArrayBuffer> {
+    // Resolved memory reads must also let externally scheduled aborts reach the parser.
+    if (++this.progress.reads % 64 === 0) await yieldToEventLoop();
+    if (this.signal?.aborted) throw aborted(this.signal);
+    const bytes = await this.source.read(this.offset, this.length, this.signal);
+    if (this.signal?.aborted) throw aborted(this.signal);
+    return bytes.slice().buffer;
+  }
+}
+
+async function parse(
+  source: Source,
+  duration: boolean,
+  signal: AbortSignal | undefined,
+): Promise<IAudioMetadata> {
+  if (signal?.aborted) throw aborted(signal);
+  const metadata = await parseBlob(new ProbeBlob(source, signal), { duration, skipCovers: true });
+  if (signal?.aborted) throw aborted(signal);
+  return metadata;
 }
 
 function syncsafe(bytes: Uint8Array, at: number): number {
@@ -110,16 +155,16 @@ function unreadable(cause?: unknown): UnsupportedMediaError {
  * Ogg, whose headers carry no length.
  */
 export async function probeDuration(source: Source, signal?: AbortSignal): Promise<number> {
-  const input = source.probeInput;
-  if (input === null) throw unreadable();
+  if (signal?.aborted) throw aborted(signal);
+  if (source.probeInput === null) throw unreadable();
   let duration: number | undefined;
   try {
-    let meta = await parse(input, false);
+    let meta = await parse(source, false, signal);
     if (
       meta.format.duration === undefined ||
       (meta.format.container === "MPEG" && !(await hasDurationHeader(source, signal)))
     ) {
-      meta = await parse(input, true);
+      meta = await parse(source, true, signal);
     }
     duration = meta.format.duration;
     if (duration !== undefined && /opus/i.test(meta.format.codec ?? "")) {
@@ -127,9 +172,11 @@ export async function probeDuration(source: Source, signal?: AbortSignal): Promi
     }
   } catch (error) {
     // A cancelled read is the caller's doing, not a file the parser could not read.
+    if (signal?.aborted) throw aborted(signal);
     if (error instanceof AbortError) throw error;
     throw unreadable(error);
   }
+  if (signal?.aborted) throw aborted(signal);
   if (duration === undefined || !Number.isFinite(duration) || duration <= 0) throw unreadable();
   return duration;
 }

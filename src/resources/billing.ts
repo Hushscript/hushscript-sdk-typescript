@@ -260,8 +260,8 @@ export class BillingResource {
 
   /**
    * Buys `packId` with the default card and returns the balance the purchase answer reports. It
-   * makes no request after the charge, so nothing can fail once the money has moved. Every error
-   * raised once the purchase request may have been sent carries `idempotencyKey`; pass it back as
+   * makes no follow-up request. A lost or unusable response can still raise an error after payment.
+   * Every error raised once the purchase request may have been sent carries `idempotencyKey`; pass it back as
    * `idempotencyKey` to retry without any chance of a second charge. One raised before any attempt
    * was sent carries none: nothing can have been charged.
    */
