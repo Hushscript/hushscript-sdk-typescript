@@ -248,6 +248,8 @@ describe("proxied parts", () => {
     expect(fake.count("part")).toBe(3);
     expect(fake.partNumbers("part").sort()).toEqual([1, 2, 3]);
     expect(fake.count("r2")).toBeGreaterThanOrEqual(1);
+    // Only a 403 earns a fresh page before any direct PUT has worked.
+    expect(fake.count("partUrls")).toBe(0);
     expect(fake.completes).toEqual([null]);
   });
 
@@ -255,6 +257,7 @@ describe("proxied parts", () => {
     const { hs, clock, fake } = setup({ hooks: { r2: () => new Response("", { status: 200 }) } });
     await driven(hs.transcribe(mp3), clock);
     expect(fake.count("part")).toBe(3);
+    expect(fake.count("partUrls")).toBe(0);
   });
 
   it("falls back when the part-urls page says the job takes proxied parts", async () => {
@@ -269,6 +272,7 @@ describe("proxied parts", () => {
     // Sixteen parts went direct before the first page ran out: mixing the two is refused.
     expect(outcome).toBeInstanceOf(UploadError);
     expect((outcome as UploadError).code).toBe("part_url_missing");
+    expect((outcome as UploadError).message).toBe("No upload URL for part 17.");
     expect(fake.count("partUrls")).toBe(1);
   });
 
@@ -358,6 +362,7 @@ describe("direct part retries", () => {
     const error = await failure(driven(hs.transcribe(mp3), clock));
     expect(error).toBeInstanceOf(UploadError);
     expect((error as UploadError).code).toBe("parts_exhausted");
+    expect((error as UploadError).message).toBe("Part 8 failed after retries and a fresh URL.");
     expect(fake.count("part")).toBe(0);
     expect(fake.count("complete")).toBe(0);
   });

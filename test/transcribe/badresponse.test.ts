@@ -144,6 +144,9 @@ describe("a 2xx answer that does not fit its shape, at each call site that reads
         name: "ApiError",
         code: "bad_response",
       });
+      expect(((error as UploadError).cause as Error).message).toMatch(
+        /^GET \/v1\/uploads\/\{job\}\/part-urls answered with a body the SDK cannot use/,
+      );
       expect((error as UploadError).idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
       expect((error as UploadError).resumeToken).toBeTruthy();
     });
