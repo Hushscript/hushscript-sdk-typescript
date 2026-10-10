@@ -196,6 +196,17 @@ describe("part URL pages", () => {
     expect([1, 2, 3, 4].map((n) => sigs(fake, n))).toEqual([["0"], ["0"], ["1"], ["1"]]);
   });
 
+  it("goes proxied for every part when a part-urls page has no URLs", async () => {
+    const { fake, send } = harness({
+      partUrls: () => Response.json({ part_urls: [], next_part_number: null }),
+    });
+    const plan: Plan = { ...planOf(3), part_urls: [], next_part_number: 1 };
+    expect(await send({ total: 3, plan })).toBeNull();
+    expect(fake.partNumbers("partUrls")).toEqual([1]);
+    expect(fake.partNumbers("part").sort()).toEqual([1, 2, 3]);
+    expect(fake.count("r2")).toBe(0);
+  });
+
   it("raises part_url_missing for a part no page covers, without asking for a page or going proxied", async () => {
     const { fake, send } = harness();
     const error = await failure(send({ total: 17, plan: planOf(17, 2), concurrency: 1 }));

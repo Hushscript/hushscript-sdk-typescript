@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { ManualClock } from "../helpers";
 import { BASE, JOB_OPTIONS } from "../helpers";
 
@@ -61,6 +61,14 @@ export interface Fake {
 }
 
 const PAGE = 16;
+
+/**
+ * Far more calls to an upload route than any test makes. A request loop that runs away spins on
+ * microtasks no test timeout interrupts, and one that gets an error back may simply go round
+ * again, so past the cap a request never answers: the loop stalls, `driven` (or the test timeout)
+ * fails the call, and the test fails when it finishes, whatever the code made of it.
+ */
+const RUNAWAY: Partial<Record<Route, number>> = { partUrls: 30, r2: 100, part: 100 };
 
 function jobView(
   id: string,
@@ -145,6 +153,10 @@ export function fakeApi(config: FakeConfig = {}): Fake {
   let polls = 0;
   let phase = 0;
   const flow = config.jobFlow ?? [{ state: "processing", polls: 1 }, { state: "done" }];
+  let runaway: Route | null = null;
+  onTestFinished(() => {
+    if (runaway !== null) throw new Error(`fakeApi: the ${runaway} requests ran away`);
+  });
   const fake: Fake = {
     calls: [],
     creates: [],
@@ -276,6 +288,10 @@ export function fakeApi(config: FakeConfig = {}): Fake {
       const url = new URL(request.url);
       const route = classify(request.method, url.pathname);
       if (route === null) return json({ error: "not_found", code: 1 }, 404);
+      if (runaway !== null || (counts.get(route) ?? 0) >= (RUNAWAY[route] ?? Infinity)) {
+        runaway ??= route;
+        return new Promise<never>(() => undefined);
+      }
       const buffer = new Uint8Array(await request.arrayBuffer());
       const last = Number(url.pathname.split("/").at(-1));
       const start = url.searchParams.get("start");
