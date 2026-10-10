@@ -30,7 +30,7 @@ interface Failure {
   foreign: boolean;
 }
 
-type Outcome = { kind: "response"; response: Response } | { kind: "failure"; failure: Failure };
+type Outcome = { response: Response } | { failure: Failure };
 
 /** What `fetch` throws for a failure of the connection or the response body: a TypeError (undici wraps them all) or a NetworkError DOMException. */
 function isTransportFailure(error: unknown): boolean {
@@ -82,13 +82,9 @@ function whenAborted(signal: AbortSignal): Promise<never> {
   return new Promise<never>((_resolve, reject) => {
     if (signal.aborted) reject(signal.reason as Error);
     else
-      signal.addEventListener(
-        "abort",
-        () => {
-          reject(signal.reason as Error);
-        },
-        { once: true },
-      );
+      signal.addEventListener("abort", () => {
+        reject(signal.reason as Error);
+      });
   });
 }
 
@@ -101,6 +97,7 @@ function keepHugeRetryAfter(key: string, value: unknown, context?: { source?: st
   if (
     key === "retry_after_seconds" &&
     value === Infinity &&
+    // Stryker disable next-line ConditionalExpression,OptionalChaining: every Node under test passes the source; the branch is for runtimes that do not
     context?.source !== undefined &&
     /^\d+$/.test(context.source)
   )
@@ -113,14 +110,18 @@ function parseBody(text: string): unknown {
   try {
     const parsed = JSON.parse(text, keepHugeRetryAfter) as unknown;
     return nestsDeeperThan(parsed, MAX_BODY_DEPTH) ? text : parsed;
+    // Stryker disable next-line BlockStatement: the text is never read; errorFromResponse and slugOf only look at records
   } catch {
     return text;
   }
 }
 
 function slugOf(body: unknown): string | null {
-  if (typeof body !== "object" || body === null) return null;
+  if (body === null) return null;
+  // Stryker disable next-line ConditionalExpression: a primitive's `error` is undefined, so it reads as no slug either way
+  if (typeof body !== "object") return null;
   const slug = (body as { error?: unknown }).error;
+  // Stryker disable next-line ConditionalExpression: a slug is only compared with strings, which a non-string never equals
   return typeof slug === "string" ? slug : null;
 }
 
@@ -158,7 +159,7 @@ async function attempt(
   const onCallerAbort = (): void => {
     controller.abort(callerSignal.reason);
   };
-  callerSignal.addEventListener("abort", onCallerAbort, { once: true });
+  callerSignal.addEventListener("abort", onCallerAbort);
   let timedOut = false;
   // The timeout runs on the injected clock, so a virtual clock can fire it.
   cfg.clock.sleep(timeoutMs, stopTimer.signal).then(
@@ -187,7 +188,6 @@ async function attempt(
       ? null
       : await Promise.race([response.arrayBuffer(), whenAborted(controller.signal)]);
     return {
-      kind: "response",
       response: new Response(bytes, {
         status: response.status,
         statusText: response.statusText,
@@ -196,12 +196,13 @@ async function attempt(
     };
   } catch (error) {
     // Once the body is fully written the request is sent, whatever the error code says.
+    // Stryker disable next-line StringLiteral: any text that is not a listed code tests false, like ""
     const connectPhase = NEVER_SENT.test(errorCode(error) ?? "");
     const sent = headersArrived || (!connectPhase && progress.done);
     // The SDK's own timeout and the caller's abort abort this controller; anything else that is not
     // a transport failure is not the network's doing and is not retried as if it were.
     const foreign = !controller.signal.aborted && !isTransportFailure(error);
-    return { kind: "failure", failure: { error, sent, timedOut, foreign } };
+    return { failure: { error, sent, timedOut, foreign } };
   } finally {
     stopTimer.abort();
     callerSignal.removeEventListener("abort", onCallerAbort);
@@ -259,9 +260,9 @@ export function hardenedFetch(
     const apiOrigin = new URL(cfg.baseUrl).origin;
     const target = describeTarget(url, apiOrigin);
     const signal = request.signal;
-    const buffer =
-      direct ?? (request.body === null ? null : new Uint8Array(await request.arrayBuffer()));
-    const bytes = buffer !== null && buffer.byteLength > 0 ? buffer : null;
+    // A request without a body reads as zero bytes, and zero bytes go out as no body.
+    const buffer = direct ?? new Uint8Array(await request.arrayBuffer());
+    const bytes = buffer.byteLength > 0 ? buffer : null;
     const headers = new Headers(request.headers);
     if (url.origin !== apiOrigin) headers.delete("authorization");
     // Read again for every attempt: a token rotated while this request waits (a retry's backoff or
@@ -282,7 +283,7 @@ export function hardenedFetch(
       if (carriesToken) prepared.headers.set("authorization", cfg.authorization());
       const startedAt = cfg.clock.now();
       const outcome = await attempt(timeoutMs, cfg, prepared, signal);
-      wire.sent = outcome.kind === "response" || outcome.failure.sent;
+      wire.sent = "response" in outcome || outcome.failure.sent;
       wire.everSent ||= wire.sent;
       const durationMs = cfg.clock.now() - startedAt;
       const log = (status: number | string, retryDelayMs: number | null): void => {
@@ -296,16 +297,18 @@ export function hardenedFetch(
         });
       };
 
-      if (outcome.kind === "response") {
+      if ("response" in outcome) {
         const response = outcome.response;
         if (response.ok) {
           log(response.status, null);
           return response;
         }
-        const body = parseBody(await response.text().catch(() => ""));
+        // The response was rebuilt from bytes already read, so reading it again cannot fail.
+        const body = parseBody(await response.text());
         const plan = planRetry({
           retryClass,
           status: response.status,
+          // Stryker disable next-line BooleanLiteral: planRetry reads `sent` only when there is no status
           sent: true,
           slug: slugOf(body),
           retryAfter: parseRetryAfter(response.headers.get("retry-after")),

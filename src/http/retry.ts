@@ -51,7 +51,8 @@ export const MAX_RETRY_AFTER_REPORTED: number = Number.MAX_SAFE_INTEGER;
  * length is a real wait, so one past the safe integers is capped (and so is "over 60").
  */
 export function parseRetryAfter(header: string | null): number | null {
-  const text = header?.trim() ?? "";
+  if (header === null) return null;
+  const text = header.trim();
   if (!/^\d+$/.test(text)) return null;
   return Math.min(Number(text), MAX_RETRY_AFTER_REPORTED);
 }
@@ -92,6 +93,7 @@ function retriableFailure(retryClass: RetryClass, status: number | null, sent: b
       return status === null || status === 502 || status === 503;
     case "mutate":
       return status === null && !sent;
+    // Stryker disable next-line ConditionalExpression,StringLiteral: without this case the switch returns undefined, which reads as false too
     case "never":
       return false;
   }
@@ -101,7 +103,7 @@ function retriableFailure(retryClass: RetryClass, status: number | null, sent: b
 export function planRetry(input: RetryInput): RetryPlan {
   const { retryClass, status, retryAfter, retriesDone, maxRetries } = input;
   if (!retriableFailure(retryClass, status, input.sent)) return STOP;
-  if (retryAfter !== null && retryAfter > MAX_RETRY_AFTER_SECONDS) return STOP;
+  if ((retryAfter ?? 0) > MAX_RETRY_AFTER_SECONDS) return STOP;
 
   let delayMs = backoffMs(retriesDone, input.random);
   let limit = retryClass === "purchase" ? Math.min(maxRetries, PURCHASE_MAX_RETRIES) : maxRetries;

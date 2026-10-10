@@ -18,11 +18,12 @@ export class TokenBucket {
     let waited = 0;
     for (;;) {
       const now = this.#clock.now();
-      while (this.#stamps.length > 0 && now - (this.#stamps[0] ?? now) >= this.#windowMs) {
+      // An empty list has no stamp to drop: now - Infinity is never past the window.
+      while (now - (this.#stamps[0] ?? Infinity) >= this.#windowMs) {
         this.#stamps.shift();
       }
-      const oldest = this.#stamps[0];
-      if (this.#stamps.length < this.#capacity || oldest === undefined) {
+      const oldest = this.#stamps.length < this.#capacity ? undefined : this.#stamps[0];
+      if (oldest === undefined) {
         this.#stamps.push(now);
         return waited;
       }

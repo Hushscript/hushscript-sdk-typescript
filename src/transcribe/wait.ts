@@ -37,7 +37,7 @@ export async function readJob(
     api.GET("/v1/jobs/{id}", {
       params: { path: { id } },
       parseAs: "text",
-      ...(signal === undefined ? {} : { signal }),
+      signal: signal ?? null,
     }),
     "GET /v1/jobs/{id}",
     JOB_ONE,
