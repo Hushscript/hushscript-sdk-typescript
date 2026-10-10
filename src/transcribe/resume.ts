@@ -19,8 +19,11 @@ export function encodeResumeToken(state: ResumeState): ResumeToken {
     size: state.size,
     durationSeconds: state.durationSeconds,
   };
-  return Buffer.from(JSON.stringify(body), "utf8").toString("base64url");
+  return Buffer.from(JSON.stringify(body)).toString("base64url");
 }
+
+const isWhole = (value: unknown): value is number => Number.isSafeInteger(value);
+const isFiniteNumber = (value: unknown): value is number => Number.isFinite(value);
 
 function invalid(): ConfigurationError {
   return new ConfigurationError({ message: "The resume token is not valid." });
@@ -33,7 +36,8 @@ export function decodeResumeToken(token: string): ResumeState {
   } catch {
     throw invalid();
   }
-  if (typeof parsed !== "object" || parsed === null) throw invalid();
+  // A JSON primitive has none of the fields checked below; null is the one value that cannot be read.
+  if (parsed === null) throw invalid();
   const body = parsed as Record<string, unknown>;
   const { jobId, idempotencyKey, size, durationSeconds } = body;
   if (
@@ -41,11 +45,9 @@ export function decodeResumeToken(token: string): ResumeState {
     !isPathSegment(jobId) ||
     typeof idempotencyKey !== "string" ||
     idempotencyKey === "" ||
-    typeof size !== "number" ||
-    !Number.isSafeInteger(size) ||
+    !isWhole(size) ||
     size < 1 ||
-    typeof durationSeconds !== "number" ||
-    !Number.isFinite(durationSeconds) ||
+    !isFiniteNumber(durationSeconds) ||
     durationSeconds <= 0
   ) {
     throw invalid();
