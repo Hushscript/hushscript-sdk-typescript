@@ -549,6 +549,7 @@ describe("waiting and fetching", () => {
     const error = (await failure(driven(hs.transcribe(mp3), clock))) as JobFailedError;
     expect(error.failureKind).toBeNull();
     expect(error.error).toBeNull();
+    expect(error.message).toBe("The job failed.");
   });
 
   it("passes unknown job states through while polling", async () => {

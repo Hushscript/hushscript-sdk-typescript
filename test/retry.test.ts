@@ -302,6 +302,36 @@ describe("planRetry", () => {
   });
 });
 
+describe("planRetry outside the cases it singles out", () => {
+  it.each([429, 500, 503])("does not retry a mutation that got an answer (%i)", (status) => {
+    expect(plan({ retryClass: "mutate", status, sent: false })).toEqual({ retry: false });
+  });
+
+  it("uses the backoff, not the 15 s schedule, for a create that failed with a 500", () => {
+    expect(plan({ retryClass: "upload-create", status: 500 })).toEqual({
+      retry: true,
+      delayMs: 500,
+    });
+  });
+
+  it("uses the backoff, not the 15 s schedule, for a 429 outside upload creates", () => {
+    expect(plan({ retryClass: "idempotent", status: 429 })).toEqual({ retry: true, delayMs: 500 });
+  });
+
+  it("still honors a Retry-After on a create after the schedule ran out", () => {
+    expect(
+      plan({
+        retryClass: "upload-create",
+        status: 429,
+        slug: "rate_limited",
+        retryAfter: 5,
+        retriesDone: 2,
+        rateLimitsDone: 3,
+      }),
+    ).toEqual({ retry: true, delayMs: 5000 });
+  });
+});
+
 describe("through the hardened fetch", () => {
   it("does not wait for Retry-After above 60 s", async () => {
     const f = stubFetch([

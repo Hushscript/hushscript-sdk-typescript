@@ -175,6 +175,23 @@ describe("network errors and the sent flag", () => {
     expect(mutate).toHaveBeenCalledTimes(4);
   });
 
+  it("counts only a code that starts with a connection-setup prefix as not sent", async () => {
+    const mutate = failAfterBody(networkError("XECONNREFUSED"));
+    await expect(
+      call("mutate", { method: "POST", path: "/v1/org/custody", body: "{}" }),
+    ).rejects.toBeInstanceOf(NetworkError);
+    expect(mutate).toHaveBeenCalledTimes(1);
+  });
+
+  it("judges a body that breaks after the headers as sent, though the request body was never read", async () => {
+    const f = vi.fn(() => Promise.resolve(brokenBody("error")));
+    vi.stubGlobal("fetch", f);
+    await expect(
+      call("mutate", { method: "POST", path: "/v1/org/custody", body: "{}" }),
+    ).rejects.toBeInstanceOf(NetworkError);
+    expect(f).toHaveBeenCalledTimes(1);
+  });
+
   it("wraps the final network error with the cause attached and redacted", async () => {
     stubFetch([{ error: new TypeError(`fetch failed for ${TOKEN}`) }]);
     const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
@@ -408,6 +425,9 @@ describe("outcome unknown after a sent unrepeatable call (spec 7.4)", () => {
     const error = await abortedCall(CLAIM, sentBy(stallAfterSend()));
     expect(error).toBeInstanceOf(OutcomeUnknownError);
     expect(error).toMatchObject({ code: "outcome_unknown", status: null });
+    expect((error as OutcomeUnknownError).message).toBe(
+      "The request was aborted. The request was sent, so its outcome is unknown.",
+    );
     expect((error as OutcomeUnknownError).hint).toBe(
       "The claim may have succeeded. Retrying will fail with agent_claim_invalid. If you have no token, contact support with the signup id.",
     );
@@ -1052,5 +1072,254 @@ describe("against a real HTTP server", () => {
     await expect(
       hardenedFetch(config(fakeClock(), { maxRetries: 1 }), "safe")(`${url}/v1/x`),
     ).rejects.toBeInstanceOf(NetworkError);
+  });
+});
+
+/** A TypeError whose cause chain carries `code` on the error `depth` steps below it. */
+function codedAt(depth: number, code: string): TypeError {
+  let inner: Error = Object.assign(new Error(code), { code });
+  for (let step = 1; step < depth; step += 1) inner = new Error("wrapped", { cause: inner });
+  return new TypeError("fetch failed", { cause: inner });
+}
+
+/** Lets pending promise callbacks and I/O run. */
+async function settle(): Promise<void> {
+  for (let i = 0; i < 5; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+}
+
+describe("what the hardened fetch reads from a failure", () => {
+  it("finds an error code three causes down, and not four", async () => {
+    stubFetch([{ error: codedAt(3, "ECONNRESET") }]);
+    const found = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect((found as NetworkError).message).toBe(
+      "The request failed before a response arrived (TypeError: fetch failed; code ECONNRESET).",
+    );
+    stubFetch([{ error: codedAt(4, "ECONNRESET") }]);
+    const lost = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect((lost as NetworkError).message).toBe(
+      "The request failed before a response arrived (TypeError: fetch failed).",
+    );
+  });
+
+  it.each([
+    ["a DOMException of another name", new DOMException("no clone", "DataCloneError")],
+    ["an Error named NetworkError", Object.assign(new Error("odd"), { name: "NetworkError" })],
+  ])("treats %s as unexpected_error, not retried", async (_name, thrown) => {
+    const f = stubFetch([{ error: thrown }, { status: 200, body: {} }]);
+    const error = await call("safe").catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(NetworkError);
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect(f.calls).toBe(1);
+  });
+
+  it("logs a foreign failure as unexpected_error", async () => {
+    const lines: string[] = [];
+    stubFetch([{ error: new RangeError("odd") }]);
+    await call("safe", { cfg: config(fakeClock(), { logLevel: "debug" }, lines) }).catch(
+      () => undefined,
+    );
+    expect(lines).toEqual([
+      "hushscript GET /v1/account status=unexpected_error attempt=1 duration_ms=0",
+    ]);
+  });
+
+  it("logs no attempt line for a request the caller aborted", async () => {
+    const lines: string[] = [];
+    const f = vi.fn(hang);
+    vi.stubGlobal("fetch", f);
+    const controller = new AbortController();
+    const pending = call("safe", {
+      signal: controller.signal,
+      cfg: config(fakeClock({ manual: true }), { logLevel: "debug" }, lines),
+    }).catch((e: unknown) => e);
+    await vi.waitFor(() => {
+      expect(f).toHaveBeenCalled();
+    });
+    controller.abort();
+    expect(await pending).toBeInstanceOf(AbortError);
+    expect(lines).toEqual([]);
+  });
+
+  it("keeps retry_after_seconds as sent, and leaves a huge integer under another key as Infinity", async () => {
+    stubFetch([
+      {
+        status: 429,
+        text: `{"error":"rate_limited","details":{"retry_after_seconds":5,"limit_seconds":${"9".repeat(400)}}}`,
+      },
+    ]);
+    const error = await call("safe", { cfg: config(fakeClock(), { maxRetries: 0 }) }).catch(
+      (e: unknown) => e,
+    );
+    expect((error as HushscriptError).retryAfter).toBe(5);
+    expect((error as HushscriptError).details).toEqual({
+      details: { retryAfterSeconds: 5, limitSeconds: Infinity },
+    });
+  });
+
+  it("retries a 503 whose body is JSON null", async () => {
+    const f = stubFetch([
+      { status: 503, text: "null" },
+      { status: 200, body: {} },
+    ]);
+    expect((await call("safe")).status).toBe(200);
+    expect(f.calls).toBe(2);
+  });
+
+  it("passes on a failure of the clock during a backoff, not as an abort", async () => {
+    const base = fakeClock();
+    const clock: Clock = {
+      now: () => base.now(),
+      sleep: (ms, signal) =>
+        ms === 500 ? Promise.reject(new Error("clock broke")) : base.sleep(ms, signal),
+    };
+    const f = stubFetch([
+      { status: 503, text: "x" },
+      { status: 200, body: {} },
+    ]);
+    const error = await call("safe", { cfg: config(clock) }).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly after the request was sent (Error: clock broke).",
+    );
+    expect(f.calls).toBe(1);
+  });
+
+  it("does not count a 500 toward the create's 15, 30, 60 s schedule", async () => {
+    const clock = fakeClock();
+    const f = stubFetch([
+      { status: 500, text: "x" },
+      { status: 500, text: "x" },
+      { status: 429, body: { error: "rate_limited", code: 5000 } },
+      { status: 200, body: {} },
+    ]);
+    const res = await call("upload-create", {
+      method: "POST",
+      path: "/v1/uploads",
+      body: "{}",
+      cfg: config(clock),
+    });
+    expect(res.status).toBe(200);
+    expect(f.calls).toBe(4);
+    expect(clock.sleeps).toEqual([500, 1000, 15_000]);
+  });
+});
+
+describe("abort and timeout while the body is being read", () => {
+  /** A fetch that answers with headers and a body that never ends; `answered` turns true once it has. */
+  function stalledBody(): { answered: () => boolean } {
+    let answered = false;
+    vi.stubGlobal("fetch", () => {
+      answered = true;
+      return Promise.resolve(brokenBody("stall"));
+    });
+    return { answered: () => answered };
+  }
+
+  it("raises AbortError when the caller aborts after the headers arrived", async () => {
+    const stub = stalledBody();
+    const controller = new AbortController();
+    const pending = call("safe", {
+      signal: controller.signal,
+      cfg: config(fakeClock({ manual: true })),
+    }).catch((e: unknown) => e);
+    await vi.waitFor(() => {
+      expect(stub.answered()).toBe(true);
+    });
+    await settle();
+    controller.abort();
+    const error = await pending;
+    expect(error).toBeInstanceOf(AbortError);
+    expect(error).toMatchObject({ code: "aborted", message: "The request was aborted." });
+  });
+
+  it("times out after the headers arrived, naming the timeout and logging it", async () => {
+    const lines: string[] = [];
+    const clock = fakeClock({ manual: true });
+    const stub = stalledBody();
+    const pending = call("safe", {
+      cfg: config(clock, { timeout: 5, maxRetries: 0, logLevel: "debug" }, lines),
+    }).catch((e: unknown) => e);
+    await vi.waitFor(() => {
+      expect(stub.answered()).toBe(true);
+    });
+    await settle();
+    clock.advance(5000);
+    const error = await pending;
+    expect(error).toBeInstanceOf(NetworkError);
+    expect((error as NetworkError).message).toBe("The request timed out after 5 s.");
+    expect(((error as NetworkError).cause as Error).message).toBe("timeout");
+    expect(lines).toEqual([
+      "hushscript GET /v1/account status=timeout attempt=1 duration_ms=5000",
+    ]);
+  });
+});
+
+describe("before the first attempt", () => {
+  it("raises AbortError with no request when the caller aborts a create waiting for the pacer", async () => {
+    const clock = fakeClock({ manual: true });
+    const f = stubFetch([{ status: 200, body: {} }]);
+    const cfg = config(clock);
+    for (let i = 0; i < 4; i += 1) await cfg.createPacer.acquire();
+    const controller = new AbortController();
+    const pending = call("upload-create", {
+      method: "POST",
+      path: "/v1/uploads",
+      body: "{}",
+      signal: controller.signal,
+      cfg,
+    }).catch((e: unknown) => e);
+    await vi.waitFor(() => {
+      expect(clock.pending).toHaveLength(1);
+    });
+    controller.abort();
+    const error = await pending;
+    expect(error).toBeInstanceOf(AbortError);
+    expect(error).toMatchObject({ code: "aborted", message: "The request was aborted." });
+    expect(f.calls).toBe(0);
+  });
+
+  it("raises a not-sent unexpected_error, not an unknown outcome, when a call that cannot be repeated fails to build", async () => {
+    const f = stubFetch([{ status: 200, body: {} }]);
+    const error = await hardenedFetch(config(), "never")("http://[bad/v1/agent/accounts", {
+      method: "POST",
+      body: "{}",
+    }).catch((e: unknown) => e);
+    expect(error).not.toBeInstanceOf(OutcomeUnknownError);
+    expect(error).toMatchObject({ code: "unexpected_error", status: null });
+    expect((error as HushscriptError).message).toBe(
+      "The SDK failed unexpectedly before the request was sent (TypeError: Failed to parse URL from http://[bad/v1/agent/accounts).",
+    );
+    expect(f.calls).toBe(0);
+  });
+
+  it("sends an empty body as no body, without a Content-Length", async () => {
+    const seen: { body: unknown; length: string | null }[] = [];
+    vi.stubGlobal("fetch", (_input: unknown, init?: RequestInit) => {
+      seen.push({ body: init?.body, length: new Headers(init?.headers).get("content-length") });
+      return Promise.resolve(new Response("{}", { status: 200 }));
+    });
+    await hardenedFetch(config(), "idempotent")(`${BASE}/v1/uploads/j/parts/1`, {
+      method: "PUT",
+      body: new Uint8Array(0),
+    });
+    expect(seen).toEqual([{ body: null, length: null }]);
+  });
+
+  it("sends a body smaller than one chunk as a single chunk", async () => {
+    const bytes = Uint8Array.from([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+    const seen: Uint8Array[][] = [];
+    vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
+      seen.push(await readChunks(init?.body));
+      return new Response("{}", { status: 200 });
+    });
+    await hardenedFetch(config(), "idempotent")(`${BASE}/v1/uploads/j/parts/1`, {
+      method: "PUT",
+      body: bytes,
+    });
+    expect(seen).toEqual([[bytes]]);
   });
 });

@@ -53,6 +53,43 @@ describe("heartbeat loop", () => {
     expect(stamps).toEqual([120_000]);
   });
 
+  it("starts again from now after a tick that came more than an interval late", async () => {
+    const clock = fakeClock({ manual: true });
+    const stop = new AbortController();
+    const stamps: number[] = [];
+    const done = runHeartbeat({
+      clock,
+      signal: stop.signal,
+      send: capped("send", 100, () => {
+        stamps.push(clock.now());
+        return Promise.resolve();
+      }),
+    });
+    await flush();
+    clock.advance(360_000);
+    await flush();
+    expect(stamps).toEqual([360_000]);
+    expect(clock.pending.map((entry) => entry.at)).toEqual([480_000]);
+    stop.abort();
+    await done;
+  });
+
+  it("returns quietly when unauthorized arrives after its signal aborted", async () => {
+    const clock = fakeClock({ manual: true });
+    const stop = new AbortController();
+    const done = runHeartbeat({
+      clock,
+      signal: stop.signal,
+      send: capped("send", 100, () => {
+        stop.abort();
+        return Promise.reject(new AuthenticationError({ code: "unauthorized", message: "no" }));
+      }),
+    });
+    await flush();
+    clock.advance(120_000);
+    await expect(done).resolves.toBeUndefined();
+  });
+
   it("stops quietly on wrong_state", async () => {
     const clock = fakeClock({ manual: true });
     let sent = 0;

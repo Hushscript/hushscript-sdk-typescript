@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import * as fetchModule from "../src/http/fetch";
 import { createTransport } from "../src/http/transport";
 import { config, fakeClock } from "./helpers";
-import { operationFor, retryClassForRequest } from "../src/http/operations";
+import { operationFor, retryClassForRequest, templateMatcher } from "../src/http/operations";
 
 describe("operationFor", () => {
   it.each([
@@ -21,6 +21,38 @@ describe("operationFor", () => {
 
   it("does not let a trailing slash or extra segment match a template", () => {
     expect(operationFor("GET", "/v1/jobs/a/b")).toBe("GET /v1/jobs/a/b");
+  });
+
+  it("does not take a template listed under another method", () => {
+    expect(operationFor("DELETE", "/v1/jobs/job_1")).toBe("DELETE /v1/jobs/job_1");
+  });
+});
+
+describe("templateMatcher", () => {
+  it("prefers fewer parameters, whatever order the keys come in", () => {
+    const match = templateMatcher([
+      "GET /v1/x/{id}/{part}",
+      "GET /v1/x/{id}/latest",
+      "GET /v1/x/{id}",
+      "GET /v1/x/deleted",
+    ]);
+    expect(match("GET", "/v1/x/deleted")).toBe("GET /v1/x/deleted");
+    expect(match("GET", "/v1/x/x_1")).toBe("GET /v1/x/{id}");
+    expect(match("GET", "/v1/x/x_1/latest")).toBe("GET /v1/x/{id}/latest");
+    expect(match("GET", "/v1/x/x_1/7")).toBe("GET /v1/x/{id}/{part}");
+  });
+
+  it("reads the text around a parameter literally", () => {
+    const match = templateMatcher(["GET /v1/a.b/{long_name}+"]);
+    expect(match("GET", "/v1/a.b/x_1+")).toBe("GET /v1/a.b/{long_name}+");
+    expect(match("GET", "/v1/aXb/x_1+")).toBeUndefined();
+    expect(match("GET", "/v1/a.b/x_1")).toBeUndefined();
+  });
+
+  it("matches only under the method a template is listed with", () => {
+    const match = templateMatcher(["GET /v1/x/{id}"]);
+    expect(match("GET", "/v1/x/1")).toBe("GET /v1/x/{id}");
+    expect(match("DELETE", "/v1/x/1")).toBeUndefined();
   });
 });
 

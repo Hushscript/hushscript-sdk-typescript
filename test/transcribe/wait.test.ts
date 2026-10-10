@@ -57,8 +57,59 @@ describe("hs.jobs.wait", () => {
     expect(error).toBeInstanceOf(WaitTimeoutError);
     expect(error).toMatchObject({ code: "wait_timeout", status: null });
     expect((error as WaitTimeoutError).resumeToken).toBeNull();
+    expect((error as WaitTimeoutError).message).toBe(
+      "The job is still processing after 20 s; it keeps running.",
+    );
     expect(clock.now()).toBe(20_000);
     expect(fake.count("job")).toBe(4);
+  });
+
+  it("does not report progress for a state other than queued or processing", async () => {
+    const { hs, clock } = setup();
+    const fake = fakeApi({ jobFlow: [{ state: "reviewing", polls: 2 }, { state: "done" }] });
+    const seen: Progress[] = [];
+    const job = await driven(hs.jobs.wait("job_1", { onProgress: (p) => seen.push(p) }), clock);
+    expect(job.state).toBe("done");
+    expect(fake.count("job")).toBe(3);
+    expect(seen).toEqual([]);
+  });
+
+  it("is cancelled by its signal while a poll is in flight", async () => {
+    const { hs } = setup();
+    const fake = fakeApi({
+      hooks: {
+        job: (call) =>
+          new Promise<Response>((_resolve, reject) => {
+            call.signal.addEventListener("abort", () => {
+              reject(call.signal.reason as Error);
+            });
+          }),
+      },
+    });
+    const stop = new AbortController();
+    const outcome = hs.jobs.wait("job_1", { signal: stop.signal }).catch((e: unknown) => e);
+    await vi.waitFor(() => {
+      expect(fake.count("job")).toBe(1);
+    });
+    stop.abort();
+    const error: unknown = await outcome;
+    expect(error).toBeInstanceOf(AbortError);
+    expect(error).toMatchObject({ code: "aborted", status: null });
+  });
+
+  it("names the job read in the error for a body it cannot use", async () => {
+    const { hs, clock } = setup();
+    fakeApi({
+      hooks: {
+        job: () =>
+          new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
+      },
+    });
+    const error = await driven(hs.jobs.wait("job_1"), clock).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "bad_response", status: 200 });
+    expect((error as Error).message).toMatch(
+      /^GET \/v1\/jobs\/\{id\} answered with a body the SDK cannot use \(/,
+    );
   });
 
   it("is cancelled by its signal during a sleep", async () => {
