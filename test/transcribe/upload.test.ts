@@ -1,10 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../../src/client";
-import {
-  AbortError,
-  UploadError,
-  ValidationError,
-} from "../../src/errors";
+import { AbortError, UploadError, ValidationError } from "../../src/errors";
 import { openSource, type Source } from "../../src/transcribe/source";
 import { uploadParts, type PartAck, type UploadSettings } from "../../src/transcribe/upload";
 import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, config, fakeClock, type ManualClock } from "../helpers";
@@ -21,7 +17,11 @@ type Plan = NonNullable<UploadSettings["plan"]>;
 type Hooks = NonNullable<FakeConfig["hooks"]>;
 
 /** The part-urls page from `start` (16 URLs at most), signed with `sig` so a refetched URL differs from the old one. */
-function page(start: number, total: number, sig: string): Pick<Plan, "part_urls" | "next_part_number"> {
+function page(
+  start: number,
+  total: number,
+  sig: string,
+): Pick<Plan, "part_urls" | "next_part_number"> {
   const urls: { n: number; url: string }[] = [];
   for (let n = start; n < start + 16 && n <= total; n += 1) {
     urls.push({ n, url: `${BASE}/__r2/job_1/${String(n)}?sig=${sig}` });
@@ -35,7 +35,7 @@ function planOf(total: number, first = 1): Plan {
 }
 
 /** Answers each part-urls request with the page it asks for, signed with the request's count. */
-function pages(total: number): Hooks["partUrls"] {
+function pages(total: number): NonNullable<Hooks["partUrls"]> {
   return (call) => Response.json(page(call.n, total, String(call.count + 1)));
 }
 
@@ -45,6 +45,11 @@ function expired(): Response {
 
 function settle(): Promise<void> {
   return new Promise((resolve) => setImmediate(resolve));
+}
+
+/** The start of every part-urls request, in order. */
+function starts(fake: Fake): number[] {
+  return fake.routes("partUrls").map((call) => call.n);
 }
 
 /** The signature of every URL part `n` was PUT to, in order. */
@@ -192,7 +197,7 @@ describe("part URL pages", () => {
       if (n === 3) clock.advance(1);
     });
     await send({ total: 4, source });
-    expect(fake.partNumbers("partUrls")).toEqual([1]);
+    expect(starts(fake)).toEqual([1]);
     expect([1, 2, 3, 4].map((n) => sigs(fake, n))).toEqual([["0"], ["0"], ["1"], ["1"]]);
   });
 
@@ -202,7 +207,7 @@ describe("part URL pages", () => {
     });
     const plan: Plan = { ...planOf(3), part_urls: [], next_part_number: 1 };
     expect(await send({ total: 3, plan })).toBeNull();
-    expect(fake.partNumbers("partUrls")).toEqual([1]);
+    expect(starts(fake)).toEqual([1]);
     expect(fake.partNumbers("part").sort()).toEqual([1, 2, 3]);
     expect(fake.count("r2")).toBe(0);
   });
@@ -250,7 +255,7 @@ describe("part URL pages", () => {
     });
     const acks = await send({ total: 40, concurrency: 2 });
     expect(acks?.map((ack) => ack.n)).toEqual(Array.from({ length: 40 }, (_, i) => i + 1));
-    expect(fake.partNumbers("partUrls")).toEqual([17, 1, 33]);
+    expect(starts(fake)).toEqual([17, 1, 33]);
     expect(sigs(fake, 2)).toEqual(["0", "2"]);
   });
 
@@ -263,7 +268,7 @@ describe("part URL pages", () => {
           : undefined,
     });
     await send({ total: 3, concurrency: 1 });
-    expect(fake.partNumbers("partUrls")).toEqual([1, 1]);
+    expect(starts(fake)).toEqual([1, 1]);
     expect(sigs(fake, 1)).toEqual(["0", "1"]);
     expect(sigs(fake, 2)).toEqual(["1", "2"]);
     expect(sigs(fake, 3)).toEqual(["2"]);
@@ -367,7 +372,10 @@ describe("failed direct parts", () => {
     const { send } = harness({ partUrls: () => apiError("too_fast", 1001, 429) });
     const error = await failure(send({ total: 20, concurrency: 1 }));
     expect(error).toMatchObject({ name: "UploadError", code: "parts_exhausted" });
-    expect((error as UploadError).cause).toMatchObject({ name: "RateLimitError", code: "too_fast" });
+    expect((error as UploadError).cause).toMatchObject({
+      name: "RateLimitError",
+      code: "too_fast",
+    });
   });
 
   it("keeps a part whose direct PUT lands after the switch to proxied out of the direct path", async () => {
