@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../../src/client";
 import { AbortError, PreflightError, WaitTimeoutError } from "../../src/errors";
+import { sleepOrAbort } from "../../src/transcribe/common";
 import type { Progress } from "../../src/transcribe/types";
 import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock } from "../helpers";
 import { driven, fakeApi } from "./fakeapi";
@@ -155,4 +156,24 @@ describe("hs.jobs.wait", () => {
       expect(clock.pending).toHaveLength(0);
     },
   );
+});
+
+describe("sleepOrAbort", () => {
+  it("passes on a clock failure that is not an abort", async () => {
+    const broke = new Error("clock broke");
+    const clock = { ...fakeClock(), sleep: () => Promise.reject(broke) };
+    const error = await sleepOrAbort(clock, 5, new AbortController().signal).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBe(broke);
+  });
+
+  it("turns any failure after the signal fired into the SDK's AbortError", async () => {
+    const controller = new AbortController();
+    controller.abort("caller stopped");
+    const clock = { ...fakeClock(), sleep: () => Promise.reject(new Error("woken")) };
+    const error = await sleepOrAbort(clock, 5, controller.signal).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AbortError);
+    expect(error).toMatchObject({ message: "The request was aborted.", cause: "caller stopped" });
+  });
 });

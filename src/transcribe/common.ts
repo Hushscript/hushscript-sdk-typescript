@@ -23,7 +23,7 @@ export function badResponse(route: string, status: number | null, cause?: unknow
     code: "bad_response",
     message: `${route} answered with a body the SDK cannot use${cause === undefined ? "" : ` (${describeError(cause)})`}.`,
     status,
-    ...(cause === undefined ? {} : { cause }),
+    cause,
   });
 }
 
@@ -57,11 +57,9 @@ function usable(json: unknown): unknown {
 /** The 2xx status and the parsed body; `json` is undefined when the body is empty or not JSON. */
 async function readJson(call: TextCall, route: string): Promise<{ status: number; json: unknown }> {
   const { data, response } = await guarded(call, route);
-  // A call made without `parseAs: "text"` has already been parsed.
-  if (typeof data !== "string") return { status: response.status, json: usable(data) };
-  if (data === "") return { status: response.status, json: undefined };
   try {
-    return { status: response.status, json: usable(JSON.parse(data)) };
+    // `data` is the body text, or undefined for an empty 2xx; "" and "undefined" do not parse either.
+    return { status: response.status, json: usable(JSON.parse(String(data))) };
   } catch {
     return { status: response.status, json: undefined };
   }
@@ -85,6 +83,6 @@ export async function readBody<T>(call: TextCall, route: string, shape: Shape): 
  */
 export async function readObject(call: TextCall, route: string): Promise<ObjectBody> {
   const { status, json } = await readJson(call, route);
-  const usable = typeof json === "object" && json !== null && !Array.isArray(json);
-  return { status, body: usable ? (json as Record<string, unknown>) : null };
+  const isObject = typeof json === "object" && !Array.isArray(json);
+  return { status, body: isObject ? (json as Record<string, unknown> | null) : null };
 }

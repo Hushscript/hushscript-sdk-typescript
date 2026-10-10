@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { Hushscript } from "../../src/client";
-import { ApiError, HushscriptError, UploadError } from "../../src/errors";
+import { AbortError, ApiError, HushscriptError, UploadError } from "../../src/errors";
+import { readBody, readObject } from "../../src/transcribe/common";
 import { encodeResumeToken } from "../../src/transcribe/resume";
 import { BASE, JOB_OPTIONS, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock } from "../helpers";
 import { driven, fakeApi, type FakeConfig } from "./fakeapi";
@@ -216,5 +217,59 @@ describe("a 2xx answer that does not fit its shape, at each call site that reads
       expect((error as HushscriptError).idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
       expect((error as HushscriptError).resumeToken).toBeTruthy();
     });
+  });
+});
+
+describe("readBody and readObject, the boundary every 2xx body goes through", () => {
+  const fits = (): null => null;
+  const answer = (data: string | undefined): Promise<{ data?: unknown; response: Response }> =>
+    Promise.resolve({ data, response: new Response(null, { status: ANSWERED }) });
+
+  it.each([
+    ["an empty body", ""],
+    ["no body at all", undefined],
+    ["a body that is not JSON", "<html>"],
+  ])("raises bad_response for %s, whatever the shape accepts", async (_name, data) => {
+    const error = await failure(readBody(answer(data), "GET /x", fits));
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      code: "bad_response",
+      status: ANSWERED,
+      message: "GET /x answered with a body the SDK cannot use (Error: expected a JSON body).",
+    });
+  });
+
+  it("hands back the parsed body when it fits", async () => {
+    expect(await readBody(answer('{"a":[1]}'), "GET /x", fits)).toEqual({ a: [1] });
+  });
+
+  it("turns a call that rejects with a plain error into bad_response with no status", async () => {
+    const error = await failure(readBody(Promise.reject(new TypeError("boom")), "GET /x", fits));
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error).toMatchObject({
+      code: "bad_response",
+      status: null,
+      message: "GET /x answered with a body the SDK cannot use (TypeError: boom).",
+    });
+    expect((error as ApiError).cause).toMatchObject({ name: "TypeError", message: "boom" });
+  });
+
+  it("passes an SDK error from the call through untouched", async () => {
+    const stop = new AbortError({ message: "The request was aborted." });
+    expect(await failure(readObject(Promise.reject(stop), "GET /x"))).toBe(stop);
+  });
+
+  it.each(["null", "42", '"x"', "true", "[]", "[{}]", "", "not json"])(
+    "reads %s as no object, with the status",
+    async (data) => {
+      expect(await readObject(answer(data), "POST /x")).toEqual({ status: ANSWERED, body: null });
+    },
+  );
+
+  it.each([
+    ["{}", {}],
+    ['{"a":1}', { a: 1 }],
+  ])("reads %s as an object, with the status", async (data, body) => {
+    expect(await readObject(answer(data), "POST /x")).toEqual({ status: ANSWERED, body });
   });
 });
