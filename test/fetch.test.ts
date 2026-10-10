@@ -1252,9 +1252,7 @@ describe("abort and timeout while the body is being read", () => {
     expect(error).toBeInstanceOf(NetworkError);
     expect((error as NetworkError).message).toBe("The request timed out after 5 s.");
     expect(((error as NetworkError).cause as Error).message).toBe("timeout");
-    expect(lines).toEqual([
-      "hushscript GET /v1/account status=timeout attempt=1 duration_ms=5000",
-    ]);
+    expect(lines).toEqual(["hushscript GET /v1/account status=timeout attempt=1 duration_ms=5000"]);
   });
 });
 

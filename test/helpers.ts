@@ -42,7 +42,7 @@ export interface ManualClock extends Clock {
  * simply go round again; stalled instead, it lets the test (or `driven`) time out, and the test
  * fails whatever the code made of the stall.
  */
-export function stall(what: string): Promise<never> {
+function stall(what: string): Promise<never> {
   try {
     onTestFinished(() => {
       throw new Error(`runaway: ${what}`);

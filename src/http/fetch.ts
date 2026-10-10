@@ -205,6 +205,7 @@ async function attempt(
     return { failure: { error, sent, timedOut, foreign } };
   } finally {
     stopTimer.abort();
+    // Stryker disable next-line StringLiteral: a listener left behind only aborts this finished controller again, a no-op
     callerSignal.removeEventListener("abort", onCallerAbort);
   }
 }
