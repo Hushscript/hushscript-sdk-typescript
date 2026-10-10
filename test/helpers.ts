@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { onTestFinished, vi } from "vitest";
 import type { Clock } from "../src/clock";
 import { resolveConfig, type ResolvedConfig } from "../src/config";
 import { hardenedFetch } from "../src/http/fetch";
@@ -36,22 +36,56 @@ export interface ManualClock extends Clock {
   advance(ms: number): void;
 }
 
+/**
+ * Fails the running test once it finishes and returns a promise that never settles. A loop that
+ * runs away spins on microtasks no test timeout interrupts, and one that gets an error back may
+ * simply go round again; stalled instead, it lets the test (or `driven`) time out, and the test
+ * fails whatever the code made of the stall.
+ */
+export function stall(what: string): Promise<never> {
+  try {
+    onTestFinished(() => {
+      throw new Error(`runaway: ${what}`);
+    });
+  } catch {
+    // Outside a test (a loop that outlived its test) there is nothing left to fail.
+  }
+  return new Promise<never>(() => undefined);
+}
+
+/** `fn`, stalled (see `stall`) once it has been called more than `cap` times. */
+export function capped<T>(what: string, cap: number, fn: () => Promise<T>): () => Promise<T> {
+  let calls = 0;
+  return () => {
+    calls += 1;
+    return calls > cap ? stall(`${what}: more than ${String(cap)} calls`) : fn();
+  };
+}
+
+/** Far more sleeps than any test asks one clock for; past it every sleep stalls (see `stall`). */
+const SLEEP_CAP = 1000;
+
 /** Request timeout every test config uses; the auto clock never lets a sleep of this length finish. */
 export const TEST_TIMEOUT_SECONDS = 3333;
 
 /**
  * A clock whose sleeps resolve at once, advancing time and recording the request, unless `manual`
  * is set. A sleep of `holdMs` (the request timeout) is the exception: it waits, unrecorded, until
- * it is aborted, so ordinary requests do not time out the instant they start.
+ * it is aborted, so ordinary requests do not time out the instant they start. A sleep of a
+ * negative or NaN time, or one past `SLEEP_CAP`, stalls and fails the test.
  */
 export function fakeClock(options: { manual?: boolean; holdMs?: number } = {}): ManualClock {
   let now = 0;
+  let calls = 0;
   const holdMs = options.holdMs ?? TEST_TIMEOUT_SECONDS * 1000;
   const clock: ManualClock = {
     sleeps: [],
     pending: [],
     now: () => now,
     sleep(ms, signal) {
+      calls += 1;
+      if (!(ms >= 0)) return stall(`fakeClock: asked to sleep ${String(ms)} ms`);
+      if (calls > SLEEP_CAP) return stall(`fakeClock: more than ${String(SLEEP_CAP)} sleeps`);
       const held = options.manual !== true && ms === holdMs;
       if (!held) clock.sleeps.push(ms);
       if (signal?.aborted === true) return Promise.reject(signal.reason as Error);
@@ -100,12 +134,38 @@ export interface StubFetch {
   bodies: string[];
 }
 
+/** More chunks than any request body in a test is split into; past it the read stalls. */
+const CHUNK_CAP = 10_000;
+
+/** A request body as its chunks, read up to `CHUNK_CAP`: a body stream that never ends stalls (see `stall`). */
+export async function readChunks(body: unknown): Promise<Uint8Array[]> {
+  const chunks: Uint8Array[] = [];
+  if (body === null || body === undefined) return chunks;
+  // eslint-disable-next-line n/no-unsupported-features/node-builtins -- stable in every Node 22 release we test
+  const reader = (body as ReadableStream<Uint8Array>).getReader();
+  for (;;) {
+    if (chunks.length >= CHUNK_CAP) return stall(`a request body past ${String(CHUNK_CAP)} chunks`);
+    const { done, value } = await reader.read();
+    if (done) return chunks;
+    chunks.push(value);
+  }
+}
+
+/** A request's body bytes, read through `readChunks`. */
+export async function readBytes(request: Request): Promise<Uint8Array> {
+  return new Uint8Array(Buffer.concat(await readChunks(request.body)));
+}
+
+/** Far more calls than any test makes to one stub; past it every call stalls (see `stall`). */
+const CALL_CAP = 200;
+
 /** Replays `steps` in order; the last step repeats. Installs itself as the global fetch. */
 export function stubFetch(steps: Step[]): StubFetch {
   const stub = (async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
+    if (stub.calls >= CALL_CAP) return stall(`stubFetch: more than ${String(CALL_CAP)} calls`);
     const request = new Request(input, init);
     stub.requests.push(request);
-    stub.bodies.push(await request.text());
+    stub.bodies.push(new TextDecoder().decode(await readBytes(request)));
     const step = steps[Math.min(stub.calls, steps.length - 1)];
     stub.calls += 1;
     if (step === undefined) throw new Error("stubFetch needs at least one step");

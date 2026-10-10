@@ -24,6 +24,8 @@ import {
   fakeClock,
   hang,
   networkError,
+  readBytes,
+  readChunks,
   stubFetch,
   type StubFetch,
 } from "./helpers";
@@ -95,7 +97,7 @@ describe("network errors and the sent flag", () => {
   it("treats a failure after the body was fully read as sent", async () => {
     const f = vi.fn(
       async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-        await new Request(input, init).arrayBuffer();
+        await readBytes(new Request(input, init));
         throw networkError("UND_ERR_SOCKET");
       },
     );
@@ -110,7 +112,7 @@ describe("network errors and the sent flag", () => {
   function failAfterBody(error: Error): ReturnType<typeof vi.fn> {
     const f = vi.fn(
       async (input: string | URL | Request, init?: RequestInit): Promise<Response> => {
-        await new Request(input, init).arrayBuffer();
+        await readBytes(new Request(input, init));
         throw error;
       },
     );
@@ -465,7 +467,7 @@ describe("outcome unknown after a sent unrepeatable call (spec 7.4)", () => {
   it("raises OutcomeUnknownError for a signup that timed out after sending", async () => {
     // The auto clock resolves the timeout sleep at once, after the stub has read the body.
     vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
-      await new Request(input, init).arrayBuffer();
+      await readBytes(new Request(input, init));
       return hang(input, init);
     });
     const error = await call("never", {
@@ -812,22 +814,11 @@ describe("request shaping", () => {
 });
 
 describe("request bodies and redirects", () => {
-  async function bodyChunks(body: unknown): Promise<Uint8Array[]> {
-    const chunks: Uint8Array[] = [];
-    // eslint-disable-next-line n/no-unsupported-features/node-builtins -- stable in every Node 22 release we test
-    const reader = (body as ReadableStream<Uint8Array>).getReader();
-    for (;;) {
-      const { done, value } = await reader.read();
-      if (done) return chunks;
-      chunks.push(value);
-    }
-  }
-
   it("hands a Uint8Array body to the transport without copying it (spec 8.4 memory bound)", async () => {
     const bytes = new Uint8Array(600_000).fill(7);
     const seen: Uint8Array[] = [];
     vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
-      seen.push(...(await bodyChunks(init?.body)));
+      seen.push(...(await readChunks(init?.body)));
       return new Response("{}", { status: 200 });
     });
     await hardenedFetch(config(), "idempotent")(`${BASE}/v1/uploads/j/parts/1`, {
@@ -843,7 +834,7 @@ describe("request bodies and redirects", () => {
     const bytes = Uint8Array.from({ length: 1000 }, (_, i) => i % 251);
     const sent: Uint8Array[][] = [];
     vi.stubGlobal("fetch", async (_input: unknown, init?: RequestInit) => {
-      sent.push(await bodyChunks(init?.body));
+      sent.push(await readChunks(init?.body));
       return new Response("{}", { status: sent.length === 1 ? 503 : 200 });
     });
     await hardenedFetch(config(), "idempotent")(`${BASE}/v1/uploads/j/parts/1`, {

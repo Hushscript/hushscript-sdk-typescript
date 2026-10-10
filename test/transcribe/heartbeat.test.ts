@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { AuthenticationError, ConflictError, NetworkError } from "../../src/errors";
 import { runHeartbeat } from "../../src/transcribe/heartbeat";
-import { fakeClock } from "../helpers";
+import { capped, fakeClock } from "../helpers";
 
 const flush = async (): Promise<void> => {
   for (let i = 0; i < 5; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
@@ -15,10 +15,10 @@ describe("heartbeat loop", () => {
     const done = runHeartbeat({
       clock,
       signal: stop.signal,
-      send: () => {
+      send: capped("send", 100, () => {
         stamps.push(clock.now());
         return Promise.resolve();
-      },
+      }),
     });
     for (let tick = 0; tick < 3; tick += 1) {
       await flush();
@@ -38,11 +38,11 @@ describe("heartbeat loop", () => {
     const done = runHeartbeat({
       clock,
       signal: stop.signal,
-      send: async () => {
+      send: capped("send", 100, async () => {
         stamps.push(clock.now());
         await new Promise<void>((resolve) => setImmediate(resolve));
         clock.advance(30_000);
-      },
+      }),
     });
     await flush();
     clock.advance(120_000);
@@ -59,10 +59,10 @@ describe("heartbeat loop", () => {
     const done = runHeartbeat({
       clock,
       signal: new AbortController().signal,
-      send: () => {
+      send: capped("send", 100, () => {
         sent += 1;
         return Promise.reject(new ConflictError({ code: "wrong_state", message: "moved on" }));
-      },
+      }),
     });
     await flush();
     clock.advance(120_000);
@@ -76,12 +76,12 @@ describe("heartbeat loop", () => {
     const done = runHeartbeat({
       clock,
       signal: new AbortController().signal,
-      send: () => {
+      send: capped("send", 100, () => {
         sent += 1;
         return sent === 1
           ? Promise.reject(new NetworkError({ message: "down" }))
           : Promise.reject(new AuthenticationError({ code: "unauthorized", message: "no" }));
-      },
+      }),
     });
     const outcome = done.catch((e: unknown) => e);
     await flush();
@@ -98,10 +98,10 @@ describe("heartbeat loop", () => {
     const done = runHeartbeat({
       clock,
       signal: stop.signal,
-      send: () => {
+      send: capped("send", 100, () => {
         stop.abort();
         return Promise.reject(new NetworkError({ message: "cancelled" }));
-      },
+      }),
     });
     await flush();
     clock.advance(120_000);

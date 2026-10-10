@@ -1,6 +1,6 @@
 import { onTestFinished, vi } from "vitest";
 import type { ManualClock } from "../helpers";
-import { BASE, JOB_OPTIONS } from "../helpers";
+import { BASE, JOB_OPTIONS, readBytes } from "../helpers";
 
 type Route =
   | "account"
@@ -68,7 +68,13 @@ const PAGE = 16;
  * again, so past the cap a request never answers: the loop stalls, `driven` (or the test timeout)
  * fails the call, and the test fails when it finishes, whatever the code made of it.
  */
-const RUNAWAY: Partial<Record<Route, number>> = { partUrls: 30, r2: 100, part: 100 };
+const RUNAWAY: Partial<Record<Route, number>> = {
+  partUrls: 30,
+  r2: 100,
+  part: 100,
+  heartbeat: 50,
+  job: 150,
+};
 
 function jobView(
   id: string,
@@ -292,7 +298,7 @@ export function fakeApi(config: FakeConfig = {}): Fake {
         runaway ??= route;
         return new Promise<never>(() => undefined);
       }
-      const buffer = new Uint8Array(await request.arrayBuffer());
+      const buffer = await readBytes(request);
       const last = Number(url.pathname.split("/").at(-1));
       const start = url.searchParams.get("start");
       const call: Call = {
