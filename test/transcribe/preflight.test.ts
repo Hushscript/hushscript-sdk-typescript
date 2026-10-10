@@ -150,10 +150,16 @@ describe("preflight", () => {
     const { hs } = client();
     const f = stubFetch([{ status: 500 }]);
     const make = (): ReadableStream<Uint8Array> => new ReadableStream<Uint8Array>();
-    for (const options of [{}, { size: 10 }, { durationSeconds: 20 }]) {
+    const needsSize =
+      "A stream input needs size (and durationSeconds); the SDK will not buffer an unbounded stream.";
+    for (const [options, message] of [
+      [{}, needsSize],
+      [{ size: 10 }, "A stream input needs durationSeconds and size."],
+      [{ durationSeconds: 20 }, needsSize],
+    ] as const) {
       const error = await refusal(hs.transcribe(make(), options));
       expect(error).toBeInstanceOf(PreflightError);
-      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(error).toMatchObject({ code: "invalid_option", status: null, message });
       expect(f.calls).toBe(0);
     }
   });

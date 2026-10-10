@@ -103,6 +103,7 @@ describe("a 2xx answer that does not fit its shape, at each call site that reads
       const { hs, run } = setup({ hooks: { create: answered(body) } });
       const error = await failure(run(hs.transcribe(MEDIA, { durationSeconds: 20 })));
       expectBadResponse(error);
+      expect((error as Error).message).toMatch(/^POST \/v1\/uploads answered with a body/);
       expect((error as HushscriptError).idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
       expect((error as HushscriptError).resumeToken).toBeNull();
     });
@@ -157,6 +158,9 @@ describe("a 2xx answer that does not fit its shape, at each call site that reads
       const { hs, run } = setup({ hooks: { complete: answered(body) } });
       const error = await failure(run(hs.transcribe(MEDIA, { durationSeconds: 20 })));
       expectBadResponse(error);
+      expect((error as Error).message).toMatch(
+        /^POST \/v1\/uploads\/\{job\}\/complete answered with a body/,
+      );
       expect((error as HushscriptError).idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
       expect((error as HushscriptError).resumeToken).toBeTruthy();
     });
@@ -198,6 +202,7 @@ describe("a 2xx answer that does not fit its shape, at each call site that reads
       });
       const error = await failure(run(hs.resume(RESUME_TOKEN, MEDIA)));
       expectBadResponse(error);
+      expect((error as Error).message).toMatch(/^POST \/v1\/uploads answered with a body/);
       expect((error as HushscriptError).idempotencyKey).toBe(KEY);
       expect((error as HushscriptError).resumeToken).toBe(RESUME_TOKEN);
     });

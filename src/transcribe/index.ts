@@ -1,13 +1,7 @@
 import { randomUUID } from "node:crypto";
 import type { Client } from "openapi-fetch";
 import type { ResolvedConfig } from "../config.ts";
-import {
-  AbortError,
-  HushscriptError,
-  NotFoundError,
-  UploadError,
-  asHushscriptError,
-} from "../errors.ts";
+import { AbortError, NotFoundError, UploadError, asHushscriptError } from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { Transcript } from "../transcript.ts";
 import { UPLOAD_COMPLETE, UPLOAD_CREATE } from "../shapes.ts";
@@ -85,15 +79,11 @@ function checkRuntimeOptions(options: {
   return { concurrency, waitTimeout };
 }
 
-function isObjectLike(value: unknown): value is object {
-  return (typeof value === "object" && value !== null) || typeof value === "function";
-}
-
 /** Remembers an error a caller's callback threw, so the pipeline can hand it back untouched. */
 class CallbackErrors {
   // Several workers can have a callback throw at once, so every thrown value is kept, not the last.
-  readonly #objects = new WeakSet<object>();
-  readonly #primitives = new Set<unknown>();
+  // The set lives as long as one transcribe or resume call.
+  readonly #thrown = new Set<unknown>();
 
   wrap<T>(callback: ((value: T) => void) | undefined): ((value: T) => void) | undefined {
     if (callback === undefined) return undefined;
@@ -101,15 +91,14 @@ class CallbackErrors {
       try {
         callback(value);
       } catch (error) {
-        if (isObjectLike(error)) this.#objects.add(error);
-        else this.#primitives.add(error);
+        this.#thrown.add(error);
         throw error;
       }
     };
   }
 
   owns(error: unknown): boolean {
-    return isObjectLike(error) ? this.#objects.has(error) : this.#primitives.has(error);
+    return this.#thrown.has(error);
   }
 }
 
@@ -162,9 +151,12 @@ export class Pipeline {
         duration_seconds: durationSeconds,
         idempotency_key: idempotencyKey,
       };
+      // Stryker disable next-line ConditionalExpression: JSON.stringify drops an undefined field, so the wire body is the same
       if (options.title !== undefined) body.title = options.title;
+      // Stryker disable next-line ConditionalExpression: JSON.stringify drops an undefined field, so the wire body is the same
       if (options.matterCode !== undefined) body.matter_code = options.matterCode;
       const transcription = transcriptionOptions(options);
+      // Stryker disable next-line ConditionalExpression: JSON.stringify drops an undefined field, so the wire body is the same
       if (transcription !== undefined) body.transcription_options = transcription;
       sentKey = idempotencyKey;
       const created = await readBody<CreateResponse>(
@@ -280,8 +272,9 @@ export class Pipeline {
   }
 
   /**
-   * Adds the resume token to a cancellation and, after a create was sent, the key to every error.
-   * An error a caller's callback threw goes back as it was.
+   * After a create was sent, adds the key to every error and the resume token to a cancellation.
+   * An error from before the create (there is no token yet either), or one a caller's callback
+   * threw, goes back as it was.
    */
   #annotate(
     error: unknown,
@@ -290,23 +283,18 @@ export class Pipeline {
     key: string | null,
     callbackErrors: CallbackErrors,
   ): unknown {
-    if (callbackErrors.owns(error)) return error;
+    if (key === null || callbackErrors.owns(error)) return error;
     const cancelled = error instanceof AbortError || signal.aborted;
-    const wrap =
-      cancelled && token !== null && !(error instanceof AbortError && error.resumeToken !== null);
-    const out = wrap
-      ? new AbortError({
-          message: error instanceof Error ? error.message : "The request was aborted.",
-          cause: error,
-          resumeToken: token,
-        })
-      : key === null
-        ? error
+    const out =
+      cancelled && token !== null
+        ? new AbortError({
+            message: error instanceof Error ? error.message : "The request was aborted.",
+            cause: error,
+            resumeToken: token,
+          })
         : asHushscriptError(error);
-    if (key !== null && out instanceof HushscriptError) {
-      out.idempotencyKey = key;
-      out.resumeToken ??= token;
-    }
+    out.idempotencyKey = key;
+    out.resumeToken ??= token;
     return out;
   }
 
@@ -320,6 +308,7 @@ export class Pipeline {
     let jobState = created.state;
     let finished = known;
     if (created.state === "uploading") {
+      // Stryker disable next-line ConditionalExpression: both callers set the source before an uploading job gets here; this only narrows the type
       if (run.source === null) throw fileRequired();
       jobState = await this.#upload(created, run, run.source);
       finished = null;
@@ -351,7 +340,7 @@ export class Pipeline {
     const { state } = run;
     const stop = new AbortController();
     const signal = AbortSignal.any([run.signal, stop.signal]);
-    const failure: { error?: unknown; failed: boolean } = { failed: false };
+    const failure: { error?: unknown; failed?: boolean } = {};
     const heartbeat = runHeartbeat({
       clock: this.#cfg.clock,
       signal,
@@ -383,11 +372,10 @@ export class Pipeline {
           });
         },
       });
-      if (failure.failed) throw failure.error;
       const completed = await readBody<{ state: string }>(
         this.#api.POST("/v1/uploads/{job}/complete", {
           params: { path: { job: state.jobId } },
-          ...(acks === null || acks.length === 0 ? {} : { body: { parts: acks } }),
+          ...(acks === null ? {} : { body: { parts: acks } }),
           signal,
           parseAs: "text",
         }),

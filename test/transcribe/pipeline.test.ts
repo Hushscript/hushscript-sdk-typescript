@@ -1,5 +1,6 @@
 /* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
 import { execFileSync } from "node:child_process";
+import { writeFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -115,6 +116,34 @@ describe("transcribe", () => {
     const uploading = progress.filter((p) => p.stage === "uploading");
     expect(uploading.at(-1)).toMatchObject({ percent: 100, bytesSent: mp3.byteLength });
     expect(progress.some((p) => p.stage === "processing")).toBe(true);
+  });
+
+  it("reports the state complete answered before polling, and only for queued or processing", async () => {
+    const statesSeen = async (config: FakeConfig): Promise<Progress[]> => {
+      const { hs, clock } = setup(config);
+      const progress: Progress[] = [];
+      await driven(hs.transcribe(mp3, { onProgress: (p) => progress.push(p) }), clock);
+      return progress.filter((p) => p.stage !== "uploading");
+    };
+    expect(await statesSeen({ completeState: "queued" })).toEqual([
+      { stage: "processing", state: "queued" },
+      { stage: "processing", state: "processing" },
+    ]);
+    expect(
+      await statesSeen({
+        completeState: "processing",
+        jobFlow: [{ state: "queued", polls: 1 }, { state: "done" }],
+      }),
+    ).toEqual([
+      { stage: "processing", state: "processing" },
+      { stage: "processing", state: "queued" },
+    ]);
+    expect(
+      await statesSeen({
+        completeState: "reviewing",
+        jobFlow: [{ state: "reviewing", polls: 1 }, { state: "done" }],
+      }),
+    ).toEqual([]);
   });
 
   it("maps every option to the create request", async () => {
@@ -441,6 +470,9 @@ describe("heartbeat and complete", () => {
     ref.clock = clock;
     await driven(hs.transcribe(mp3, { concurrency: 2 }), clock);
     expect(fake.count("heartbeat")).toBe(8);
+    expect(
+      new Set(fake.routes("heartbeat").map((call) => new URL(call.request.url).pathname)),
+    ).toEqual(new Set(["/v1/uploads/job_1/heartbeat"]));
     expect(clock.pending).toHaveLength(0);
   });
 
@@ -592,7 +624,11 @@ describe("waiting and fetching", () => {
     });
     const error = await failure(driven(hs.transcribe(mp3), clock));
     expect(error).toBeInstanceOf(UploadError);
-    expect(error).toMatchObject({ code: "transcript_missing", status: null });
+    expect(error).toMatchObject({
+      code: "transcript_missing",
+      status: null,
+      message: "The job is done but has no transcript id.",
+    });
   });
 });
 
@@ -752,7 +788,11 @@ describe("options (spec 7.3, 8.6)", () => {
       const { hs, fake } = setup();
       const error = await failure(hs.transcribe(mp3, { concurrency }));
       expect(error).toBeInstanceOf(PreflightError);
-      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        status: null,
+        message: "concurrency must be a whole number from 1 to 8.",
+      });
       expect(fake.calls).toHaveLength(0);
     },
   );
@@ -827,7 +867,11 @@ describe("invalid wait options across transcribe and resume", () => {
       ]) {
         const error = await failure(call());
         expect(error).toBeInstanceOf(PreflightError);
-        expect(error).toMatchObject({ code: "invalid_option", status: null });
+        expect(error).toMatchObject({
+          code: "invalid_option",
+          status: null,
+          message: "waitTimeout must be a positive number of seconds.",
+        });
         expect(fake.calls).toHaveLength(0);
       }
     },
@@ -1023,6 +1067,48 @@ describe("resume against the job's real state (spec 7.3)", () => {
     expect(fake.count("create")).toBe(2);
     expect(fake.jobCount()).toBe(1);
     expect(fake.count("complete")).toBe(1);
+  });
+
+  it("uses the job it read when it already failed: one job read, no poll", async () => {
+    const { hs, clock, fake } = setup({
+      jobFlow: [{ state: "failed", error: "nope", failure_kind: "media_unreadable" }],
+    });
+    const token = encodeResumeToken({
+      jobId: "job_1",
+      idempotencyKey: "0123456789abcdefghij",
+      size: mp3.byteLength,
+      durationSeconds: 21,
+    });
+    const error = await failure(driven(hs.resume(token), clock));
+    expect(error).toBeInstanceOf(JobFailedError);
+    expect(error).toMatchObject({ error: "nope", jobId: "job_1" });
+    expect(fake.calls.map((entry) => entry.route)).toEqual(["job"]);
+  });
+
+  it("refuses a path that changed size while the job was read, before the replay", async () => {
+    const held = heldParts();
+    const path = join(await mkdtemp(join(tmpdir(), "hs-path-")), "a.mp3");
+    await writeFile(path, mp3);
+    const { hs, clock, fake } = setup({
+      hooks: {
+        ...held.config.hooks,
+        // Synchronous, so the manual clock does not run the request timeout while it writes.
+        job: () => {
+          writeFileSync(path, mp3.subarray(0, 1000));
+          return undefined;
+        },
+      },
+    });
+    held.bind(clock);
+    const token = await interrupted({ hs, fake });
+    held.release();
+    const error = await failure(driven(hs.resume(token, path), clock));
+    expect(error).toBeInstanceOf(ResumeMismatchError);
+    expect(error).toMatchObject({
+      code: "resume_file_mismatch",
+      message: `The file is 1000 bytes; the upload started with ${String(mp3.byteLength)} bytes.`,
+    });
+    expect(fake.count("create")).toBe(1);
   });
 
   it("uses the job it read when it is already done: no create, one job read", async () => {
@@ -1226,6 +1312,105 @@ describe("errors after the create was sent (spec 7.3)", () => {
     const create = JSON.parse(fake.routes("create")[0]?.body ?? "{}") as Record<string, unknown>;
     expect(error.idempotencyKey).toBe(create["idempotency_key"]);
     expect(error.resumeToken).toBeNull();
+    // The fetch layer's abort, keyed as it was: with no token there is nothing to wrap it for.
+    expect((error.cause as { code?: unknown }).code).not.toBe("aborted");
+  });
+
+  it("hands back an error from before the create as it was, with nothing added", async () => {
+    const { hs, fake } = setup();
+    const locked = new ReadableStream<Uint8Array>();
+    locked.getReader();
+    const error = await failure(hs.transcribe(locked, { size: 1000, durationSeconds: 20 }));
+    expect(error).toBeInstanceOf(TypeError);
+    expect(error).not.toBeInstanceOf(HushscriptError);
+    expect("idempotencyKey" in (error as object)).toBe(false);
+    expect("resumeToken" in (error as object)).toBe(false);
+    expect(fake.calls).toHaveLength(0);
+  });
+
+  /** A caller's clock that throws `thrown` from now() once `arm` was called. */
+  function brokenClock(thrown: unknown): {
+    hs: Hushscript;
+    fake: Fake;
+    base: Clock;
+    arm: () => void;
+  } {
+    const base = fakeClock({ manual: true });
+    const fake = fakeApi();
+    let armed = false;
+    const clock = {
+      ...base,
+      now: (): number => {
+        if (armed) throw thrown;
+        return base.now();
+      },
+    };
+    const hs = new Hushscript({
+      token: TOKEN,
+      baseUrl: BASE,
+      clock,
+      timeout: TEST_TIMEOUT_SECONDS,
+    });
+    return {
+      hs,
+      fake,
+      base,
+      arm: () => {
+        armed = true;
+      },
+    };
+  }
+
+  it("wraps a plain error from after the create as unexpected_error, with the key and the token", async () => {
+    const { hs, fake, base, arm } = brokenClock(new Error("clock broke"));
+    const tokens: string[] = [];
+    const error = await failure(
+      driven(
+        hs.transcribe(mp3, {
+          onResumeToken: (t) => tokens.push(t),
+          onProgress: (p) => {
+            if (p.stage === "processing") arm();
+          },
+        }),
+        base,
+      ),
+    );
+    expect(error).toBeInstanceOf(HushscriptError);
+    expect(error).toMatchObject({
+      code: "unexpected_error",
+      message: "The SDK failed unexpectedly (Error: clock broke).",
+      idempotencyKey: fake.creates[0]?.["idempotency_key"],
+      resumeToken: tokens[0],
+    });
+    expect(((error as Error).cause as Error).message).toBe("clock broke");
+  });
+
+  it("turns a thrown non-Error after the caller aborted into an AbortError with the token", async () => {
+    const { hs, fake, base, arm } = brokenClock("clock broke");
+    const stop = new AbortController();
+    const tokens: string[] = [];
+    const error = await failure(
+      driven(
+        hs.transcribe(mp3, {
+          signal: stop.signal,
+          onResumeToken: (t) => tokens.push(t),
+          onProgress: (p) => {
+            if (p.stage !== "processing") return;
+            stop.abort();
+            arm();
+          },
+        }),
+        base,
+      ),
+    );
+    expect(error).toBeInstanceOf(AbortError);
+    expect(error).toMatchObject({
+      code: "aborted",
+      message: "The request was aborted.",
+      idempotencyKey: fake.creates[0]?.["idempotency_key"],
+      resumeToken: tokens[0],
+    });
+    expect((error as Error).cause).toBe("clock broke");
   });
 
   it("carries no key on a refusal that came before the create", async () => {
