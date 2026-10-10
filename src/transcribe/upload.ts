@@ -1,6 +1,6 @@
 import type { Client } from "openapi-fetch";
 import type { ResolvedConfig } from "../config.ts";
-import { AbortError, ApiError, HushscriptError, UploadError, describeError } from "../errors.ts";
+import { ApiError, HushscriptError, UploadError, describeError } from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { hardenedFetch } from "../http/fetch.ts";
 import { MAX_PART_BYTES, PART_URLS } from "../shapes.ts";
@@ -58,7 +58,7 @@ class PartUrls {
   readonly #jobId: string;
   readonly #signal: AbortSignal;
   readonly #pages: Page[] = [];
-  readonly #inflight = new Map<number, Promise<boolean>>();
+  readonly #inflight = new Map<number, Promise<void>>();
   #next: number | null;
   #direct = true;
 
@@ -70,6 +70,7 @@ class PartUrls {
     this.#signal = signal;
     this.#next = plan.next_part_number;
     if (plan.part_urls === null) this.#direct = false;
+    // Stryker disable next-line ConditionalExpression,EqualityOperator: an empty page (start Infinity, no URLs) never matches a part, so storing it changes nothing
     else if (plan.part_urls.length > 0) this.#store(plan.part_urls);
   }
 
@@ -90,11 +91,11 @@ class PartUrls {
     return this.#pages.find((page) => page.urls.has(n));
   }
 
-  /** One request per page start however many parts wait for it; false when the job has no direct URLs. */
-  #fetchPage(start: number): Promise<boolean> {
+  /** One request per page start however many parts wait for it; a page without URLs switches the job to proxied parts. */
+  #fetchPage(start: number): Promise<void> {
     const running = this.#inflight.get(start);
     if (running !== undefined) return running;
-    const request = (async (): Promise<boolean> => {
+    const request = (async (): Promise<void> => {
       const data = await readBody<PartUrlsBody>(
         this.#api.GET("/v1/uploads/{job}/part-urls", {
           params: { path: { job: this.#jobId }, query: { start } },
@@ -104,14 +105,13 @@ class PartUrls {
         "GET /v1/uploads/{job}/part-urls",
         PART_URLS,
       );
-      const urls = data?.part_urls ?? [];
-      if (urls.length === 0) {
+      const { part_urls: urls, next_part_number: next = null } = data ?? { part_urls: null };
+      if (urls === null || urls.length === 0) {
         this.#direct = false;
-        return false;
+        return;
       }
       const stored = this.#store(urls);
-      if (this.#next === stored) this.#next = data?.next_part_number ?? null;
-      return true;
+      if (this.#next === stored) this.#next = next;
     })().finally(() => {
       this.#inflight.delete(start);
     });
@@ -145,20 +145,16 @@ class PartUrls {
   /** Fetches the page `stale` came from again, unless another part already did. */
   async refresh(n: number, stale: string): Promise<void> {
     const page = this.#pageOf(n);
+    // Stryker disable next-line OptionalChaining: urlFor just handed out `stale` from a page, and a page is only replaced by a fetch of the same start
     if (page?.urls.get(n) !== stale) return;
     await this.#fetchPage(page.start);
   }
 }
 
 /** A 4xx other than 429 (which was already retried): the API said no, and trying again will not change it. */
-function isTerminal(error: unknown): boolean {
-  return (
-    error instanceof ApiError &&
-    error.status !== null &&
-    error.status >= 400 &&
-    error.status < 500 &&
-    error.status !== 429
-  );
+function isTerminal(error: HushscriptError): boolean {
+  const status = error.status ?? 0;
+  return error instanceof ApiError && status >= 400 && status < 500 && status !== 429;
 }
 
 function etagOf(response: Response): string {
@@ -228,7 +224,7 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
   let directSucceeded = false;
   let sent = 0;
   let nextPart = 1;
-  const outcome: { failed: boolean; error?: unknown } = { failed: false };
+  const failures: unknown[] = [];
 
   const putDirect = async (url: string, bytes: Uint8Array): Promise<string> => {
     const response = await putFetch(url, {
@@ -262,30 +258,26 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
     error: unknown,
     n: number,
     url: string | null,
-    state: { refetched: boolean },
+    state: { refetched?: boolean },
   ): Promise<void> => {
-    const retryable =
-      error instanceof HushscriptError &&
-      !(error instanceof AbortError) &&
-      !(error instanceof UploadError && error.code === "part_url_missing");
-    if (!retryable || isAborted()) throw error;
+    // Stryker disable next-line ConditionalExpression: putFetch and readBody wrap every failure in a HushscriptError; this only narrows the type
+    if (!(error instanceof HushscriptError)) throw error;
+    // An AbortError here only ever comes from `signal` firing, which isAborted() sees.
+    if (isAborted() || (error instanceof UploadError && error.code === "part_url_missing"))
+      throw error;
     // The part-urls fetch itself was refused for a reason a fresh page or proxied parts cannot fix.
     if (url === null && directSucceeded && isTerminal(error)) throw error;
     let cause: HushscriptError = error;
-    const forbidden = error instanceof ApiError && error.status === 403;
+    const forbidden = error.status === 403;
     if (url !== null && !state.refetched && (forbidden || directSucceeded)) {
       state.refetched = true;
       try {
         await pages.refresh(n, url);
         return;
       } catch (refreshError) {
-        if (
-          !(refreshError instanceof HushscriptError) ||
-          refreshError instanceof AbortError ||
-          isAborted() ||
-          (directSucceeded && isTerminal(refreshError))
-        )
-          throw refreshError;
+        // Stryker disable next-line ConditionalExpression: readBody wraps every part-urls failure in a HushscriptError; this only narrows the type
+        if (!(refreshError instanceof HushscriptError)) throw refreshError;
+        if (isAborted() || (directSucceeded && isTerminal(refreshError))) throw refreshError;
         cause = refreshError;
       }
     }
@@ -301,14 +293,14 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
   };
 
   /** Direct first; a part that fails keeps the fallback rules. */
-  const sendDirect = async (n: number, bytes: Uint8Array): Promise<void> => {
-    const state = { refetched: false };
-    while (!isProxied() && urls !== null) {
+  const sendDirect = async (pages: PartUrls, n: number, bytes: Uint8Array): Promise<void> => {
+    const state: { refetched?: boolean } = {};
+    while (!isProxied()) {
       let url: string | null;
       try {
-        url = await urls.urlFor(n);
+        url = await pages.urlFor(n);
       } catch (error) {
-        await recover(urls, error, n, null, state);
+        await recover(pages, error, n, null, state);
         continue;
       }
       if (url === null) {
@@ -328,17 +320,15 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
         acks.set(n, etag);
         return;
       } catch (error) {
-        await recover(urls, error, n, url, state);
+        await recover(pages, error, n, url, state);
       }
     }
   };
 
   const sendPart = async (n: number, bytes: Uint8Array): Promise<void> => {
-    if (!isProxied()) await sendDirect(n, bytes);
-    if (isProxied()) {
-      acks.delete(n);
-      await putProxied(n, bytes);
-    }
+    // Stryker disable next-line ConditionalExpression: `urls` is null only for a job with no plan, which starts proxied, and sendDirect checks that first
+    if (urls !== null) await sendDirect(urls, n, bytes);
+    if (isProxied()) await putProxied(n, bytes);
   };
 
   const worker = async (): Promise<void> => {
@@ -358,14 +348,14 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
     try {
       await worker();
     } catch (error) {
-      if (!outcome.failed) Object.assign(outcome, { failed: true, error });
+      failures.push(error);
       failure.abort();
     }
   };
 
   const workers = source.sequential ? 1 : Math.min(settings.concurrency, totalParts);
   await Promise.all(Array.from({ length: workers }, guarded));
-  if (outcome.failed) throw outcome.error;
+  if (failures.length > 0) throw failures[0];
   if (settings.signal.aborted) throw aborted(settings.signal);
   if (isProxied()) return null;
   return [...acks.entries()].sort(([a], [b]) => a - b).map(([n, etag]) => ({ n, etag }));
