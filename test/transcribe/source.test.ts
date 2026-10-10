@@ -1,12 +1,34 @@
 /* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
+import type * as FsPromises from "node:fs/promises";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AbortError, PreflightError, UploadError } from "../../src/errors";
 import { openSource } from "../../src/transcribe/source";
 
+/** Set by a test to replace `open` from node:fs/promises; everything else stays real. */
+const fsHooks = vi.hoisted(() => ({
+  open: undefined as ((path: string) => Promise<unknown>) | undefined,
+}));
+
+vi.mock("node:fs/promises", async (importOriginal) => {
+  const actual = await importOriginal<typeof FsPromises>();
+  return {
+    ...actual,
+    open: (...args: Parameters<typeof actual.open>) =>
+      fsHooks.open === undefined ? actual.open(...args) : fsHooks.open(String(args[0])),
+  };
+});
+
+afterEach(() => {
+  fsHooks.open = undefined;
+});
+
 const DATA = Uint8Array.from({ length: 100 }, (_, i) => i);
+const UNSUPPORTED = "file must be a path, a Blob, a Uint8Array or a ReadableStream.";
+const NEEDS_SIZE =
+  "A stream input needs size (and durationSeconds); the SDK will not buffer an unbounded stream.";
 
 async function file(): Promise<string> {
   const path = join(await mkdtemp(join(tmpdir(), "hs-src-")), "data.bin");
@@ -60,10 +82,67 @@ describe("random-access sources", () => {
     await expect(openSource(tmpdir())).rejects.toBeInstanceOf(PreflightError);
   });
 
-  it("refuses anything that is not a path, bytes, a Blob or a stream", async () => {
-    await expect(openSource(42 as unknown as string)).rejects.toMatchObject({
-      code: "invalid_option",
-    });
+  it.each([
+    ["a number", 42],
+    ["a plain object", {}],
+    ["a plain object with a size", { size: 5 }],
+  ])("refuses %s: it is not a path, bytes, a Blob or a stream", async (_name, input) => {
+    for (const size of [undefined, 5]) {
+      await expect(openSource(input as unknown as string, size)).rejects.toMatchObject({
+        code: "invalid_option",
+        message: UNSUPPORTED,
+      });
+    }
+  });
+
+  it("hands the probe the bytes, or the path, themselves", async () => {
+    const path = await file();
+    const fromPath = await openSource(path);
+    expect(fromPath.probeInput).toEqual({ kind: "path", path });
+    await fromPath.close();
+    expect((await openSource(DATA)).probeInput).toEqual({ kind: "bytes", bytes: DATA });
+  });
+
+  it("releases the file handle on close", async () => {
+    const source = await openSource(await file());
+    await source.close();
+    await expect(source.read(0, 10)).rejects.toMatchObject({ code: "EBADF" });
+  });
+
+  it.each([
+    ["a path", async () => openSource(await file())],
+    ["a Blob", async () => openSource(new Blob([DATA]))],
+  ])(
+    "gives up a read from %s when the call is aborted while the bytes are read",
+    async (_name, make) => {
+      const source = await make();
+      const stop = new AbortController();
+      const read = source.read(0, 10, stop.signal);
+      stop.abort();
+      await expect(read).rejects.toBeInstanceOf(AbortError);
+      await source.close();
+    },
+  );
+
+  it("refuses a pre-aborted read past the end of a file, which reads nothing", async () => {
+    const source = await openSource(await file());
+    await expect(source.read(100, 4, AbortSignal.abort())).rejects.toBeInstanceOf(AbortError);
+    await source.close();
+  });
+
+  it("reads nothing from a Blob once the call is aborted", async () => {
+    const slices: (number | undefined)[] = [];
+    class Watched extends Blob {
+      override slice(start?: number, end?: number, type?: string): Blob {
+        slices.push(start);
+        return super.slice(start, end, type);
+      }
+    }
+    const source = await openSource(new Watched([DATA]));
+    // The constructor takes one slice for the probe.
+    slices.length = 0;
+    await expect(source.read(0, 10, AbortSignal.abort())).rejects.toBeInstanceOf(AbortError);
+    expect(slices).toEqual([]);
   });
 
   it("stops reading when the file is shorter than it was when opened", async () => {
@@ -77,7 +156,33 @@ describe("random-access sources", () => {
 
 describe("stream source", () => {
   it("needs the size up front", async () => {
-    await expect(openSource(streamOf(DATA))).rejects.toMatchObject({ code: "invalid_option" });
+    await expect(openSource(streamOf(DATA))).rejects.toMatchObject({
+      code: "invalid_option",
+      message: NEEDS_SIZE,
+    });
+  });
+
+  it("accepts a size of one byte", async () => {
+    const source = await openSource(streamOf(DATA.subarray(0, 1)), 1);
+    expect([...(await source.read(0, 1))]).toEqual([0]);
+    await source.close();
+  });
+
+  it("hands out a part as soon as its bytes are in, without waiting for more", async () => {
+    const live = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(DATA.subarray(0, 40));
+      },
+    });
+    const source = await openSource(live, 100);
+    const stop = new AbortController();
+    const timer = setTimeout(() => {
+      stop.abort();
+    }, 200);
+    const part = await source.read(0, 40, stop.signal).catch((e: unknown) => e);
+    clearTimeout(timer);
+    expect(part).toEqual(DATA.subarray(0, 40));
+    await source.close();
   });
 
   it("hands out parts in order, holding one part at a time", async () => {
@@ -95,7 +200,10 @@ describe("stream source", () => {
 
   it("refuses an out-of-order read", async () => {
     const source = await openSource(streamOf(DATA), 100);
-    await expect(source.read(10, 5)).rejects.toMatchObject({ code: "stream_not_seekable" });
+    await expect(source.read(10, 5)).rejects.toMatchObject({
+      code: "stream_not_seekable",
+      message: "A stream can only be uploaded in order, one part at a time.",
+    });
     await source.close();
   });
 
@@ -123,7 +231,10 @@ describe("stream source", () => {
     const source = await openSource(streamOf(DATA, DATA.subarray(0, 5)), 100);
     const error = await source.read(0, 100).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(UploadError);
-    expect((error as UploadError).code).toBe("stream_size_mismatch");
+    expect(error).toMatchObject({
+      code: "stream_size_mismatch",
+      message: "The stream has more than the 100 bytes size says.",
+    });
     await source.close();
   });
 
@@ -145,15 +256,20 @@ describe("stream source", () => {
     async (size) => {
       await expect(openSource(streamOf(DATA), size)).rejects.toMatchObject({
         code: "invalid_option",
+        message: "size must be a whole number of bytes, 1 or more.",
       });
     },
   );
 
   it("fails when the stream ends before size", async () => {
     const source = await openSource(streamOf(DATA.subarray(0, 50)), 100);
-    const error = await source.read(0, 100).catch((e: unknown) => e);
+    await source.read(0, 40);
+    const error = await source.read(40, 60).catch((e: unknown) => e);
     expect(error).toBeInstanceOf(UploadError);
-    expect((error as UploadError).code).toBe("stream_size_mismatch");
+    expect(error).toMatchObject({
+      code: "stream_size_mismatch",
+      message: "The stream ended after 50 bytes; size says 100.",
+    });
     await source.close();
   });
 
@@ -172,16 +288,26 @@ describe("stream source", () => {
     await source.close();
   });
 
-  it("refuses at once when the signal is already aborted before the stream answers", async () => {
-    const source = await openSource(
-      new ReadableStream<Uint8Array>({ start: () => undefined }),
-      100,
-    );
-    const stop = new AbortController();
-    stop.abort();
-    expect(await source.read(0, 100, stop.signal).catch((e: unknown) => e)).toBeInstanceOf(
+  it("refuses at once when the signal is already aborted, and handles the read it gave up", async () => {
+    // A read that never settles, watched for a rejection handler: once the reader is released it
+    // would reject, and with no handler that rejection would go unhandled.
+    let handled = false;
+    const never = new Promise<never>(() => undefined);
+    const then = never.then.bind(never);
+    const pending = Object.defineProperty(never, "then", {
+      value: (onFulfilled?: unknown, onRejected?: unknown) => {
+        if (typeof onRejected === "function") handled = true;
+        return then(onFulfilled as undefined, onRejected as undefined);
+      },
+    });
+    const stream = {
+      getReader: () => ({ read: () => pending, releaseLock: () => undefined }),
+    } as unknown as ReadableStream<Uint8Array>;
+    const source = await openSource(stream, 100);
+    expect(await source.read(0, 100, AbortSignal.abort()).catch((e: unknown) => e)).toBeInstanceOf(
       AbortError,
     );
+    expect(handled).toBe(true);
     await source.close();
   });
 
@@ -200,5 +326,61 @@ describe("stream source", () => {
     stop.abort();
     expect(await head).toBeInstanceOf(AbortError);
     await source.close();
+  });
+});
+
+describe("a file that fails once it passed the stat", () => {
+  const PREFIX = "cannot be read: it is missing, not a regular file or cannot be opened";
+
+  it("raises file_unreadable with the OS error when the open fails", async () => {
+    const path = await file();
+    const denied = Object.assign(new Error("EACCES: permission denied"), { code: "EACCES" });
+    fsHooks.open = () => Promise.reject(denied);
+    const error = await openSource(path).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PreflightError);
+    expect(error).toMatchObject({
+      code: "file_unreadable",
+      message: `${path} ${PREFIX} (Error: EACCES: permission denied).`,
+    });
+    expect((error as Error).cause).toMatchObject({ code: "EACCES" });
+  });
+
+  it("closes the handle and raises file_unreadable with the OS error when its stat fails", async () => {
+    const path = await file();
+    let closes = 0;
+    fsHooks.open = () =>
+      Promise.resolve({
+        stat: () => Promise.reject(Object.assign(new Error("EIO: i/o error"), { code: "EIO" })),
+        close: () => {
+          closes += 1;
+          return Promise.resolve();
+        },
+      });
+    const error = await openSource(path).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PreflightError);
+    expect(error).toMatchObject({
+      code: "file_unreadable",
+      message: `${path} ${PREFIX} (Error: EIO: i/o error).`,
+    });
+    expect((error as Error).cause).toMatchObject({ code: "EIO" });
+    expect(closes).toBe(1);
+  });
+
+  it("closes the handle and raises file_unreadable when what was opened is not a regular file", async () => {
+    const path = await file();
+    let closes = 0;
+    fsHooks.open = () =>
+      Promise.resolve({
+        stat: () => Promise.resolve({ isFile: () => false, size: 100 }),
+        close: () => {
+          closes += 1;
+          return Promise.resolve();
+        },
+      });
+    const error = await openSource(path).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(PreflightError);
+    expect(error).toMatchObject({ code: "file_unreadable", message: `${path} ${PREFIX}.` });
+    expect((error as Error).cause).toBeUndefined();
+    expect(closes).toBe(1);
   });
 });

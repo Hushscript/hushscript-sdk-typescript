@@ -53,6 +53,7 @@ class MemorySource implements Source {
     );
   }
 
+  // Stryker disable next-line BlockStatement: every caller awaits close(), and awaiting undefined is the same as a resolved promise
   close(): Promise<void> {
     return Promise.resolve();
   }
@@ -83,6 +84,7 @@ class BlobSource implements Source {
     return bytes;
   }
 
+  // Stryker disable next-line BlockStatement: every caller awaits close(), and awaiting undefined is the same as a resolved promise
   close(): Promise<void> {
     return Promise.resolve();
   }
@@ -109,6 +111,7 @@ class FileSource implements Source {
     const wanted = clampLength(this.size, offset, length);
     const buffer = new Uint8Array(wanted);
     let filled = 0;
+    // Stryker disable next-line EqualityOperator: one more round reads zero bytes at the end and stops
     while (filled < wanted) {
       const { bytesRead } = await this.#handle.read(
         buffer,
@@ -120,7 +123,7 @@ class FileSource implements Source {
       if (bytesRead === 0) break;
       filled += bytesRead;
     }
-    return filled === wanted ? buffer : buffer.subarray(0, filled);
+    return buffer.subarray(0, filled);
   }
 
   async close(): Promise<void> {
@@ -161,7 +164,7 @@ class StreamSource implements Source {
       const onAbort = (): void => {
         reject(aborted(signal));
       };
-      signal.addEventListener("abort", onAbort, { once: true });
+      signal.addEventListener("abort", onAbort);
       pending.then(resolve, reject).finally(() => {
         signal.removeEventListener("abort", onAbort);
       });
@@ -173,7 +176,7 @@ class StreamSource implements Source {
       const { done, value } = await this.#next(signal);
       if (done) {
         this.#ended = true;
-      } else if (value.byteLength > 0) {
+      } else {
         this.#chunks.push(value);
         this.#buffered += value.byteLength;
       }
@@ -188,9 +191,9 @@ class StreamSource implements Source {
     const out = new Uint8Array(Math.min(length, this.#buffered));
     let at = 0;
     let used = 0;
-    while (at < out.byteLength) {
-      const chunk = this.#chunks[used];
-      if (chunk === undefined) break;
+    for (const chunk of this.#chunks) {
+      // Stryker disable next-line ConditionalExpression: a full part takes zero bytes from the next chunk, which at most copies it unchanged
+      if (at === out.byteLength) break;
       const n = Math.min(chunk.byteLength, out.byteLength - at);
       out.set(chunk.subarray(0, n), at);
       at += n;
@@ -255,7 +258,7 @@ function unreadable(path: string, cause?: unknown): PreflightError {
   return new PreflightError({
     code: "file_unreadable",
     message: `${path} cannot be read: it is missing, not a regular file or cannot be opened${cause === undefined ? "" : ` (${describeError(cause)})`}.`,
-    ...(cause === undefined ? {} : { cause }),
+    cause,
   });
 }
 
