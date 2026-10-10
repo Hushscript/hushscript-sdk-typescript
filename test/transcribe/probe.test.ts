@@ -3,11 +3,17 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setImmediate } from "node:timers";
-import { describe, expect, it, vi } from "vitest";
+import * as metadata from "music-metadata";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { AbortError, UnsupportedMediaError } from "../../src/errors";
 import { probeDuration } from "../../src/transcribe/probe";
 import { openSource, type Source } from "../../src/transcribe/source";
 import { durations, fixtureBytes, fixturePath } from "./fixtures";
+
+vi.mock("music-metadata", async (importOriginal) => {
+  const original = await importOriginal<typeof metadata>();
+  return { ...original, parseBlob: vi.fn(original.parseBlob) };
+});
 
 describe("probeDuration", () => {
   it("is within a second of the true duration on every fixture, and never below it once rounded up", async () => {
@@ -115,8 +121,18 @@ describe("probeDuration", () => {
     },
   );
 
-  it("lets an externally scheduled abort stop a long in-memory parser scan", async () => {
-    const source = await openSource(await fixtureBytes("vbr-noxing-61s.mp3"));
+  it.each([
+    ["path", "vbr-noxing-20s.mp3"],
+    ["blob", "vbr-noxing-20s.mp3"],
+    ["bytes", "vbr-noxing-20s.mp3"],
+    ["path", "vbr-noxing-61s.mp3"],
+    ["blob", "vbr-noxing-61s.mp3"],
+    ["bytes", "vbr-noxing-61s.mp3"],
+  ] as const)("lets an externally scheduled abort stop a %s scan of %s", async (kind, fixture) => {
+    const bytes = await fixtureBytes(fixture);
+    const source = await openSource(
+      kind === "path" ? await fixturePath(fixture) : kind === "blob" ? new Blob([bytes]) : bytes,
+    );
     const stop = new AbortController();
     const original = source.read.bind(source);
     let scheduled = false;
@@ -131,10 +147,83 @@ describe("probeDuration", () => {
       }
       return original(offset, length, signal);
     });
-    await expect(probeDuration(source, stop.signal)).rejects.toBeInstanceOf(AbortError);
-    expect(scheduled).toBe(true);
-    expect(afterAbort).toBe(0);
-    await source.close();
+    try {
+      await expect(probeDuration(source, stop.signal)).rejects.toBeInstanceOf(AbortError);
+      expect(scheduled).toBe(true);
+      expect(stop.signal.aborted).toBe(true);
+      expect(afterAbort).toBe(0);
+      expect((await original(0, 4)).length).toBe(4);
+    } finally {
+      await source.close();
+    }
+  });
+
+  it("parses bounded source ranges without copying or parsing probeInput bytes", async () => {
+    const source = await openSource(await fixtureBytes("vbr-noxing-61s.mp3"));
+    const read = vi.spyOn(source, "read");
+    const watching: Source = {
+      size: source.size,
+      probeInput: { kind: "bytes", bytes: new Uint8Array() },
+      sequential: false,
+      head: (length, signal) => source.head(length, signal),
+      read: (offset, length, signal) => source.read(offset, length, signal),
+      close: () => source.close(),
+    };
+    try {
+      expect(Math.abs((await probeDuration(watching)) - 61.09)).toBeLessThan(0.2);
+      expect(read.mock.calls.length).toBeGreaterThan(1);
+      expect(read.mock.calls.some(([offset]) => offset > 0)).toBe(true);
+      for (const [offset, length] of read.mock.calls) {
+        expect(offset).toBeGreaterThanOrEqual(0);
+        expect(length).toBeLessThan(source.size);
+        expect(offset + length).toBeLessThanOrEqual(source.size);
+      }
+    } finally {
+      await source.close();
+    }
+  });
+
+  it("waits for an in-flight read before rejecting cancellation and starts no further reads", async () => {
+    const source = await openSource(await fixtureBytes("vbr-noxing-20s.mp3"));
+    const stop = new AbortController();
+    let markStarted = (): void => undefined;
+    const started = new Promise<void>((resolve) => {
+      markStarted = resolve;
+    });
+    let releaseRead = (): void => undefined;
+    const release = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const original = source.read.bind(source);
+    let settled = false;
+    const read = vi.spyOn(source, "read").mockImplementation(async (offset, length, signal) => {
+      expect(signal).toBe(stop.signal);
+      const bytes = await original(offset, length);
+      markStarted();
+      await release;
+      return bytes;
+    });
+    const pending = probeDuration(source, stop.signal).finally(() => {
+      settled = true;
+    });
+    const rejected = expect(pending).rejects.toMatchObject({
+      name: "AbortError",
+      cause: "caller stopped",
+    });
+    try {
+      await started;
+      stop.abort("caller stopped");
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(settled).toBe(false);
+      expect(read).toHaveBeenCalledTimes(1);
+      releaseRead();
+      await rejected;
+      expect(read).toHaveBeenCalledTimes(1);
+      expect((await original(0, 4)).length).toBe(4);
+    } finally {
+      releaseRead();
+      await source.close();
+    }
   });
 
   it("reads Blob and Uint8Array inputs the same way as a path", async () => {
@@ -227,4 +316,271 @@ describe("probeDuration", () => {
     expect((error as UnsupportedMediaError).cause).toBeUndefined();
     await source.close();
   });
+});
+
+describe("probe parser boundary contracts", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(metadata.parseBlob).mockReset();
+  });
+
+  function parsed(format: Partial<metadata.IAudioMetadata["format"]>): metadata.IAudioMetadata {
+    return {
+      format: { trackInfo: [], tagTypes: [], ...format },
+      native: {},
+      common: {
+        track: { no: null, of: null },
+        disk: { no: null, of: null },
+        movementIndex: { no: null, of: null },
+      },
+      quality: { warnings: [] },
+    };
+  }
+
+  it.each([undefined, 0, -1, NaN, Infinity, -Infinity])(
+    "rejects invalid parser duration %s",
+    async (duration) => {
+      vi.spyOn(metadata, "parseBlob").mockResolvedValue(
+        parsed(duration === undefined ? {} : { duration }),
+      );
+      const source = await openSource(new Uint8Array(64));
+      const error = (await probeDuration(source).catch((e: unknown) => e)) as UnsupportedMediaError;
+      expect(error).toBeInstanceOf(UnsupportedMediaError);
+      expect(error.code).toBe("duration_unreadable");
+      expect(error.cause).toBeUndefined();
+    },
+  );
+
+  it("falls back only when duration is absent and keeps a positive fractional duration", async () => {
+    const parse = vi
+      .spyOn(metadata, "parseBlob")
+      .mockResolvedValueOnce(parsed({ container: "WAVE" }))
+      .mockResolvedValueOnce(parsed({ container: "WAVE", duration: 0.125 }));
+    expect(await probeDuration(await openSource(new Uint8Array(64)))).toBe(0.125);
+    expect(parse.mock.calls.map(([, options]) => options)).toEqual([
+      { duration: false, skipCovers: true },
+      { duration: true, skipCovers: true },
+    ]);
+  });
+
+  it("clamps nested parser slices and returns independent range bytes", async () => {
+    const bytes = Uint8Array.from({ length: 16 }, (_, i) => i);
+    const source = await openSource(bytes);
+    const read = vi.spyOn(source, "read");
+    vi.spyOn(metadata, "parseBlob").mockImplementation(async (blob) => {
+      expect(blob.size).toBe(16);
+      expect(blob.type).toBe("");
+      const range = blob.slice(3, 12).slice(-5, -1);
+      expect(range.size).toBe(4);
+      const first = new Uint8Array(await range.arrayBuffer());
+      expect([...first]).toEqual([7, 8, 9, 10]);
+      first.fill(255);
+      expect([...new Uint8Array(await range.arrayBuffer())]).toEqual([7, 8, 9, 10]);
+      expect(blob.slice(-100, 100).size).toBe(16);
+      expect(blob.slice(12, 3).size).toBe(0);
+      expect(blob.slice(100).size).toBe(0);
+      expect([...new Uint8Array(await blob.slice().arrayBuffer())]).toEqual([...bytes]);
+      return parsed({ duration: 20 });
+    });
+    expect(await probeDuration(source)).toBe(20);
+    expect(read.mock.calls).toEqual([
+      [7, 4, undefined],
+      [7, 4, undefined],
+      [0, 16, undefined],
+    ]);
+  });
+
+  it("rejects a parser range after cancellation without touching the source", async () => {
+    const source = await openSource(new Uint8Array(16));
+    const read = vi.spyOn(source, "read");
+    const stop = new AbortController();
+    vi.spyOn(metadata, "parseBlob").mockImplementation(async (blob) => {
+      stop.abort("range cancelled");
+      await expect(blob.slice(0, 4).arrayBuffer()).rejects.toMatchObject({
+        name: "AbortError",
+        cause: "range cancelled",
+      });
+      return parsed({ duration: 20 });
+    });
+    await expect(probeDuration(source, stop.signal)).rejects.toMatchObject({
+      name: "AbortError",
+      cause: "range cancelled",
+    });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it.each([new Error("broken range"), "broken range"])(
+    "preserves and describes a parser failure %s",
+    async (cause) => {
+      vi.spyOn(metadata, "parseBlob").mockImplementation(() => {
+        // eslint-disable-next-line @typescript-eslint/only-throw-error -- parser failures can be non-Error values
+        throw cause;
+      });
+      const error = await probeDuration(await openSource(new Uint8Array(16))).catch(
+        (e: unknown) => e,
+      );
+      expect(error).toBeInstanceOf(UnsupportedMediaError);
+      if (typeof cause === "string") expect((error as UnsupportedMediaError).cause).toBe(cause);
+      else
+        expect((error as UnsupportedMediaError).cause).toMatchObject({
+          name: cause.name,
+          message: cause.message,
+        });
+      expect((error as UnsupportedMediaError).message).toContain(
+        typeof cause === "string" ? "thrown string: broken range" : "Error: broken range",
+      );
+    },
+  );
+
+  it.each([
+    [0xfb, 0, 36, "Xing"],
+    [0xfb, 0xc0, 21, "Info"],
+    [0xfa, 0, 38, "Xing"],
+    [0xfa, 0xc0, 23, "Info"],
+    [0xf3, 0, 21, "Xing"],
+    [0xf3, 0xc0, 13, "Info"],
+    [0xf2, 0, 23, "Xing"],
+    [0xf2, 0xc0, 15, "Info"],
+    [0xe3, 0, 21, "Xing"],
+    [0xe3, 0xc0, 13, "Info"],
+    [0xfb, 0, 36, "VBRI"],
+  ] as const)("uses MPEG header layout %s/%s at %s (%s)", async (version, channel, offset, tag) => {
+    const frame = new Uint8Array(64);
+    frame.set([0xff, version, 0x90, channel]);
+    frame.set(new TextEncoder().encode(tag), offset);
+    const parse = vi
+      .spyOn(metadata, "parseBlob")
+      .mockImplementation((_blob, options) =>
+        Promise.resolve(parsed({ container: "MPEG", duration: options?.duration ? 29 : 17 })),
+      );
+    expect(await probeDuration(await openSource(frame))).toBe(17);
+    expect(parse).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    [0xfe, 0xfb],
+    [0xff, 0x1b],
+    [0xff, 0xf9],
+    [0xff, 0xeb],
+    [0, 0],
+  ])("scans past a non-frame prefix %s/%s", async (sync, version) => {
+    const bytes = new Uint8Array(128);
+    bytes.set([sync, version, 0x90, 0]);
+    bytes.set([0xff, 0xfb, 0x90, 0], 64);
+    bytes.set(new TextEncoder().encode("Xing"), 100);
+    const parse = vi
+      .spyOn(metadata, "parseBlob")
+      .mockResolvedValue(parsed({ container: "MPEG", duration: 17 }));
+    expect(await probeDuration(await openSource(bytes))).toBe(17);
+    expect(parse).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([0, 0x10])("skips consecutive syncsafe ID3 sizes with footer flag %s", async (flags) => {
+    // A sparse source represents a large metadata tag without allocating its payload.
+    const length = 2 ** 21 + 2 * 2 ** 14 + 3 * 128 + 4;
+    const next = 10 + length + (flags === 0 ? 0 : 10);
+    const frameAt = next + 10 + 129;
+    const header = Uint8Array.from([73, 68, 51, 4, 0, flags, 1, 2, 3, 4]);
+    const second = Uint8Array.from([73, 68, 51, 4, 0, 0, 0, 0, 1, 1]);
+    const frame = new Uint8Array(64);
+    frame.set([0xff, 0xfb, 0x90, 0]);
+    frame.set(new TextEncoder().encode("Xing"), 36);
+    const read = vi.fn((offset: number) =>
+      Promise.resolve(
+        offset === 0
+          ? header
+          : offset === next
+            ? second
+            : offset === frameAt
+              ? frame
+              : new Uint8Array(),
+      ),
+    );
+    const source: Source = {
+      size: frameAt + 64,
+      sequential: false,
+      probeInput: { kind: "bytes", bytes: frame },
+      read,
+      head: () => Promise.resolve(header),
+      close: () => Promise.resolve(),
+    };
+    const parse = vi
+      .spyOn(metadata, "parseBlob")
+      .mockImplementation((_blob, options) =>
+        Promise.resolve(parsed({ container: "MPEG", duration: options?.duration ? 29 : 17 })),
+      );
+    expect(await probeDuration(source)).toBe(17);
+    expect(read.mock.calls.map(([offset]) => offset)).toEqual([0, next, frameAt, frameAt]);
+    expect(parse).toHaveBeenCalledTimes(1);
+  });
+
+  it("bounds consecutive ID3 traversal to four tags", async () => {
+    const header = Uint8Array.from([73, 68, 51, 4, 0, 0, 0, 0, 0, 0]);
+    const read = vi.fn((offset: number, length: number) => {
+      if (offset > 40) throw new Error("ID3 traversal exceeded the header budget");
+      return Promise.resolve(length === 10 ? header : new Uint8Array(64));
+    });
+    const source: Source = {
+      size: 64,
+      sequential: false,
+      probeInput: { kind: "bytes", bytes: header },
+      read,
+      head: () => Promise.resolve(header),
+      close: () => Promise.resolve(),
+    };
+    const parse = vi
+      .spyOn(metadata, "parseBlob")
+      .mockImplementation((_blob, options) =>
+        Promise.resolve(parsed({ container: "MPEG", duration: options?.duration ? 29 : 17 })),
+      );
+    expect(await probeDuration(source)).toBe(29);
+    expect(parse).toHaveBeenCalledTimes(2);
+    expect(read.mock.calls.map(([offset, length]) => [offset, length])).toEqual([
+      [0, 10],
+      [10, 10],
+      [20, 10],
+      [30, 10],
+      [40, 4096],
+    ]);
+    expect(parse).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not skip a truncated ID3 header", async () => {
+    const header = Uint8Array.from([73, 68, 51, 4, 0, 0, 0, 0, 1]);
+    const read = vi.fn(() => Promise.resolve(header));
+    const source: Source = {
+      size: 9,
+      sequential: false,
+      probeInput: { kind: "bytes", bytes: header },
+      read,
+      head: () => Promise.resolve(header),
+      close: () => Promise.resolve(),
+    };
+    const parse = vi
+      .spyOn(metadata, "parseBlob")
+      .mockImplementation((_blob, options) =>
+        Promise.resolve(parsed({ container: "MPEG", duration: options?.duration ? 29 : 17 })),
+      );
+    expect(await probeDuration(source)).toBe(29);
+    expect(read).toHaveBeenNthCalledWith(1, 0, 10, undefined);
+    expect(read).toHaveBeenNthCalledWith(2, 0, 4096, undefined);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(parse).toHaveBeenCalledTimes(2);
+  });
+
+  it.each(["Opus", "OPUS", "opus"])("adds little-endian pre-skip for codec %s", async (codec) => {
+    const bytes = new Uint8Array(64);
+    bytes.set(new TextEncoder().encode("OpusHead"), 7);
+    bytes.set([0x34, 0x12], 17);
+    vi.spyOn(metadata, "parseBlob").mockResolvedValue(parsed({ codec, duration: 20 }));
+    expect(await probeDuration(await openSource(bytes))).toBeCloseTo(20 + 0x1234 / 48000, 10);
+  });
+
+  it.each([new Uint8Array(64), new TextEncoder().encode("OpusHead\u0000\u0000\u0001")])(
+    "leaves duration intact when pre-skip is unavailable",
+    async (bytes) => {
+      vi.spyOn(metadata, "parseBlob").mockResolvedValue(parsed({ codec: "Opus", duration: 20 }));
+      expect(await probeDuration(await openSource(bytes))).toBe(20);
+    },
+  );
 });

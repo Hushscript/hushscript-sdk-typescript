@@ -6,8 +6,9 @@
   "coverageAnalysis": "perTest",
   "tempDirName": ".stryker-tmp",
   "cleanTempDir": false,
-  "reporters": ["clear-text", "progress"],
+  "reporters": ["clear-text", "progress", "json"],
+  "jsonReporter": { "fileName": "/mutation-report/mutation.json" },
   "thresholds": { "high": 90, "low": 85, "break": 80 },
-  "allowEmpty": true,
+  "allowEmpty": false,
   "concurrency": 4
 }

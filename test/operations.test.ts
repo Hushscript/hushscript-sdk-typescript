@@ -1,4 +1,7 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import * as fetchModule from "../src/http/fetch";
+import { createTransport } from "../src/http/transport";
+import { config, fakeClock } from "./helpers";
 import { operationFor, retryClassForRequest } from "../src/http/operations";
 
 describe("operationFor", () => {
@@ -42,5 +45,49 @@ describe("retryClassForRequest (spec 7.2)", () => {
     expect(retryClassForRequest("GET", "/v1/account")).toBe("safe");
     expect(retryClassForRequest("POST", "/v1/uploads/job_1/complete")).toBe("idempotent");
     expect(retryClassForRequest("POST", "/v1/billing/purchase", "{}")).toBe("purchase");
+  });
+});
+
+describe("transport retry selection and body ownership", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it.each([
+    ["GET", "/v1/account"],
+    ["POST", "/v1/uploads/job_1/complete"],
+    ["PUT", "/v1/uploads"],
+  ])("does not inspect the body of %s %s", async (method, path) => {
+    const clone = vi.spyOn(Request.prototype, "clone");
+    const wire = vi.fn((input: string | URL | Request) => {
+      expect(input).toBeInstanceOf(Request);
+      expect((input as Request).method).toBe(method);
+      expect(new URL((input as Request).url).pathname).toBe(path);
+      expect((input as Request).bodyUsed).toBe(false);
+      return Promise.resolve(Response.json({ ok: true }));
+    });
+    vi.spyOn(fetchModule, "hardenedFetch").mockReturnValue(wire);
+    const body = method === "GET" ? {} : { body: "payload" };
+    const response = await createTransport(config(fakeClock()))(`https://example.com${path}`, {
+      method,
+      ...body,
+    });
+    expect(response.status).toBe(200);
+    expect(clone).not.toHaveBeenCalled();
+    expect(wire).toHaveBeenCalledTimes(1);
+  });
+
+  it("classifies upload creation from a clone and leaves the sent body readable", async () => {
+    const body = JSON.stringify({ idempotency_key: "0123456789abcdef", size_bytes: 100 });
+    const wire = vi.fn(async (input: string | URL | Request) => {
+      expect(input).toBeInstanceOf(Request);
+      expect(await (input as Request).text()).toBe(body);
+      return Response.json({ ok: true });
+    });
+    const hardened = vi.spyOn(fetchModule, "hardenedFetch").mockReturnValue(wire);
+    const cfg = config(fakeClock());
+    await createTransport(cfg)("https://example.com/v1/uploads?trace=1", { method: "POST", body });
+    expect(hardened).toHaveBeenCalledWith(cfg, "upload-create");
+    expect(wire).toHaveBeenCalledTimes(1);
   });
 });

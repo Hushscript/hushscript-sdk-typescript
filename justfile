@@ -4,6 +4,7 @@ set shell := ["bash", "-euo", "pipefail", "-c"]
 
 export HOST_UID := `id -u`
 export HOST_GID := `id -g`
+export MUTATION_REPORT_DIR := env("MUTATION_REPORT_DIR", "/tmp/hushscript-mutation-unused")
 # No scenario may be skipped: an unmapped op fails the conformance run.
 export CONFORMANCE_STRICT := env("CONFORMANCE_STRICT", "1")
 # The conformance suite is built from the ref in package.json (`config.conformanceRef`), the one place it is pinned.
@@ -45,6 +46,9 @@ mutation version=floor:
     {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
+    mkdir -p reports/mutation
+    export MUTATION_REPORT_DIR="$(mktemp -d "$(pwd)/reports/mutation/node{{version}}-XXXXXX")"
+    printf 'Mutation report directory: %s\n' "$MUTATION_REPORT_DIR"
     docker compose build mock mutation
     docker compose run --rm mutation
 
@@ -89,7 +93,7 @@ lint version=floor:
     docker run {{sandbox}} "hushscript-typescript-dev:node{{version}}" \
       sh -c 'timeout 300 npm audit --omit=dev --audit-level=high && timeout 300 npm audit signatures'
 
-# package build plus package-correctness checks, then import the packed tarball in clean Node, Bun and Deno.
+# package checks, then call the packed SDK against loopback in clean Node, Bun and Deno.
 # tsup bundles its config next to the file, so the (read-only) repo root gets a copy in /tmp.
 build version=floor:
     #!/usr/bin/env bash
@@ -105,7 +109,7 @@ build version=floor:
     user="$(id -u):$(id -g)"
     docker run {{sandbox}} --network none --user "$user" -e HOME=/tmp -e npm_config_cache=/tmp/npm \
       -v "$out/dist":/work/dist -v "$out":/out "hushscript-typescript-dev:node{{version}}" \
-      sh -c 'cp tsup.config.ts /tmp/tsup.config.ts && timeout 600 tsup --config /tmp/tsup.config.ts \
+      sh -c 'timeout 120 node --test scripts/check-mutation-score.test.mjs && cp tsup.config.ts /tmp/tsup.config.ts && timeout 600 tsup --config /tmp/tsup.config.ts \
         && timeout 120 npm pack --dry-run --ignore-scripts \
         && timeout 120 npm pack --ignore-scripts --pack-destination /out \
         && timeout 120 publint /out/hushscript-sdk-*.tgz \
@@ -123,7 +127,38 @@ build version=floor:
     # The oldest TypeScript a consumer may use (typescript-floor in package.json) must accept the packed d.ts.
     docker run {{sandbox}} --network none --user "$user" -v "$out/consumer":/consumer:ro "hushscript-typescript-dev:node{{version}}" \
       timeout 120 node /work/node_modules/typescript-floor/bin/tsc -p /consumer/tsconfig.json
-    check='const sdk = await import("@hushscript/sdk"); if (Object.keys(sdk.ERROR_CATALOG).length === 0) throw new Error("tables missing"); console.log("import ok");'
+    check='
+    const sdk = await import("@hushscript/sdk");
+    const { createServer } = await import("node:http");
+    const { strict: assert } = await import("node:assert");
+    assert.ok(Object.keys(sdk.ERROR_CATALOG).length > 0, "tables missing");
+    const token = "hsr1:eu:pat.synthetic.consumer";
+    const requests = [];
+    const server = createServer((request, response) => {
+      requests.push({ method: request.method, path: request.url, auth: request.headers.authorization });
+      response.writeHead(200, { "content-type": "application/json", "connection": "close" });
+      response.end(JSON.stringify({ balance_seconds: 18000, held_seconds: 600, credits_expire_at: null,
+        card_on_file: true, data_region: "eu", limits: { max_daily_seconds: 36000,
+        max_active_jobs: 3, active_jobs: 0, used_today_seconds: 0 } }));
+    });
+    try {
+      await new Promise((resolve, reject) => {
+        server.once("error", reject);
+        server.listen(0, "127.0.0.1", resolve);
+      });
+      const address = server.address();
+      assert.ok(address && typeof address === "object");
+      const client = new sdk.Hushscript({ token, baseUrl: `http://127.0.0.1:${address.port}` });
+      const balance = await client.balance();
+      assert.equal(balance.seconds, 18000);
+      assert.equal(balance.minutes, 300);
+      assert.equal(balance.heldSeconds, 600);
+      assert.equal(balance.expiresAt, null);
+      assert.deepEqual(requests, [{ method: "GET", path: "/v1/account", auth: `Bearer ${token}` }]);
+      console.log("packed SDK balance ok");
+    } finally {
+      await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }'
     docker run {{sandbox}} --network none --user "$user" -v "$out/consumer":/consumer:ro -w /consumer "$node_image" \
       timeout 60 node --input-type=module -e "$check"
     # require(esm) works through the "default" export condition (Node 22.12 and newer).

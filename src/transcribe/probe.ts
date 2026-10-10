@@ -36,22 +36,14 @@ class ProbeBlob extends Blob {
   readonly signal: AbortSignal | undefined;
   readonly offset: number;
   readonly length: number;
-  readonly progress: { reads: number };
 
-  constructor(
-    source: Source,
-    signal: AbortSignal | undefined,
-    offset = 0,
-    length = source.size,
-    progress = { reads: 0 },
-  ) {
+  constructor(source: Source, signal: AbortSignal | undefined, offset = 0, length = source.size) {
     super([]);
     this.size = length;
     this.source = source;
     this.signal = signal;
     this.offset = offset;
     this.length = length;
-    this.progress = progress;
   }
 
   override slice(start = 0, end = this.size): Blob {
@@ -63,15 +55,15 @@ class ProbeBlob extends Blob {
       this.signal,
       this.offset + from,
       Math.max(0, clamp(end) - from),
-      this.progress,
     );
   }
 
   override async arrayBuffer(): Promise<ArrayBuffer> {
-    // Resolved memory reads must also let externally scheduled aborts reach the parser.
-    if (++this.progress.reads % 64 === 0) await yieldToEventLoop();
     if (this.signal?.aborted) throw aborted(this.signal);
     const bytes = await this.source.read(this.offset, this.length, this.signal);
+    if (this.signal?.aborted) throw aborted(this.signal);
+    // Yield after every read so an externally scheduled abort reaches the parser even when reads resolve from memory.
+    if (this.signal !== undefined) await yieldToEventLoop();
     if (this.signal?.aborted) throw aborted(this.signal);
     return bytes.slice().buffer;
   }
@@ -82,8 +74,13 @@ async function parse(
   duration: boolean,
   signal: AbortSignal | undefined,
 ): Promise<IAudioMetadata> {
+  // Header checks also read the source directly, outside ProbeBlob.
+  if (signal !== undefined) await yieldToEventLoop();
   if (signal?.aborted) throw aborted(signal);
-  const metadata = await parseBlob(new ProbeBlob(source, signal), { duration, skipCovers: true });
+  const metadata = await parseBlob(new ProbeBlob(source, signal), {
+    duration,
+    skipCovers: true,
+  });
   if (signal?.aborted) throw aborted(signal);
   return metadata;
 }

@@ -8,5 +8,7 @@
       "package-name": "@hushscript/sdk",
       "changelog-path": "CHANGELOG.md"
     }
-  }
+  },
+  "include-component-in-tag": false,
+  "initial-version": "0.1.0"
 }

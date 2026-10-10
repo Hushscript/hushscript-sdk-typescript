@@ -17,6 +17,8 @@ WORKDIR /work
 FROM base AS deps
 COPY package.json package-lock.json ./
 RUN npm ci --ignore-scripts --no-audit --no-fund
+COPY scripts/patch-stryker-vitest.mjs /tmp/patch-stryker-vitest.mjs
+RUN node /tmp/patch-stryker-vitest.mjs && node /tmp/patch-stryker-vitest.mjs
 
 FROM base AS dev
 ENV PATH=/work/node_modules/.bin:$PATH
@@ -38,3 +40,4 @@ WORKDIR /work
 COPY --from=deps /work/node_modules node_modules
 COPY --chown=10001:10001 . .
 USER 10001:10001
+RUN timeout 120 node scripts/check-stryker-selection.mjs

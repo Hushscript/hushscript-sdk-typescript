@@ -21,6 +21,20 @@ function client(clock = fakeClock()): Hushscript {
 }
 
 describe("hs.api", () => {
+  it("names the generic request verb and route when JSON parsing fails", async () => {
+    stubFetch([{ status: 200, text: "<html>maintenance</html>" }]);
+    const error = (await client()
+      .api.request("get", "/v1/account")
+      .catch((e: unknown) => e)) as ApiError;
+    expect(error).toBeInstanceOf(ApiError);
+    expect(error.code).toBe("bad_response");
+    const cause = error.cause as Error;
+    expect(cause.name).toBe("SyntaxError");
+    expect(error.message).toBe(
+      `GET /v1/account answered with a body the SDK cannot use (SyntaxError: ${cause.message}).`,
+    );
+  });
+
   it("sends the bearer token and the user agent to the configured base URL", async () => {
     const f = stubFetch([{ status: 200, body: { balance_seconds: 120 } }]);
     const { data } = await client().api.GET("/v1/account");

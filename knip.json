@@ -4,6 +4,10 @@
     "scripts/generate.mjs",
     "scripts/run-examples.mjs",
     "scripts/check-publish-files.mjs",
+    "scripts/check-stryker-selection.mjs",
+    "scripts/check-mutation-score.mjs",
+    "scripts/check-mutation-score.test.mjs",
+    "scripts/patch-stryker-vitest.mjs",
     "scripts/examples-register.mjs",
     "smoke/smoke.ts",
     "examples/*.ts"

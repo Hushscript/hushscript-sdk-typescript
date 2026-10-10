@@ -68,7 +68,19 @@ services:
       <<: *dev-build
       target: mutation
     image: hushscript-typescript-mutation:node${NODE_VERSION:?set by the justfile}
-    command: ["timeout", "1800", "stryker", "run"]
+    user: "${HOST_UID:-10001}:${HOST_GID:-10001}"
+    volumes:
+      - ${MUTATION_REPORT_DIR:-./reports/mutation}:/mutation-report
+    command:
+      - sh
+      - -c
+      - >-
+        engine_status=0;
+        timeout 1800 stryker run || engine_status=$$?;
+        guard_status=0;
+        timeout 120 node scripts/check-mutation-score.mjs /mutation-report/mutation.json || guard_status=$$?;
+        if [ "$$engine_status" -ne 0 ]; then exit "$$engine_status"; fi;
+        exit "$$guard_status"
 
   lint:
     <<: *sandboxed
@@ -76,7 +88,8 @@ services:
       - sh
       - -c
       - >-
-        timeout 600 tsc --noEmit
+        timeout 120 node --test scripts/check-mutation-score.test.mjs
+        && timeout 600 tsc --noEmit
         && timeout 600 tsc --noEmit -p tsconfig.scripts.json
         && timeout 600 eslint --max-warnings 0 .
         && timeout 300 prettier --check .
