@@ -50,12 +50,18 @@ describe("probeDuration", () => {
     await probeDuration(watching, controller.signal);
     expect(seen).toEqual([controller.signal]);
 
-    controller.abort();
+    const late = new AbortController();
     const stalled: Source = {
       ...watching,
-      head: () => Promise.reject(new AbortError({ message: "The request was aborted." })),
+      head: () => {
+        late.abort("caller stopped");
+        return Promise.reject(new Error("read cut short"));
+      },
     };
-    await expect(probeDuration(stalled, controller.signal)).rejects.toBeInstanceOf(AbortError);
+    await expect(probeDuration(stalled, late.signal)).rejects.toMatchObject({
+      name: "AbortError",
+      cause: "caller stopped",
+    });
     await inner.close();
   });
 
@@ -300,6 +306,16 @@ describe("probeDuration", () => {
     );
   });
 
+  it("raises AbortError, not duration_unreadable, for a stream probed with an aborted signal", async () => {
+    const source = await openSource(new ReadableStream<Uint8Array>(), 10);
+    const stop = new AbortController();
+    stop.abort("caller stopped");
+    await expect(probeDuration(source, stop.signal)).rejects.toMatchObject({
+      name: "AbortError",
+      cause: "caller stopped",
+    });
+  });
+
   it("raises duration_unreadable for a stream, which cannot be probed", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller): void {
@@ -445,7 +461,7 @@ describe("probe parser boundary contracts", () => {
     [0xe3, 0xc0, 13, "Info"],
     [0xfb, 0, 36, "VBRI"],
   ] as const)("uses MPEG header layout %s/%s at %s (%s)", async (version, channel, offset, tag) => {
-    const frame = new Uint8Array(64);
+    const frame = new Uint8Array(200);
     frame.set([0xff, version, 0x90, channel]);
     frame.set(new TextEncoder().encode(tag), offset);
     const parse = vi
@@ -455,6 +471,18 @@ describe("probe parser boundary contracts", () => {
       );
     expect(await probeDuration(await openSource(frame))).toBe(17);
     expect(parse).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts the frames of an MPEG frame with no Xing, Info or VBRI tag", async () => {
+    const frame = new Uint8Array(200);
+    frame.set([0xff, 0xfb, 0x90, 0]);
+    const parse = vi
+      .spyOn(metadata, "parseBlob")
+      .mockImplementation((_blob, options) =>
+        Promise.resolve(parsed({ container: "MPEG", duration: options?.duration ? 29 : 17 })),
+      );
+    expect(await probeDuration(await openSource(frame))).toBe(29);
+    expect(parse).toHaveBeenCalledTimes(2);
   });
 
   it.each([
@@ -576,11 +604,156 @@ describe("probe parser boundary contracts", () => {
     expect(await probeDuration(await openSource(bytes))).toBeCloseTo(20 + 0x1234 / 48000, 10);
   });
 
-  it.each([new Uint8Array(64), new TextEncoder().encode("OpusHead\u0000\u0000\u0001")])(
-    "leaves duration intact when pre-skip is unavailable",
-    async (bytes) => {
-      vi.spyOn(metadata, "parseBlob").mockResolvedValue(parsed({ codec: "Opus", duration: 20 }));
-      expect(await probeDuration(await openSource(bytes))).toBe(20);
-    },
-  );
+  it("reads a pre-skip that ends the head exactly", async () => {
+    const bytes = Uint8Array.from([...new TextEncoder().encode("OpusHead"), 1, 2, 0x34, 0x12]);
+    vi.spyOn(metadata, "parseBlob").mockResolvedValue(parsed({ codec: "Opus", duration: 20 }));
+    expect(await probeDuration(await openSource(bytes))).toBeCloseTo(20 + 0x1234 / 48000, 10);
+  });
+
+  it("adds no pre-skip for a codec other than Opus, even with an OpusHead in the head", async () => {
+    const bytes = new Uint8Array(64);
+    bytes.set(new TextEncoder().encode("OpusHead"), 7);
+    bytes.set([0x34, 0x12], 17);
+    vi.spyOn(metadata, "parseBlob").mockResolvedValue(parsed({ codec: "FLAC", duration: 20 }));
+    expect(await probeDuration(await openSource(bytes))).toBe(20);
+  });
+
+  it.each([
+    new Uint8Array(64),
+    new Uint8Array(64).fill(0x55),
+    new TextEncoder().encode("OpusHead\u0000\u0000\u0001"),
+  ])("leaves duration intact when pre-skip is unavailable", async (bytes) => {
+    vi.spyOn(metadata, "parseBlob").mockResolvedValue(parsed({ codec: "Opus", duration: 20 }));
+    expect(await probeDuration(await openSource(bytes))).toBe(20);
+  });
+});
+
+describe("probe cancellation windows", () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.mocked(metadata.parseBlob).mockReset();
+  });
+
+  function parsed(format: Partial<metadata.IAudioMetadata["format"]>): metadata.IAudioMetadata {
+    return {
+      format: { trackInfo: [], tagTypes: [], ...format },
+      native: {},
+      common: {
+        track: { no: null, of: null },
+        disk: { no: null, of: null },
+        movementIndex: { no: null, of: null },
+      },
+      quality: { warnings: [] },
+    };
+  }
+
+  it("notices an abort that lands while a parser range yields after its read", async () => {
+    const inner = await openSource(Uint8Array.from({ length: 16 }, (_, i) => i));
+    const stop = new AbortController();
+    const read = vi.fn((offset: number, length: number, signal?: AbortSignal) => {
+      setImmediate(() => {
+        stop.abort("late");
+      });
+      return inner.read(offset, length, signal);
+    });
+    const source: Source = {
+      size: inner.size,
+      probeInput: inner.probeInput,
+      sequential: false,
+      head: (length, signal) => inner.head(length, signal),
+      read,
+      close: () => inner.close(),
+    };
+    let range: unknown;
+    vi.spyOn(metadata, "parseBlob").mockImplementation(async (blob) => {
+      range = await blob
+        .slice(0, 4)
+        .arrayBuffer()
+        .catch((e: unknown) => e);
+      return parsed({ duration: 20 });
+    });
+    await expect(probeDuration(source, stop.signal)).rejects.toMatchObject({
+      name: "AbortError",
+      cause: "late",
+    });
+    expect(range).toMatchObject({ name: "AbortError", cause: "late" });
+    expect(read).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not start the full parse once an abort lands between the two parses", async () => {
+    const stop = new AbortController();
+    const parse = vi
+      .spyOn(metadata, "parseBlob")
+      .mockImplementationOnce(() => {
+        setImmediate(() => {
+          stop.abort("between");
+        });
+        return Promise.resolve(parsed({ container: "WAVE" }));
+      })
+      .mockResolvedValue(parsed({ container: "WAVE", duration: 20 }));
+    await expect(
+      probeDuration(await openSource(new Uint8Array(64)), stop.signal),
+    ).rejects.toMatchObject({ name: "AbortError", cause: "between" });
+    expect(parse).toHaveBeenCalledTimes(1);
+  });
+
+  it("reads nothing more once the signal fired during a parse that still resolved", async () => {
+    const frame = new Uint8Array(200);
+    frame.set([0xff, 0xfb, 0x90, 0]);
+    const source = await openSource(frame);
+    const read = vi.spyOn(source, "read");
+    const stop = new AbortController();
+    vi.spyOn(metadata, "parseBlob").mockImplementation(() => {
+      stop.abort("mid parse");
+      return Promise.resolve(parsed({ container: "MPEG", duration: 17 }));
+    });
+    await expect(probeDuration(source, stop.signal)).rejects.toMatchObject({
+      name: "AbortError",
+      cause: "mid parse",
+    });
+    expect(read).not.toHaveBeenCalled();
+  });
+
+  it("raises the caller's AbortError when the parser fails after the signal fired", async () => {
+    const stop = new AbortController();
+    vi.spyOn(metadata, "parseBlob").mockImplementation(() => {
+      stop.abort("gave up");
+      return Promise.reject(new Error("range failed"));
+    });
+    await expect(
+      probeDuration(await openSource(new Uint8Array(64)), stop.signal),
+    ).rejects.toMatchObject({ name: "AbortError", cause: "gave up" });
+  });
+
+  it("passes on an AbortError from below while the caller's signal is still live", async () => {
+    const own = new AbortError({ message: "The source gave up." });
+    vi.spyOn(metadata, "parseBlob").mockRejectedValue(own);
+    const error = await probeDuration(
+      await openSource(new Uint8Array(64)),
+      new AbortController().signal,
+    ).catch((e: unknown) => e);
+    expect(error).toBe(own);
+  });
+
+  it("raises AbortError when the signal fires during the Opus pre-skip read", async () => {
+    const inner = await openSource(new Uint8Array(64));
+    const stop = new AbortController();
+    const source: Source = {
+      size: inner.size,
+      probeInput: inner.probeInput,
+      sequential: false,
+      read: (offset, length, signal) => inner.read(offset, length, signal),
+      close: () => inner.close(),
+      head: async (length, signal) => {
+        const bytes = await inner.head(length, signal);
+        stop.abort("during pre-skip");
+        return bytes;
+      },
+    };
+    vi.spyOn(metadata, "parseBlob").mockResolvedValue(parsed({ codec: "Opus", duration: 20 }));
+    await expect(probeDuration(source, stop.signal)).rejects.toMatchObject({
+      name: "AbortError",
+      cause: "during pre-skip",
+    });
+  });
 });

@@ -38,6 +38,7 @@ class ProbeBlob extends Blob {
   readonly length: number;
 
   constructor(source: Source, signal: AbortSignal | undefined, offset = 0, length = source.size) {
+    // Stryker disable next-line ArrayDeclaration: size, slice() and arrayBuffer() are overridden, so the parts are never read
     super([]);
     this.size = length;
     this.source = source;
@@ -61,9 +62,8 @@ class ProbeBlob extends Blob {
   override async arrayBuffer(): Promise<ArrayBuffer> {
     if (this.signal?.aborted) throw aborted(this.signal);
     const bytes = await this.source.read(this.offset, this.length, this.signal);
-    if (this.signal?.aborted) throw aborted(this.signal);
     // Yield after every read so an externally scheduled abort reaches the parser even when reads resolve from memory.
-    if (this.signal !== undefined) await yieldToEventLoop();
+    await yieldToEventLoop();
     if (this.signal?.aborted) throw aborted(this.signal);
     return bytes.slice().buffer;
   }
@@ -75,7 +75,7 @@ async function parse(
   signal: AbortSignal | undefined,
 ): Promise<IAudioMetadata> {
   // Header checks also read the source directly, outside ProbeBlob.
-  if (signal !== undefined) await yieldToEventLoop();
+  await yieldToEventLoop();
   if (signal?.aborted) throw aborted(signal);
   const metadata = await parseBlob(new ProbeBlob(source, signal), {
     duration,
@@ -111,6 +111,7 @@ async function firstFrame(
     at += ID3_HEADER_BYTES + syncsafe(header, 6) + footer;
   }
   const window = await source.read(at, FRAME_SCAN_BYTES, signal);
+  // Stryker disable next-line EqualityOperator,ArithmeticOperator: a frame in the last four bytes has no room for a tag, so it reads as no header either way
   for (let i = 0; i + 4 <= window.length; i += 1) {
     const b1 = window[i + 1] ?? 0;
     if (window[i] === 0xff && (b1 & 0xe0) === 0xe0 && (b1 & 0x06) !== 0 && (b1 & 0x18) !== 0x08) {
@@ -140,7 +141,7 @@ function unreadable(cause?: unknown): UnsupportedMediaError {
   return new UnsupportedMediaError({
     code: "duration_unreadable",
     message: `Could not read the duration${cause === undefined ? "" : ` (${describeError(cause)})`}; pass durationSeconds.`,
-    ...(cause === undefined ? {} : { cause }),
+    cause,
   });
 }
 
@@ -152,7 +153,7 @@ function unreadable(cause?: unknown): UnsupportedMediaError {
 export async function probeDuration(source: Source, signal?: AbortSignal): Promise<number> {
   if (signal?.aborted) throw aborted(signal);
   if (source.probeInput === null) throw unreadable();
-  let duration: number | undefined;
+  let duration: number;
   try {
     let meta = await parse(source, false, signal);
     if (
@@ -161,10 +162,9 @@ export async function probeDuration(source: Source, signal?: AbortSignal): Promi
     ) {
       meta = await parse(source, true, signal);
     }
-    duration = meta.format.duration;
-    if (duration !== undefined && /opus/i.test(meta.format.codec ?? "")) {
-      duration += await opusPreSkipSeconds(source, signal);
-    }
+    duration = meta.format.duration ?? NaN;
+    // Stryker disable next-line StringLiteral: no placeholder codec name contains "opus"
+    if (/opus/i.test(meta.format.codec ?? "")) duration += await opusPreSkipSeconds(source, signal);
   } catch (error) {
     // A cancelled read is the caller's doing, not a file the parser could not read.
     if (signal?.aborted) throw aborted(signal);
@@ -172,6 +172,6 @@ export async function probeDuration(source: Source, signal?: AbortSignal): Promi
     throw unreadable(error);
   }
   if (signal?.aborted) throw aborted(signal);
-  if (duration === undefined || !Number.isFinite(duration) || duration <= 0) throw unreadable();
+  if (!Number.isFinite(duration) || duration <= 0) throw unreadable();
   return duration;
 }
