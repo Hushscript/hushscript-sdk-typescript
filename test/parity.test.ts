@@ -134,20 +134,28 @@ describe("R53: an id that cannot be one path segment is refused before any reque
     ["a lone high surrogate", "tr_\uD800"],
     ["a lone low surrogate", "\uDC00x"],
   ];
-  const calls: [string, (hs: Hushscript, id: string) => Promise<unknown>][] = [
-    ["jobs.get", (hs, id) => hs.jobs.get(id)],
-    ["jobs.wait", (hs, id) => hs.jobs.wait(id)],
-    ["transcripts.get", (hs, id) => hs.transcripts.get(id)],
-    ["agent.claim", (_hs, id) => Hushscript.agent.claim(id, "secret", { baseUrl: BASE })],
+  const calls: [string, string, (hs: Hushscript, id: string) => Promise<unknown>][] = [
+    ["jobs.get", "id", (hs, id) => hs.jobs.get(id)],
+    ["jobs.wait", "id", (hs, id) => hs.jobs.wait(id)],
+    ["transcripts.get", "id", (hs, id) => hs.transcripts.get(id)],
+    [
+      "agent.claim",
+      "signupId",
+      (_hs, id) => Hushscript.agent.claim(id, "secret", { baseUrl: BASE }),
+    ],
   ];
 
-  for (const [call, run] of calls) {
+  for (const [call, param, run] of calls) {
     for (const [name, id] of badIds) {
       it(`${call} with ${name} is invalid_option and sends nothing`, async () => {
         const f = stubFetch([{ status: 200, body: {} }]);
         const error = await failure(run(client(), id as string));
         expect(error).toBeInstanceOf(PreflightError);
-        expect(error).toMatchObject({ code: "invalid_option", status: null });
+        expect(error).toMatchObject({
+          code: "invalid_option",
+          status: null,
+          message: `${param} must be a non-empty string that is not "." or "..", with no lone surrogate.`,
+        });
         expect(f.calls).toBe(0);
       });
     }

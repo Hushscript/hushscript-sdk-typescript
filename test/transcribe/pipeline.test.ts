@@ -804,7 +804,11 @@ describe("options (spec 7.3, 8.6)", () => {
       const error = await failure(hs.transcribe(mp3, { durationSeconds }));
       expect(error).toBeInstanceOf(PreflightError);
       expect(error).not.toBeInstanceOf(FileLimitError);
-      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        status: null,
+        message: "durationSeconds must be a finite number of seconds, above 0.",
+      });
       expect(fake.calls).toHaveLength(0);
     },
   );

@@ -61,9 +61,11 @@ function checkIdempotencyKey(key: string): void {
 }
 
 function checkOptions(options: TranscribeOptions): void {
+  // Stryker disable next-line StringLiteral: the default only has to be a string that is not a medical language
   if (options.medical === true && !MEDICAL_LANGUAGES.includes(options.language ?? "")) {
     throw invalidOption("medical needs language to be one of en, es, fr or de.");
   }
+  // Stryker disable next-line ArrayDeclaration: the default only has to pass both keyterm limits
   const keyterms = options.keyterms ?? [];
   if (keyterms.length > MAX_KEYTERMS) {
     throw invalidOption(`keyterms takes at most ${String(MAX_KEYTERMS)} terms.`);
@@ -71,6 +73,7 @@ function checkOptions(options: TranscribeOptions): void {
   if (keyterms.some((term) => term.trim().split(/\s+/u).length > MAX_KEYTERM_WORDS)) {
     throw invalidOption(`Each keyterm is at most ${String(MAX_KEYTERM_WORDS)} words.`);
   }
+  // Stryker disable next-line StringLiteral: the default only has to be under the length limit
   if ((options.matterCode ?? "").length > MAX_MATTER_CODE) {
     throw invalidOption(`matterCode is at most ${String(MAX_MATTER_CODE)} characters.`);
   }
@@ -107,7 +110,9 @@ export async function preflight(
       message: "The file is not in a supported audio format.",
     });
   }
-  if (source.size < 1 || source.size > MAX_FILE_BYTES) {
+  // No input reaches this with 0 bytes: openSource refuses a stream size below 1, and any other
+  // input's head holds at most its size, while sniff needs at least 2 bytes.
+  if (source.size > MAX_FILE_BYTES) {
     throw new FileLimitError({
       code: "size_out_of_range",
       message: `The file is ${String(source.size)} bytes; the limit is 1 byte to ${String(MAX_FILE_BYTES)} bytes.`,

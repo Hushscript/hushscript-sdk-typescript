@@ -35,6 +35,9 @@ describe("preflight", () => {
     expect(error).toBeInstanceOf(FileLimitError);
     expect((error as FileLimitError).code).toBe("duration_out_of_range");
     expect((error as FileLimitError).status).toBeNull();
+    expect((error as FileLimitError).message).toMatch(
+      /^The duration is \d+(\.\d+)? s; it must be 15 s to 10 hours\.$/u,
+    );
     expect((error as FileLimitError).hint).toBe(
       "Files must be between 15 seconds and 10 hours long.",
     );
@@ -46,7 +49,11 @@ describe("preflight", () => {
     const f = stubFetch([{ status: 500 }]);
     const error = await refusal(hs.transcribe(await fixturePath("webm-renamed.mp3")));
     expect(error).toBeInstanceOf(UnsupportedMediaError);
-    expect(error).toMatchObject({ code: "unsupported_media", status: null });
+    expect(error).toMatchObject({
+      code: "unsupported_media",
+      status: null,
+      message: "The file is not in a supported audio format.",
+    });
     expect((error as UnsupportedMediaError).hint).toContain(
       "ffmpeg -i input -vn -c:a libopus output.opus",
     );
@@ -72,7 +79,34 @@ describe("preflight", () => {
     expect(error).toBeInstanceOf(FileLimitError);
     expect((error as FileLimitError).code).toBe("size_out_of_range");
     expect((error as FileLimitError).status).toBeNull();
+    expect((error as FileLimitError).message).toBe(
+      "The file is 5000000001 bytes; the limit is 1 byte to 5000000000 bytes.",
+    );
     expect(f.calls).toBe(0);
+  });
+
+  it("accepts a stream of a declared 1 byte before create", async () => {
+    const { hs } = client();
+    const fake = fakeApi();
+    const bytes = await fixtureBytes("cbr-20s.mp3");
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller): void {
+        controller.enqueue(bytes);
+        controller.close();
+      },
+    });
+    const stop = new Error("stop after preflight");
+    const error = await refusal(
+      hs.transcribe(stream, {
+        size: 1,
+        durationSeconds: 20,
+        onProgress: () => {
+          throw stop;
+        },
+      }),
+    );
+    expect(error).toBe(stop);
+    expect(fake.calls.map((entry) => entry.route)).toEqual(["account"]);
   });
 
   it.each([14.5, 36_000.5, 36_001])(
@@ -84,7 +118,11 @@ describe("preflight", () => {
         hs.transcribe(await fixtureBytes("cbr-20s.mp3"), { durationSeconds }),
       );
       expect(error).toBeInstanceOf(FileLimitError);
-      expect(error).toMatchObject({ code: "duration_out_of_range", status: null });
+      expect(error).toMatchObject({
+        code: "duration_out_of_range",
+        status: null,
+        message: `The duration is ${String(durationSeconds)} s; it must be 15 s to 10 hours.`,
+      });
       expect(f.calls).toBe(0);
     },
   );
@@ -101,49 +139,79 @@ describe("preflight", () => {
     expect(fake.creates[0]).toMatchObject({ duration_seconds: 20 });
   });
 
-  it.each<[string, Record<string, unknown>]>([
-    ["medical without a language", { medical: true }],
-    ["medical in a language it does not cover", { medical: true, language: "ja" }],
-    ["more than 1000 keyterms", { keyterms: Array.from({ length: 1001 }, () => "term") }],
-    ["a keyterm of 7 words", { keyterms: ["one two three four five six seven"] }],
-    ["a matter code over 64 characters", { matterCode: "x".repeat(65) }],
-    ["a short idempotency key", { idempotencyKey: "x".repeat(15) }],
-    ["a long idempotency key", { idempotencyKey: "x".repeat(129) }],
-    ["a null idempotency key", { idempotencyKey: null }],
-    ["a numeric idempotency key", { idempotencyKey: 42 }],
-    ["an object idempotency key", { idempotencyKey: {} }],
-    ["an idempotency key with control characters", { idempotencyKey: "abcdefghijklmnop\n" }],
-    ["an idempotency key with a space", { idempotencyKey: "abcdefghijklmnop qrstuv" }],
-    ["concurrency 0", { concurrency: 0 }],
-    ["a fractional concurrency", { concurrency: 1.5 }],
-    ["a negative waitTimeout", { waitTimeout: -1 }],
-  ])("refuses %s before any request", async (_name, options) => {
+  const medical = "medical needs language to be one of en, es, fr or de.";
+  const key = "idempotencyKey must be 16 to 128 printable ASCII characters, without spaces.";
+  it.each<[string, Record<string, unknown>, string]>([
+    ["medical without a language", { medical: true }, medical],
+    ["medical in a language it does not cover", { medical: true, language: "ja" }, medical],
+    [
+      "more than 1000 keyterms",
+      { keyterms: Array.from({ length: 1001 }, () => "term") },
+      "keyterms takes at most 1000 terms.",
+    ],
+    [
+      "a keyterm of 7 words",
+      { keyterms: ["one two three four five six seven"] },
+      "Each keyterm is at most 6 words.",
+    ],
+    [
+      "a matter code over 64 characters",
+      { matterCode: "x".repeat(65) },
+      "matterCode is at most 64 characters.",
+    ],
+    ["a short idempotency key", { idempotencyKey: "x".repeat(15) }, key],
+    ["a long idempotency key", { idempotencyKey: "x".repeat(129) }, key],
+    ["a null idempotency key", { idempotencyKey: null }, key],
+    ["a numeric idempotency key", { idempotencyKey: 42 }, key],
+    ["an object idempotency key", { idempotencyKey: {} }, key],
+    ["an idempotency key with control characters", { idempotencyKey: "abcdefghijklmnop\n" }, key],
+    ["an idempotency key with a space", { idempotencyKey: "abcdefghijklmnop qrstuv" }, key],
+    ["an idempotency key with DEL", { idempotencyKey: `${"x".repeat(15)}\u007f` }, key],
+    ["an idempotency key with a non-ASCII letter", { idempotencyKey: `${"x".repeat(15)}é` }, key],
+    ["concurrency 0", { concurrency: 0 }, "concurrency must be a whole number from 1 to 8."],
+    [
+      "a fractional concurrency",
+      { concurrency: 1.5 },
+      "concurrency must be a whole number from 1 to 8.",
+    ],
+    [
+      "a negative waitTimeout",
+      { waitTimeout: -1 },
+      "waitTimeout must be a positive number of seconds.",
+    ],
+  ])("refuses %s before any request", async (_name, options, message) => {
     const { hs, clock } = client();
     const f = stubFetch([{ status: 500 }]);
     const bytes = await fixtureBytes("cbr-20s.mp3");
     const error = await refusal(driven(hs.transcribe(bytes, options), clock));
     expect(error).toBeInstanceOf(PreflightError);
-    expect((error as PreflightError).code).toBe("invalid_option");
-    expect((error as PreflightError).status).toBeNull();
+    expect(error).toMatchObject({ code: "invalid_option", status: null, message });
     expect(f.calls).toBe(0);
   });
 
-  it("accepts medical for en and keyterms of six words", async () => {
+  it("accepts medical for en and keyterms of six words, however they are spaced", async () => {
     const { hs, clock } = client();
     const fake = fakeApi();
     const bytes = await fixtureBytes("cbr-20s.mp3");
-    await driven(
-      hs.transcribe(bytes, {
-        medical: true,
-        language: "en",
-        keyterms: ["one two three four five six"],
-      }),
-      clock,
-    );
+    const keyterms = [
+      "one two three four five six",
+      " one two three four five six ",
+      "one   two three four five six",
+    ];
+    await driven(hs.transcribe(bytes, { medical: true, language: "en", keyterms }), clock);
     expect(fake.creates[0]?.["transcription_options"]).toMatchObject({
       medical_mode: true,
       language_code: "en",
+      keyterms_prompt: keyterms,
     });
+  });
+
+  it("accepts an idempotency key that uses both ends of the printable range", async () => {
+    const { hs, clock } = client();
+    const fake = fakeApi();
+    const idempotencyKey = `!${"x".repeat(14)}~`;
+    await driven(hs.transcribe(await fixtureBytes("cbr-20s.mp3"), { idempotencyKey }), clock);
+    expect(fake.creates[0]).toMatchObject({ idempotency_key: idempotencyKey });
   });
 
   it("refuses a stream without durationSeconds or size", async () => {
@@ -233,7 +301,12 @@ describe("preflight", () => {
       (e: unknown) => e,
     );
     expect(error).toBeInstanceOf(DailyLimitError);
-    expect(error).toMatchObject({ code: "daily_limit", status: null });
+    expect(error).toMatchObject({
+      code: "daily_limit",
+      status: null,
+      message: "This upload would pass the daily limit (3590 of 3600 s used).",
+    });
+    expect((error as DailyLimitError).details).toEqual({ usedSeconds: 3590, maxSeconds: 3600 });
     expect((error as DailyLimitError).hint).toContain("(59 of 60 min used in the last 24 h)");
     expect(fake.count("create")).toBe(0);
   });
