@@ -88,8 +88,27 @@ void test("rounded 80 and historical v3 counts fail", () => {
   assert.equal(historical.status, 1);
   assert.match(historical.stdout, /"denominator":2091/);
 });
-void test("invalid, ignored, pending, unknown and missing statuses fail closed", () => {
-  for (const status of ["RuntimeError", "Pending", "Ignored", "Unknown", ""]) {
+void test("ignored mutants need a reason and stay in the denominator, never kills", () => {
+  const report = fixture([...pass, "Ignored"]);
+  const mutants = report.files["src/http/value.ts"].mutants;
+  Object.assign(mutants[5] ?? {}, { statusReason: "equivalent: same output" });
+  const result = run(report);
+  assert.equal(result.status, 1);
+  assert.match(result.stdout, /"Ignored":1/);
+  assert.match(result.stdout, /"denominator":6/);
+  const passing = fixture([...pass, ...pass, "Killed", "Killed", "Killed", "Killed", "Ignored"]);
+  Object.assign(passing.files["src/http/value.ts"].mutants[14] ?? {}, { statusReason: "why" });
+  const ok = run(passing);
+  assert.equal(ok.status, 0, ok.stderr);
+  assert.match(ok.stdout, /"denominator":15/);
+  for (const reason of [undefined, "", "  ", 3]) {
+    const bare = fixture([...pass, "Ignored"]);
+    Object.assign(bare.files["src/http/value.ts"].mutants[5] ?? {}, { statusReason: reason });
+    assert.equal(run(bare).status, 1, String(reason));
+  }
+});
+void test("invalid, pending, unknown and missing statuses fail closed", () => {
+  for (const status of ["RuntimeError", "Pending", "Unknown", ""]) {
     assert.equal(run(fixture([...pass, status])).status, 1, status);
   }
   const report = fixture(pass);

@@ -76,7 +76,7 @@ try {
   for (const path of Object.keys(files)) {
     if (!expected.includes(path)) throw new Error(`Unexpected report source: ${path}`);
   }
-  const counts = { Killed: 0, Survived: 0, Timeout: 0, NoCoverage: 0, CompileError: 0 };
+  const counts = { Killed: 0, Survived: 0, Timeout: 0, NoCoverage: 0, CompileError: 0, Ignored: 0 };
   const ids = new Set();
   let typeOnly = 0;
   for (const path of expected) {
@@ -132,6 +132,13 @@ try {
       if (typeof status !== "string" || !Object.hasOwn(counts, status)) {
         throw new Error(`Disallowed mutant status: ${String(status)}`);
       }
+      // A per-site `// Stryker disable` exclusion must say why; it is never a kill.
+      if (status === "Ignored") {
+        const reason = mutant["statusReason"];
+        if (typeof reason !== "string" || !reason.trim()) {
+          throw new Error(`Ignored mutant ${id} has no reason`);
+        }
+      }
       if (status === "Killed") {
         const completed = mutant["testsCompleted"];
         const killedBy = mutant["killedBy"];
@@ -149,7 +156,8 @@ try {
       counts[/** @type {keyof typeof counts} */ (status)]++;
     }
   }
-  const denominator = counts.Killed + counts.Survived + counts.Timeout + counts.NoCoverage;
+  const denominator =
+    counts.Killed + counts.Survived + counts.Timeout + counts.NoCoverage + counts.Ignored;
   if (!denominator) throw new Error("No valid measured mutants");
   const score = (100 * counts.Killed) / denominator;
   console.log(
