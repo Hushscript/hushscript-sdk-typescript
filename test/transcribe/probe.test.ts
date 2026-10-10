@@ -125,7 +125,9 @@ describe("probeDuration", () => {
       if (stop.signal.aborted) afterAbort += 1;
       if (length === 4096 && !scheduled) {
         scheduled = true;
-        setImmediate(() => stop.abort());
+        setImmediate(() => {
+          stop.abort();
+        });
       }
       return original(offset, length, signal);
     });

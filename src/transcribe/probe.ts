@@ -31,6 +31,7 @@ async function opusPreSkipSeconds(
 // The tokenizer only uses size, type, slice() and arrayBuffer(). Read through the source so
 // every parser range observes cancellation, without copying the whole input into a Blob.
 class ProbeBlob extends Blob {
+  override readonly size: number;
   readonly source: Source;
   readonly signal: AbortSignal | undefined;
   readonly offset: number;
@@ -44,16 +45,13 @@ class ProbeBlob extends Blob {
     length = source.size,
     progress = { reads: 0 },
   ) {
-    super();
+    super([]);
+    this.size = length;
     this.source = source;
     this.signal = signal;
     this.offset = offset;
     this.length = length;
     this.progress = progress;
-  }
-
-  override get size(): number {
-    return this.length;
   }
 
   override slice(start = 0, end = this.size): Blob {
@@ -161,8 +159,8 @@ export async function probeDuration(source: Source, signal?: AbortSignal): Promi
   try {
     let meta = await parse(source, false, signal);
     if (
-      meta.format.duration === undefined ||
-      (meta.format.container === "MPEG" && !(await hasDurationHeader(source, signal)))
+      (meta.format.container === "MPEG" && !(await hasDurationHeader(source, signal))) ||
+      meta.format.duration === undefined
     ) {
       meta = await parse(source, true, signal);
     }

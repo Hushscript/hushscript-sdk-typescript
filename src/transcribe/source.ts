@@ -7,7 +7,7 @@ import { aborted } from "./common.ts";
 export type FileInput = string | Blob | Uint8Array | ReadableStream<Uint8Array>;
 
 /** What the duration probe reads: the file itself, so the parser sees the real thing and detects the format by content. */
-export type ProbeInput =
+type ProbeInput =
   | { kind: "path"; path: string }
   | { kind: "blob"; blob: Blob }
   | { kind: "bytes"; bytes: Uint8Array };
