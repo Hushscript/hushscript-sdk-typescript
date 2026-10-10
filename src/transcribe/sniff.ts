@@ -1,7 +1,6 @@
 export type MediaKind = "mp3" | "isobmff" | "wav" | "flac" | "ogg";
 
 function startsWith(head: Uint8Array, text: string, offset = 0): boolean {
-  if (head.length < offset + text.length) return false;
   for (let i = 0; i < text.length; i += 1) {
     if (head[offset + i] !== text.charCodeAt(i)) return false;
   }
@@ -10,8 +9,8 @@ function startsWith(head: Uint8Array, text: string, offset = 0): boolean {
 
 // MPEG-1/2/2.5 Layer III frame sync, as the backend's audio probe reads it.
 function isLayer3Sync(head: Uint8Array): boolean {
-  const [a, b] = head;
-  return a === 0xff && b !== undefined && (b & 0xe0) === 0xe0 && (b & 0x06) === 0x02;
+  const [a, b = 0] = head;
+  return a === 0xff && (b & 0xe0) === 0xe0 && (b & 0x06) === 0x02;
 }
 
 /**
@@ -22,7 +21,6 @@ export function sniff(head: Uint8Array): MediaKind | null {
   if (startsWith(head, "ID3")) return "mp3";
   if (head.length >= 12 && startsWith(head, "ftyp", 4)) return "isobmff";
   if (
-    head.length >= 12 &&
     (startsWith(head, "RIFF") || startsWith(head, "RF64") || startsWith(head, "BW64")) &&
     startsWith(head, "WAVE", 8)
   ) {
