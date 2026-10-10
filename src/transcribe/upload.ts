@@ -157,6 +157,14 @@ function isTerminal(error: HushscriptError): boolean {
   return error instanceof ApiError && status >= 400 && status < 500 && status !== 429;
 }
 
+/** A failure no other way of sending the part can help: no URL for it, or an upload that would exceed its declared size (R8). */
+function endsUpload(error: HushscriptError): boolean {
+  return (
+    error instanceof UploadError &&
+    (error.code === "part_url_missing" || error.code === "size_exceeded")
+  );
+}
+
 function etagOf(response: Response): string {
   const etag = response.headers.get("etag")?.replaceAll('"', "") ?? "";
   if (etag === "") {
@@ -263,8 +271,7 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
     // Stryker disable next-line ConditionalExpression: putFetch and readBody wrap every failure in a HushscriptError; this only narrows the type
     if (!(error instanceof HushscriptError)) throw error;
     // An AbortError here only ever comes from `signal` firing, which isAborted() sees.
-    if (isAborted() || (error instanceof UploadError && error.code === "part_url_missing"))
-      throw error;
+    if (isAborted() || endsUpload(error)) throw error;
     // The part-urls fetch itself was refused for a reason a fresh page or proxied parts cannot fix.
     if (url === null && directSucceeded && isTerminal(error)) throw error;
     let cause: HushscriptError = error;
@@ -277,7 +284,12 @@ export async function uploadParts(settings: UploadSettings): Promise<PartAck[] |
       } catch (refreshError) {
         // Stryker disable next-line ConditionalExpression: readBody wraps every part-urls failure in a HushscriptError; this only narrows the type
         if (!(refreshError instanceof HushscriptError)) throw refreshError;
-        if (isAborted() || (directSucceeded && isTerminal(refreshError))) throw refreshError;
+        if (
+          isAborted() ||
+          endsUpload(refreshError) ||
+          (directSucceeded && isTerminal(refreshError))
+        )
+          throw refreshError;
         cause = refreshError;
       }
     }

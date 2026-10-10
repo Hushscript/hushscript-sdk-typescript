@@ -351,6 +351,39 @@ describe("failed direct parts", () => {
     expect(fake.count("part")).toBe(0);
   });
 
+  it("ends the upload with size_exceeded from part-urls instead of going proxied, asking for no further page", async () => {
+    const { fake, send } = harness({ partUrls: () => apiError("size_exceeded", 1024, 422) });
+    const plan: Plan = { ...planOf(3), part_urls: [], next_part_number: 1 };
+    const error = await failure(send({ total: 3, plan, concurrency: 1 }));
+    expect(error).toBeInstanceOf(UploadError);
+    expect(error).toMatchObject({ code: "size_exceeded", status: 422 });
+    expect(fake.count("partUrls")).toBe(1);
+    expect(fake.count("r2")).toBe(0);
+    expect(fake.count("part")).toBe(0);
+  });
+
+  it("ends the upload with size_exceeded from the refresh after an expired URL, not by going proxied", async () => {
+    const { fake, send } = harness({
+      r2: () => expired(),
+      partUrls: () => apiError("size_exceeded", 1024, 422),
+    });
+    const error = await failure(send({ total: 3, concurrency: 1 }));
+    expect(error).toBeInstanceOf(UploadError);
+    expect(error).toMatchObject({ code: "size_exceeded", status: 422 });
+    expect(fake.count("partUrls")).toBe(1);
+    expect(fake.count("part")).toBe(0);
+  });
+
+  it("raises size_exceeded, not parts_exhausted, from the next page once direct PUTs worked", async () => {
+    const { fake, send } = harness({ partUrls: () => apiError("size_exceeded", 1024, 422) });
+    const error = await failure(send({ total: 20, concurrency: 1 }));
+    expect(error).toBeInstanceOf(UploadError);
+    expect(error).toMatchObject({ code: "size_exceeded", status: 422 });
+    expect(fake.count("partUrls")).toBe(1);
+    expect(fake.count("r2")).toBe(16);
+    expect(fake.count("part")).toBe(0);
+  });
+
   it("falls back to proxied parts when the refresh is refused 401 before any direct PUT worked", async () => {
     const { fake, send } = harness({
       r2: () => expired(),
