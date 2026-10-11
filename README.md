@@ -1,4 +1,4 @@
-# @hushscript/sdk
+# Hushscript TypeScript SDK
 
 The official TypeScript SDK for the [Hushscript](https://hushscript.com) transcription API. It
 uploads a file, waits for the transcript and hands it back, and it handles the failures in between
@@ -374,8 +374,8 @@ export condition points at the same ESM build). TypeScript consumers need TypeSc
 - Documentation: <https://hushscript.com/sdks>
 - REST API reference: <https://hushscript.com/developers>
 - Package on npm: <https://www.npmjs.com/package/@hushscript/sdk>
-- Source: <https://github.com/Hushscript/hushscript-typescript>
-- Other Hushscript SDKs: [Python](https://github.com/Hushscript/hushscript-python), [Go](https://github.com/Hushscript/hushscript-go), [PHP](https://github.com/Hushscript/hushscript-php), [CLI](https://github.com/Hushscript/hushscript-cli)
+- Source: <https://github.com/Hushscript/hushscript-sdk-typescript>
+- Other Hushscript SDKs: [Python](https://github.com/Hushscript/hushscript-sdk-python), [Go](https://github.com/Hushscript/hushscript-sdk-go), [PHP](https://github.com/Hushscript/hushscript-sdk-php), [CLI](https://github.com/Hushscript/hushscript-cli)
 
 ## Releases
 

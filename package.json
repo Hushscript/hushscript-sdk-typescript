@@ -4,13 +4,13 @@
   "description": "Official TypeScript SDK for the Hushscript transcription API.",
   "license": "MIT",
   "type": "module",
-  "homepage": "https://github.com/Hushscript/hushscript-typescript#readme",
+  "homepage": "https://github.com/Hushscript/hushscript-sdk-typescript#readme",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Hushscript/hushscript-typescript.git"
+    "url": "git+https://github.com/Hushscript/hushscript-sdk-typescript.git"
   },
   "bugs": {
-    "url": "https://github.com/Hushscript/hushscript-typescript/issues"
+    "url": "https://github.com/Hushscript/hushscript-sdk-typescript/issues"
   },
   "engines": {
     "node": ">=22"
