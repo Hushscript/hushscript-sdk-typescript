@@ -360,9 +360,9 @@ Current prices are on [hushscript.com/pricing](https://hushscript.com/pricing).
 
 ## Requirements
 
-Node 22 or newer; CI tests Node 22 and 24. Bun 1.2+ and Deno 2+ are checked only for importing the
-package: their HTTP behavior, including what their `fetch` does when an HTTP/2 stream is reset, is
-not tested. The SDK is for server runtimes only: a token in a browser bundle is a leaked token.
+Node 22 or newer; CI tests Node 22, 24, and 26. Bun 1.2+ and Deno 2+ are checked for package
+imports and a loopback HTTP balance request. HTTP/2 stream-reset and replay behavior in those
+runtimes is not tested. The SDK is for server runtimes only: a token in a browser bundle is a leaked token.
 
 The package is ESM-first: `import { ... } from "@hushscript/sdk"`. On Node 22.12 and newer,
 `require("@hushscript/sdk")` also works, because Node can `require()` an ES module (the `default`
@@ -391,7 +391,7 @@ Everything runs in containers; nothing touches a host toolchain. You need Docker
 [just](https://github.com/casey/just).
 
 ```sh
-just ci                 # lint, then test and conformance on Node 22 and 24, then examples and build
+just ci                 # lint, then test and conformance on Node 22, 24, and 26, then examples and build
 just test 24            # unit tests with coverage on one runtime
 just lint               # every static check
 just regen              # regenerate openapi.json and src/generated from the production spec

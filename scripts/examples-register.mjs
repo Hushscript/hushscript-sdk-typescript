@@ -1,4 +1,5 @@
-// eslint-disable-next-line n/no-unsupported-features/node-builtins -- registered hooks are stable in every Node 22 release we run the examples on; the rule's table lags
-import { register } from "node:module";
+// eslint-disable-next-line n/no-unsupported-features/node-builtins -- registerHooks is available in the pinned Node runtimes used by the examples
+import { registerHooks } from "node:module";
+import { resolve } from "./examples-hooks.mjs";
 
-register("./examples-hooks.mjs", import.meta.url);
+registerHooks({ resolve });

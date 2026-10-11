@@ -13,6 +13,7 @@ export CONFORMANCE_CONTEXT := env("CONFORMANCE_CONTEXT", "https://github.com/Hus
 
 node22_image := "node:22-bookworm-slim@sha256:c3de60bf2f9dd0ac6370e6117950ff62d6e339527e7472301c9c78a017978392"
 node24_image := "node:24-bookworm-slim@sha256:d6aa754f16b3197301076f047b5def2f02ea1dbbc2ca920407d46d7ec7f87b20"
+node26_image := "node:26-bookworm-slim@sha256:86f07bc9c5dce4578cf37e5a418b7bfc7f817cda25cde66e2b66e95ed86c4567"
 bun_image := "oven/bun:1.2.23@sha256:6ebf306367da43ad75c4d5119563e24de9b66372929ad4fa31546be053a16f74"
 deno_image := "denoland/deno:debian-2.9.7@sha256:fa335acdf6b72106eda2cb6a8cb5f4187e7630e357467489db4b2e7352d5e432"
 hadolint_image := "hadolint/hadolint:v2.14.0@sha256:27086352fd5e1907ea2b934eb1023f217c5ae087992eb59fde121dce9c9ff21e"
@@ -22,13 +23,14 @@ shellcheck_image := "koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6f
 gitleaks_image := "ghcr.io/gitleaks/gitleaks:v8.28.0@sha256:cdbb7c955abce02001a9f6c9f602fb195b7fadc1e812065883f695d1eeaba854"
 sandbox := "--rm --init --label sdk.test=1 --cap-drop ALL --read-only --security-opt no-new-privileges --pids-limit 512 --memory 4g --tmpfs /tmp"
 floor := "22"
-latest := "24"
+latest := "26"
+supported := "22 24 26"
 
-# unit tests with coverage on Node 22 (default) or 24; no network beyond the mock
+# unit tests with coverage on Node 22 (default), 24, or 26; no network beyond the mock
 test version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
+    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
     extra=()
@@ -43,7 +45,7 @@ test version=floor:
 mutation version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
+    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
     mkdir -p reports/mutation
@@ -56,7 +58,7 @@ mutation version=floor:
 conformance version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
+    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
     docker compose build mock conformance
@@ -66,7 +68,7 @@ conformance version=floor:
 examples version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
+    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
     docker compose build mock examples
@@ -76,7 +78,7 @@ examples version=floor:
 lint version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
+    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
     docker compose build mock lint
@@ -98,9 +100,9 @@ lint version=floor:
 build version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
+    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
     export NODE_VERSION={{version}}
-    node_image={{ if version == "22" { node22_image } else { node24_image } }}
+    node_image={{ if version == "22" { node22_image } else if version == "24" { node24_image } else { node26_image } }}
     docker build --quiet --target dev --build-arg NODE_VERSION={{version}} -f docker/dev.Dockerfile -t "hushscript-typescript-dev:node{{version}}" .
     docker build --quiet --target proddeps --build-arg NODE_VERSION={{version}} -f docker/dev.Dockerfile -t "hushscript-typescript-proddeps:node{{version}}" .
     out="$(mktemp -d)"
@@ -174,7 +176,7 @@ build version=floor:
 publish-dry-run version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else { error("version must be 22 or 24") } }}
+    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
     docker build --quiet --target dev --build-arg NODE_VERSION={{version}} -f docker/dev.Dockerfile -t "hushscript-typescript-dev:node{{version}}" .
     out="$(mktemp -d)"
     trap 'rm -rf "$out"' EXIT
@@ -205,19 +207,18 @@ regen spec="":
     docker compose build regen
     docker compose run --rm ${extra[@]+"${extra[@]}"} regen timeout 600 node scripts/generate.mjs ${spec:+"$spec"}
 
-# lint, then test and conformance, then examples and build; no argument runs Node 22 and 24
+# lint, then test and conformance, then examples and build; no argument runs Node 22, 24, and 26
 ci version="":
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -n "{{version}}" ]; then versions="{{version}}"; else versions="{{floor}} {{latest}}"; fi
-    first="${versions%% *}"
-    just lint "$first"
+    if [ -n "{{version}}" ]; then versions="{{version}}"; else versions="{{supported}}"; fi
     for v in $versions; do
+      just lint "$v"
       just test "$v"
       just conformance "$v"
+      just examples "$v"
+      just build "$v"
     done
-    just examples "$first"
-    just build "$first"
 
 # nightly smoke against production; needs SMOKE_TOKEN (outbound network)
 smoke:
