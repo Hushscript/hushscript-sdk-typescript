@@ -13,9 +13,17 @@ export interface TranscribeOptions {
   speakers?: boolean | undefined;
   /** translation_targets; +25% each, forces speakers. */
   translateTo?: string[] | undefined;
-  /** keyterms_prompt; at most 1000 terms of at most 6 words. */
+  /**
+   * keyterms_prompt. Terms are trimmed and blanks dropped; an empty list is not sent. At most 1000
+   * unique terms, each at most 6 words and 128 characters (Unicode code points). With a prompt,
+   * the two are compiled into one provider prompt and count together toward the prompt limit.
+   */
   keyterms?: string[] | undefined;
-  /** Free-text context. */
+  /**
+   * Free-text context, trimmed; a blank prompt is not sent. At most 2000 characters (Unicode code
+   * points). With key terms the limit applies to the compiled prompt:
+   * 203 + prompt + the sum of (term + 2) for each unique term + (terms - 1).
+   */
   prompt?: string | undefined;
   /** medical_mode; language must be en, es, fr or de; 2x. */
   medical?: boolean | undefined;

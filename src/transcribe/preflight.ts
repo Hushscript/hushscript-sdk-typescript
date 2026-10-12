@@ -19,11 +19,86 @@ import type { TranscribeOptions } from "./types.ts";
 const MAX_FILE_BYTES = 5_000_000_000;
 const MIN_DURATION_SECONDS = 15;
 const MAX_DURATION_SECONDS = 36_000;
-const MAX_KEYTERMS = 1000;
-const MAX_KEYTERM_WORDS = 6;
+export const MAX_KEYTERMS = 1000;
+export const MAX_KEYTERM_WORDS = 6;
+export const MAX_KEYTERM_CHARS = 128;
+export const MAX_PROMPT_CHARS = 2000;
+/** The fixed text the server wraps around a prompt and key terms: prefix, vocabulary and instructions. */
+export const COMPILED_PROMPT_OVERHEAD = 203;
 const MAX_MATTER_CODE = 64;
 const MEDICAL_LANGUAGES: readonly string[] = ["en", "es", "fr", "de"];
 const SNIFF_BYTES = 64;
+
+const WHITE_SPACE_EDGES = /^\p{White_Space}+|\p{White_Space}+$/gu;
+const WHITE_SPACE_RUN = /\p{White_Space}+/u;
+
+/** Characters as the server counts them: Unicode code points, not UTF-16 units or bytes. */
+function codePoints(text: string): number {
+  return Array.from(text).length;
+}
+
+/** Trims with Unicode White_Space, as the server does; `String.prototype.trim` differs at U+0085 and U+FEFF. */
+function trimWhiteSpace(text: string): string {
+  return text.replace(WHITE_SPACE_EDGES, "");
+}
+
+interface ContextOptions {
+  /** Trimmed terms with blanks dropped, in order; duplicates stay. */
+  keyterms: string[];
+  /** The position in the caller's list of each entry in `keyterms`. */
+  keytermIndexes: number[];
+  /** The trimmed prompt, or undefined when it is absent or blank. */
+  prompt: string | undefined;
+}
+
+/** What is sent for key terms and prompt: an empty list or a blank prompt means the option is off. */
+export function normalizeContext(options: TranscribeOptions): ContextOptions {
+  const keyterms: string[] = [];
+  const keytermIndexes: number[] = [];
+  (options.keyterms ?? []).forEach((term, index) => {
+    const trimmed = trimWhiteSpace(term);
+    if (trimmed !== "") {
+      keyterms.push(trimmed);
+      keytermIndexes.push(index);
+    }
+  });
+  const prompt = trimWhiteSpace(options.prompt ?? "");
+  return { keyterms, keytermIndexes, prompt: prompt === "" ? undefined : prompt };
+}
+
+function checkContext(options: TranscribeOptions): void {
+  const { keyterms, keytermIndexes, prompt } = normalizeContext(options);
+  const unique = new Set(keyterms);
+  if (unique.size > MAX_KEYTERMS) {
+    throw invalidOption(
+      `keyterms takes at most ${String(MAX_KEYTERMS)} unique terms (${String(unique.size)} given).`,
+    );
+  }
+  keyterms.forEach((term, position) => {
+    const name = `keyterms[${String(keytermIndexes[position])}]`;
+    if (codePoints(term) > MAX_KEYTERM_CHARS) {
+      throw invalidOption(`${name} is longer than ${String(MAX_KEYTERM_CHARS)} characters.`);
+    }
+    if (term.split(WHITE_SPACE_RUN).length > MAX_KEYTERM_WORDS) {
+      throw invalidOption(`${name} has more than ${String(MAX_KEYTERM_WORDS)} words.`);
+    }
+  });
+  if (prompt === undefined) return;
+  const promptChars = codePoints(prompt);
+  if (promptChars > MAX_PROMPT_CHARS) {
+    throw invalidOption(`prompt is longer than ${String(MAX_PROMPT_CHARS)} characters.`);
+  }
+  if (unique.size > 0) {
+    let termChars = unique.size - 1;
+    for (const term of unique) termChars += codePoints(term) + 2;
+    const compiled = COMPILED_PROMPT_OVERHEAD + promptChars + termChars;
+    if (compiled > MAX_PROMPT_CHARS) {
+      throw invalidOption(
+        `prompt and keyterms together exceed ${String(MAX_PROMPT_CHARS)} characters (${String(compiled)}).`,
+      );
+    }
+  }
+}
 
 export function invalidOption(message: string): PreflightError {
   return new PreflightError({ code: "invalid_option", message });
@@ -65,14 +140,7 @@ function checkOptions(options: TranscribeOptions): void {
   if (options.medical === true && !MEDICAL_LANGUAGES.includes(options.language ?? "")) {
     throw invalidOption("medical needs language to be one of en, es, fr or de.");
   }
-  // Stryker disable next-line ArrayDeclaration: the default only has to pass both keyterm limits
-  const keyterms = options.keyterms ?? [];
-  if (keyterms.length > MAX_KEYTERMS) {
-    throw invalidOption(`keyterms takes at most ${String(MAX_KEYTERMS)} terms.`);
-  }
-  if (keyterms.some((term) => term.trim().split(/\s+/u).length > MAX_KEYTERM_WORDS)) {
-    throw invalidOption(`Each keyterm is at most ${String(MAX_KEYTERM_WORDS)} words.`);
-  }
+  checkContext(options);
   // Stryker disable next-line StringLiteral: the default only has to be under the length limit
   if ((options.matterCode ?? "").length > MAX_MATTER_CODE) {
     throw invalidOption(`matterCode is at most ${String(MAX_MATTER_CODE)} characters.`);

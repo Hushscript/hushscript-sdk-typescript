@@ -8,7 +8,7 @@ import { UPLOAD_COMPLETE, UPLOAD_CREATE } from "../shapes.ts";
 import { readTranscript } from "../resources/transcripts.ts";
 import { readBody } from "./common.ts";
 import { runHeartbeat } from "./heartbeat.ts";
-import { checkDurationOption, invalidOption, preflight } from "./preflight.ts";
+import { checkDurationOption, invalidOption, normalizeContext, preflight } from "./preflight.ts";
 import {
   assertSameFile,
   decodeResumeToken,
@@ -50,8 +50,9 @@ function transcriptionOptions(options: TranscribeOptions): CreateBody["transcrip
   if (options.language !== undefined) out.language_code = options.language;
   if (options.speakers !== undefined) out.speaker_detection = options.speakers;
   if (options.translateTo !== undefined) out.translation_targets = options.translateTo;
-  if (options.keyterms !== undefined) out.keyterms_prompt = options.keyterms;
-  if (options.prompt !== undefined) out.prompt = options.prompt;
+  const { keyterms, prompt } = normalizeContext(options);
+  if (keyterms.length > 0) out.keyterms_prompt = keyterms;
+  if (prompt !== undefined) out.prompt = prompt;
   if (options.medical !== undefined) out.medical_mode = options.medical;
   if (options.multichannel !== undefined) out.multichannel = options.multichannel;
   if (options.autoInsights !== undefined) out.auto_generate_insights = options.autoInsights;
