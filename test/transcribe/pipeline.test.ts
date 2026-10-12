@@ -183,6 +183,21 @@ describe("transcribe", () => {
     });
   });
 
+  it("sends trimmed key terms and prompt, and leaves out blank ones", async () => {
+    const trimmed = setup();
+    await driven(
+      trimmed.hs.transcribe(mp3, { keyterms: [" a b ", "", "\t"], prompt: "  context\n" }),
+      trimmed.clock,
+    );
+    expect(trimmed.fake.creates[0]?.["transcription_options"]).toEqual({
+      keyterms_prompt: ["a b"],
+      prompt: "context",
+    });
+    const blank = setup();
+    await driven(blank.hs.transcribe(mp3, { keyterms: [" "], prompt: " \n" }), blank.clock);
+    expect(blank.fake.creates[0]).not.toHaveProperty("transcription_options");
+  });
+
   it("sends no transcription_options when none were asked for", async () => {
     const { hs, clock, fake } = setup();
     await driven(hs.transcribe(mp3), clock);

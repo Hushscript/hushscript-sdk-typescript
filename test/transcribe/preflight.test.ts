@@ -9,6 +9,13 @@ import {
 } from "../../src/errors";
 import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, stubFetch } from "../helpers";
 import { driven, fakeApi } from "./fakeapi";
+import {
+  COMPILED_PROMPT_OVERHEAD,
+  MAX_KEYTERMS,
+  MAX_KEYTERM_CHARS,
+  MAX_KEYTERM_WORDS,
+  MAX_PROMPT_CHARS,
+} from "../../src/transcribe/preflight";
 import { fixtureBytes, fixturePath } from "./fixtures";
 
 afterEach(() => {
@@ -146,13 +153,13 @@ describe("preflight", () => {
     ["medical in a language it does not cover", { medical: true, language: "ja" }, medical],
     [
       "more than 1000 keyterms",
-      { keyterms: Array.from({ length: 1001 }, () => "term") },
-      "keyterms takes at most 1000 terms.",
+      { keyterms: Array.from({ length: 1001 }, (_, i) => `term${String(i)}`) },
+      "keyterms takes at most 1000 unique terms (1001 given).",
     ],
     [
       "a keyterm of 7 words",
       { keyterms: ["one two three four five six seven"] },
-      "Each keyterm is at most 6 words.",
+      "keyterms[0] has more than 6 words.",
     ],
     [
       "a matter code over 64 characters",
@@ -202,7 +209,154 @@ describe("preflight", () => {
     expect(fake.creates[0]?.["transcription_options"]).toMatchObject({
       medical_mode: true,
       language_code: "en",
-      keyterms_prompt: keyterms,
+      keyterms_prompt: keyterms.map((term) => term.trim()),
+    });
+  });
+
+  describe("key term and prompt limits", () => {
+    const wordsOf = (count: number): string =>
+      Array.from({ length: count }, (_, i) => `w${String(i)}`).join(" ");
+    const refused = async (options: Record<string, unknown>): Promise<unknown> => {
+      const { hs, clock } = client();
+      const f = stubFetch([{ status: 500 }]);
+      const error = await refusal(
+        driven(hs.transcribe(await fixtureBytes("cbr-20s.mp3"), options), clock),
+      );
+      expect(f.calls).toBe(0);
+      return error;
+    };
+    const created = async (options: Record<string, unknown>): Promise<unknown> => {
+      const { hs, clock } = client();
+      const fake = fakeApi();
+      await driven(hs.transcribe(await fixtureBytes("cbr-20s.mp3"), options), clock);
+      return fake.creates[0]?.["transcription_options"];
+    };
+    const compiledLength = (prompt: string, terms: string[]): number =>
+      COMPILED_PROMPT_OVERHEAD +
+      Array.from(prompt).length +
+      terms.reduce((sum, term) => sum + Array.from(term).length + 2, 0) +
+      (terms.length - 1);
+
+    it("accepts a term of the character cap and refuses one past it, naming its index", async () => {
+      expect(await created({ keyterms: ["x".repeat(MAX_KEYTERM_CHARS)] })).toEqual({
+        keyterms_prompt: ["x".repeat(MAX_KEYTERM_CHARS)],
+      });
+      const error = await refused({ keyterms: ["ok", "x".repeat(MAX_KEYTERM_CHARS + 1)] });
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        message: `keyterms[1] is longer than ${String(MAX_KEYTERM_CHARS)} characters.`,
+      });
+    });
+
+    it("counts term length in code points, not UTF-16 units or bytes", async () => {
+      const emoji = "\u{1F600}".repeat(MAX_KEYTERM_CHARS);
+      expect(await created({ keyterms: [emoji] })).toEqual({ keyterms_prompt: [emoji] });
+      const error = await refused({ keyterms: [`${emoji}\u{1F600}`] });
+      expect(error).toMatchObject({
+        message: `keyterms[0] is longer than ${String(MAX_KEYTERM_CHARS)} characters.`,
+      });
+    });
+
+    it("accepts the word cap, splits on Unicode white space and refuses one word more", async () => {
+      expect(await created({ keyterms: [wordsOf(MAX_KEYTERM_WORDS)] })).toEqual({
+        keyterms_prompt: [wordsOf(MAX_KEYTERM_WORDS)],
+      });
+      const error = await refused({ keyterms: ["fine", wordsOf(MAX_KEYTERM_WORDS + 1)] });
+      expect(error).toMatchObject({
+        message: `keyterms[1] has more than ${String(MAX_KEYTERM_WORDS)} words.`,
+      });
+      const nel = Array.from({ length: MAX_KEYTERM_WORDS + 1 }, () => "w").join("\u0085");
+      expect(await refused({ keyterms: [nel] })).toMatchObject({
+        message: `keyterms[0] has more than ${String(MAX_KEYTERM_WORDS)} words.`,
+      });
+    });
+
+    it("trims with Unicode white space: NEL goes, a byte order mark stays", async () => {
+      expect(await created({ keyterms: ["\u0085term\u3000", "\uFEFFmark"] })).toEqual({
+        keyterms_prompt: ["term", "\uFEFFmark"],
+      });
+    });
+
+    it("accepts the term cap and refuses one unique term more; duplicates count once", async () => {
+      const unique = Array.from({ length: MAX_KEYTERMS }, (_, i) => `term${String(i)}`);
+      expect(await created({ keyterms: [...unique, "term0", " term1 "] })).toMatchObject({
+        keyterms_prompt: [...unique, "term0", "term1"],
+      });
+      const error = await refused({ keyterms: [...unique, "extra"] });
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        message: `keyterms takes at most ${String(MAX_KEYTERMS)} unique terms (${String(MAX_KEYTERMS + 1)} given).`,
+      });
+    });
+
+    it("reports the index in the caller's list when blanks come before the term", async () => {
+      const error = await refused({ keyterms: ["", "  ", "x".repeat(MAX_KEYTERM_CHARS + 1)] });
+      expect(error).toMatchObject({
+        message: `keyterms[2] is longer than ${String(MAX_KEYTERM_CHARS)} characters.`,
+      });
+    });
+
+    it("accepts a prompt of the cap and refuses one code point past it", async () => {
+      expect(await created({ prompt: "p".repeat(MAX_PROMPT_CHARS) })).toEqual({
+        prompt: "p".repeat(MAX_PROMPT_CHARS),
+      });
+      const emoji = "\u{1F600}".repeat(MAX_PROMPT_CHARS);
+      expect(await created({ prompt: emoji })).toEqual({ prompt: emoji });
+      const error = await refused({ prompt: "p".repeat(MAX_PROMPT_CHARS + 1) });
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        message: `prompt is longer than ${String(MAX_PROMPT_CHARS)} characters.`,
+      });
+    });
+
+    it("measures the prompt after trimming", async () => {
+      const prompt = "p".repeat(MAX_PROMPT_CHARS);
+      expect(await created({ prompt: `  ${prompt}\n` })).toEqual({ prompt });
+    });
+
+    it("holds prompt and key terms to the cap together, exactly at the boundary", async () => {
+      const terms = ["alpha", "beta gamma", "\u{1F600}"];
+      const base = compiledLength("", terms);
+      const fits = "p".repeat(MAX_PROMPT_CHARS - base);
+      expect(compiledLength(fits, terms)).toBe(MAX_PROMPT_CHARS);
+      expect(await created({ prompt: fits, keyterms: terms })).toEqual({
+        prompt: fits,
+        keyterms_prompt: terms,
+      });
+      const error = await refused({ prompt: `${fits}p`, keyterms: terms });
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        message: `prompt and keyterms together exceed ${String(MAX_PROMPT_CHARS)} characters (${String(MAX_PROMPT_CHARS + 1)}).`,
+      });
+    });
+
+    it("counts a duplicate term once toward the compiled prompt", async () => {
+      const terms = ["alpha", "beta"];
+      const prompt = "p".repeat(MAX_PROMPT_CHARS - compiledLength("", terms));
+      expect(await created({ prompt, keyterms: [...terms, " alpha"] })).toMatchObject({ prompt });
+    });
+
+    it("applies only the term limits when there is no prompt", async () => {
+      const terms = Array.from({ length: 50 }, (_, i) => `${String(i)}${"t".repeat(120)}`);
+      expect(compiledLength("", terms)).toBeGreaterThan(MAX_PROMPT_CHARS);
+      expect(await created({ keyterms: terms, prompt: " \n" })).toEqual({
+        keyterms_prompt: terms,
+      });
+    });
+
+    it("applies only the prompt limit when there are no key terms", async () => {
+      const prompt = "p".repeat(MAX_PROMPT_CHARS);
+      expect(await created({ prompt, keyterms: ["", " "] })).toEqual({ prompt });
+    });
+
+    it("omits an empty term list and a blank prompt from the request", async () => {
+      expect(await created({ keyterms: [], prompt: "" })).toBeUndefined();
+      expect(
+        await created({ keyterms: ["", "  \t"], prompt: " \u00a0\n", speakers: true }),
+      ).toEqual({ speaker_detection: true });
     });
   });
 

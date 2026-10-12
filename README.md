@@ -270,7 +270,10 @@ once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(t
 
 - **Checks before it spends.** It sniffs the format from the file's bytes, probes the duration,
   and refuses a file the server would refuse, or one your daily limit cannot cover, before any
-  minutes are held. Whether your balance covers the file is the server's call: a 402 comes back
+  minutes are held. It also checks `keyterms` and `prompt` against the server's limits: at most 1000
+  unique terms of at most 6 words and 128 characters each, and a prompt of at most 2000 characters
+  (with key terms, counted together as the server compiles them). Terms and prompt are trimmed,
+  and blanks and empty lists are not sent. Whether your balance covers the file is the server's call: a 402 comes back
   when the upload is created, before any part is sent.
 - **Keeps retries from charging twice.** Every upload and purchase carries an idempotency key, and
   retries reuse it. A `resumeToken` replays the same job instead of starting a new one, and the key
