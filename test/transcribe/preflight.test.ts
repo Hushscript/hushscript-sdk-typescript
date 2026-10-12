@@ -34,6 +34,18 @@ async function refusal(promise: Promise<unknown>): Promise<unknown> {
   return promise.catch((e: unknown) => e);
 }
 
+// Restated on purpose, not derived: these mirror backend/src/transcription_options.rs, and a drift in the
+// SDK's constants must fail here.
+describe("context limits", () => {
+  it("equal the backend's values", () => {
+    expect(MAX_KEYTERMS).toBe(1000);
+    expect(MAX_KEYTERM_WORDS).toBe(6);
+    expect(MAX_KEYTERM_CHARS).toBe(128);
+    expect(MAX_PROMPT_CHARS).toBe(2000);
+    expect(COMPILED_PROMPT_OVERHEAD).toBe(203);
+  });
+});
+
 describe("preflight", () => {
   it("refuses a 10 s file with FileLimitError and makes no request", async () => {
     const { hs } = client();
