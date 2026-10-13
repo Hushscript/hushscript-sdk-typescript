@@ -4,7 +4,7 @@
 //   node scripts/generate.mjs [specPathOrUrl]     default: https://api.hushscript.com/openapi.json
 //
 // hints.json comes from $CONFORMANCE_DIR/hints.json when set, otherwise from the conformance repo
-// at the tag in package.json `config.conformanceRef`.
+// at the tag or commit in package.json `config.conformanceRef`.
 import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";

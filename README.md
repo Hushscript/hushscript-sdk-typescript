@@ -400,7 +400,7 @@ just lint               # every static check
 just regen              # regenerate openapi.json and src/generated from the production spec
 ```
 
-The conformance mock is built from the `hushscript-sdk-conformance` repository at the tag pinned in
+The conformance mock is built from the `hushscript-sdk-conformance` repository at the tag or commit pinned in
 `package.json` (`config.conformanceRef`). To use a local checkout instead:
 
 ```sh
