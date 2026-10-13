@@ -91,9 +91,12 @@ lint version=floor:
     run {{gitleaks_image}} git --no-banner --redact --verbose /work
     docker build --quiet -f docker/typos.Dockerfile -t hushscript-typescript-typos:local docker
     run hushscript-typescript-typos:local --config _typos.toml
-    # The one lint step with network access: it asks the registry about advisories and signatures.
+    # The one lint step with network access: it asks the registry about signatures, and about advisories on the
+    # newest Node only (the package ships source; older runtimes are the consumer's to patch).
+    audit=""
+    if [ "{{version}}" = "{{latest}}" ]; then audit='timeout 300 npm audit --omit=dev --audit-level=high && '; fi
     docker run {{sandbox}} "hushscript-typescript-dev:node{{version}}" \
-      sh -c 'timeout 300 npm audit --omit=dev --audit-level=high && timeout 300 npm audit signatures'
+      sh -c "${audit}timeout 300 npm audit signatures"
 
 # package checks, then call the packed SDK against loopback in clean Node, Bun and Deno.
 # tsup bundles its config next to the file, so the (read-only) repo root gets a copy in /tmp.
