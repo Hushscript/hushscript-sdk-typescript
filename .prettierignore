@@ -6,3 +6,4 @@ reports/
 src/generated/
 openapi.json
 package-lock.json
+CHANGELOG.md
