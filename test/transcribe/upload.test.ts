@@ -212,6 +212,56 @@ describe("part URL pages", () => {
     expect(fake.count("r2")).toBe(0);
   });
 
+  it("goes proxied for every part when a part-urls page answers 404, without retrying it", async () => {
+    const { fake, send } = harness(
+      { partUrls: () => apiError("not_found", 4000, 404) },
+      { maxRetries: 2 },
+    );
+    const plan: Plan = { ...planOf(3), part_urls: [], next_part_number: 1 };
+    expect(await send({ total: 3, plan })).toBeNull();
+    expect(starts(fake)).toEqual([1]);
+    expect(fake.partNumbers("part").sort()).toEqual([1, 2, 3]);
+    expect(fake.count("r2")).toBe(0);
+  });
+
+  it("ends like a null page when the next page answers 404 after direct PUTs worked", async () => {
+    const { fake, send } = harness({ partUrls: () => apiError("not_found", 4000, 404) });
+    const error = await failure(send({ total: 20, concurrency: 1 }));
+    expect(error).toBeInstanceOf(UploadError);
+    expect(error).toMatchObject({
+      code: "part_url_missing",
+      message: "No upload URL for part 17.",
+    });
+    expect(fake.count("partUrls")).toBe(1);
+    expect(fake.count("r2")).toBe(16);
+    expect(fake.count("part")).toBe(0);
+  });
+
+  it("goes proxied when the refresh after an expired URL answers 404 before any direct PUT worked", async () => {
+    const { fake, send } = harness({
+      r2: () => expired(),
+      partUrls: () => apiError("not_found", 4000, 404),
+    });
+    expect(await send({ total: 3 })).toBeNull();
+    expect(fake.partNumbers("part").sort()).toEqual([1, 2, 3]);
+    expect(fake.count("partUrls")).toBe(1);
+  });
+
+  it("ends like a null page when the refresh after an expired URL answers 404 once direct PUTs worked", async () => {
+    const { fake, send } = harness({
+      r2: (call) => (call.n === 3 ? expired() : undefined),
+      partUrls: () => apiError("not_found", 4000, 404),
+    });
+    const error = await failure(send({ total: 8, concurrency: 1 }));
+    expect(error).toBeInstanceOf(UploadError);
+    expect(error).toMatchObject({
+      code: "part_url_missing",
+      message: "No upload URL for part 3.",
+    });
+    expect(fake.count("partUrls")).toBe(1);
+    expect(fake.count("part")).toBe(0);
+  });
+
   it("raises part_url_missing for a part no page covers, without asking for a page or going proxied", async () => {
     const { fake, send } = harness();
     const error = await failure(send({ total: 17, plan: planOf(17, 2), concurrency: 1 }));

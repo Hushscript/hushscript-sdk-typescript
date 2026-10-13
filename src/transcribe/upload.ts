@@ -1,6 +1,6 @@
 import type { Client } from "openapi-fetch";
 import type { ResolvedConfig } from "../config.ts";
-import { ApiError, HushscriptError, UploadError, describeError } from "../errors.ts";
+import { ApiError, HushscriptError, NotFoundError, UploadError, describeError } from "../errors.ts";
 import type { paths } from "../generated/schema";
 import { hardenedFetch } from "../http/fetch.ts";
 import { MAX_PART_BYTES, PART_URLS } from "../shapes.ts";
@@ -21,7 +21,7 @@ interface UploadPlan {
   next_part_number: number | null;
 }
 
-/** The part-urls answer; `null`, or a `null` part_urls, for a job that takes proxied parts only. */
+/** The part-urls answer; `null`, a `null` part_urls or an HTTP 404 (read as `null`) for a job that takes proxied parts only. */
 type PartUrlsBody = {
   part_urls: { n: number; url: string }[] | null;
   next_part_number?: number | null;
@@ -96,6 +96,7 @@ class PartUrls {
     const running = this.#inflight.get(start);
     if (running !== undefined) return running;
     const request = (async (): Promise<void> => {
+      // An HTTP 404 is the server's answer when direct-to-R2 is not available for the job: read as a null page.
       const data = await readBody<PartUrlsBody>(
         this.#api.GET("/v1/uploads/{job}/part-urls", {
           params: { path: { job: this.#jobId }, query: { start } },
@@ -104,7 +105,10 @@ class PartUrls {
         }),
         "GET /v1/uploads/{job}/part-urls",
         PART_URLS,
-      );
+      ).catch((error: unknown) => {
+        if (error instanceof NotFoundError) return null;
+        throw error;
+      });
       const { part_urls: urls, next_part_number: next = null } = data ?? { part_urls: null };
       if (urls === null || urls.length === 0) {
         this.#direct = false;

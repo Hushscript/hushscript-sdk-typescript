@@ -15,6 +15,7 @@ import {
   FileLimitError,
   HushscriptError,
   JobFailedError,
+  NotFoundError,
   PreflightError,
   ResumeMismatchError,
   UploadError,
@@ -365,6 +366,38 @@ describe("proxied parts", () => {
     expect(fake.count("part")).toBe(3);
     expect(fake.count("r2")).toBe(0);
     expect(fake.completes).toEqual([null]);
+  });
+
+  it("goes proxied for every part when the first part-urls page answers 404", async () => {
+    const { hs, clock, fake } = setup({
+      hooks: {
+        create: () =>
+          Response.json({
+            job_id: "job_1",
+            state: "uploading",
+            upload: {
+              part_size_bytes: Math.ceil(mp3.byteLength / 3),
+              total_parts: 3,
+              part_urls: [],
+              next_part_number: 1,
+            },
+          }),
+        partUrls: () => apiError("not_found", 4000, 404),
+      },
+    });
+    await driven(hs.transcribe(mp3), clock);
+    expect(fake.count("partUrls")).toBe(1);
+    expect(fake.count("part")).toBe(3);
+    expect(fake.count("r2")).toBe(0);
+    expect(fake.completes).toEqual([null]);
+  });
+
+  it("keeps the meaning of a 404 from a proxied part", async () => {
+    const { hs, clock } = setup({
+      proxied: true,
+      hooks: { part: () => apiError("not_found", 4000, 404) },
+    });
+    expect(await failure(driven(hs.transcribe(mp3), clock))).toBeInstanceOf(NotFoundError);
   });
 
   it("raises the API's error when a proxied part keeps failing", async () => {
