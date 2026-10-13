@@ -1,0 +1,141 @@
+name: hushscript-typescript
+
+x-hardening: &hardening
+  init: true
+  read_only: true
+  cap_drop: [ALL]
+  security_opt:
+    - no-new-privileges:true
+  mem_limit: 4g
+  pids_limit: 512
+  labels:
+    sdk.test: "1"
+
+x-dev-build: &dev-build
+  context: .
+  dockerfile: docker/dev.Dockerfile
+  target: dev
+  args:
+    NODE_VERSION: ${NODE_VERSION:?set by the justfile}
+
+x-dev: &dev
+  <<: *hardening
+  build: *dev-build
+  image: hushscript-typescript-dev:node${NODE_VERSION:?set by the justfile}
+  working_dir: /work
+
+x-scratch: &scratch
+  - /tmp
+  - /work/reports
+  - /work/.stryker-tmp
+  - /work/node_modules/.vite
+  - /work/node_modules/.vite-temp
+  - /work/node_modules/.cache
+
+x-sandboxed: &sandboxed
+  <<: *dev
+  network_mode: "service:mock"
+  depends_on:
+    mock:
+      condition: service_healthy
+  tmpfs: *scratch
+
+services:
+  # The mock API every container below shares a network namespace with. Its network is internal,
+  # so the SDK reaches it at http://127.0.0.1:4010 and nothing else.
+  mock:
+    <<: *hardening
+    build:
+      context: ${CONFORMANCE_CONTEXT:?set by the justfile}
+      dockerfile: Dockerfile
+    image: hushscript-sdk-conformance-mock:pinned
+    mem_limit: 512m
+    pids_limit: 128
+    tmpfs:
+      - /tmp
+    networks:
+      - sdk
+
+  test:
+    <<: *sandboxed
+    environment:
+      FC_RUNS_FACTOR: ${FC_RUNS_FACTOR:-1}
+    command: ["timeout", "1800", "vitest", "run", "--coverage"]
+
+  mutation:
+    <<: *sandboxed
+    build:
+      <<: *dev-build
+      target: mutation
+    image: hushscript-typescript-mutation:node${NODE_VERSION:?set by the justfile}
+    user: "${HOST_UID:-10001}:${HOST_GID:-10001}"
+    volumes:
+      - ${MUTATION_REPORT_DIR:-./reports/mutation}:/mutation-report
+    command:
+      - sh
+      - -c
+      - >-
+        engine_status=0;
+        timeout 1800 stryker run || engine_status=$$?;
+        guard_status=0;
+        timeout 120 node scripts/check-mutation-score.mjs /mutation-report/mutation.json || guard_status=$$?;
+        if [ "$$engine_status" -ne 0 ]; then exit "$$engine_status"; fi;
+        exit "$$guard_status"
+
+  lint:
+    <<: *sandboxed
+    command:
+      - sh
+      - -c
+      - >-
+        timeout 120 node --test scripts/check-mutation-score.test.mjs
+        && timeout 600 tsc --noEmit
+        && timeout 600 tsc --noEmit -p tsconfig.scripts.json
+        && timeout 600 eslint --max-warnings 0 .
+        && timeout 300 prettier --check .
+        && timeout 300 knip
+
+  conformance:
+    <<: *sandboxed
+    environment:
+      CONFORMANCE_STRICT: ${CONFORMANCE_STRICT:-1}
+    command:
+      - timeout
+      - "1800"
+      - node
+      - --disable-warning=ExperimentalWarning
+      - conformance/runner.ts
+
+  examples:
+    <<: *sandboxed
+    command: ["timeout", "900", "node", "scripts/run-examples.mjs"]
+
+  # Outbound network: fetches the spec and hints.json, writes openapi.json and src/generated.
+  regen:
+    <<: *dev
+    user: "${HOST_UID:-10001}:${HOST_GID:-10001}"
+    tmpfs:
+      - /tmp
+    volumes:
+      - ./openapi.json:/work/openapi.json
+      - ./src/generated:/work/src/generated
+    command: ["timeout", "600", "node", "scripts/generate.mjs"]
+
+  # Outbound network: the one test that talks to production. Nightly only.
+  smoke:
+    <<: *dev
+    tmpfs:
+      - /tmp
+    environment:
+      HUSHSCRIPT_BASE_URL: https://api.hushscript.com
+      HUSHSCRIPT_TOKEN: ${SMOKE_TOKEN:-}
+    command:
+      - timeout
+      - "300"
+      - node
+      - --disable-warning=ExperimentalWarning
+      - smoke/smoke.ts
+
+networks:
+  sdk:
+    internal: true

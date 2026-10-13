@@ -1,0 +1,11 @@
+rules:
+  concurrency-limits:
+    ignore:
+      # A release run must finish: cancelling release-please halfway can leave a tag without its release.
+      - release.yml
+      # A publish run must finish: cancelling it halfway can leave a version on the registry without its attestation.
+      - publish.yml
+  unpinned-uses:
+    config:
+      policies:
+        "*": hash-pin

@@ -1,0 +1,179 @@
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { Hushscript } from "../../src/client";
+import { AbortError, PreflightError, WaitTimeoutError } from "../../src/errors";
+import { sleepOrAbort } from "../../src/transcribe/common";
+import type { Progress } from "../../src/transcribe/types";
+import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock } from "../helpers";
+import { driven, fakeApi } from "./fakeapi";
+
+afterEach(() => {
+  vi.unstubAllGlobals();
+});
+
+function setup(): { hs: Hushscript; clock: ReturnType<typeof fakeClock> } {
+  const clock = fakeClock({ manual: true });
+  return {
+    hs: new Hushscript({ token: TOKEN, baseUrl: BASE, clock, timeout: TEST_TIMEOUT_SECONDS }),
+    clock,
+  };
+}
+
+describe("hs.jobs.wait", () => {
+  it("polls at 5 s, times 1.5, up to 15 s, and reports queued and processing", async () => {
+    const { hs, clock } = setup();
+    fakeApi({
+      jobFlow: [
+        { state: "queued", polls: 1 },
+        { state: "processing", polls: 5 },
+        { state: "done" },
+      ],
+    });
+    const seen: Progress[] = [];
+    const sleeps: number[] = [];
+    const original = clock.sleep.bind(clock);
+    clock.sleep = (ms, signal) => {
+      if (ms < 100_000) sleeps.push(ms);
+      return original(ms, signal);
+    };
+    const job = await driven(hs.jobs.wait("job_1", { onProgress: (p) => seen.push(p) }), clock);
+    expect(job.state).toBe("done");
+    expect(sleeps.slice(0, 5)).toEqual([5000, 7500, 11_250, 15_000, 15_000]);
+    expect(seen[0]).toEqual({ stage: "processing", state: "queued" });
+    expect(seen.at(-1)).toEqual({ stage: "processing", state: "processing" });
+  });
+
+  it("returns a failed job instead of throwing", async () => {
+    const { hs, clock } = setup();
+    fakeApi({ jobFlow: [{ state: "failed", error: "bad", failure_kind: "media_unreadable" }] });
+    const job = await driven(hs.jobs.wait("job_1"), clock);
+    expect(job.state).toBe("failed");
+  });
+
+  it("raises WaitTimeoutError at waitTimeout, with the last read exactly on the deadline", async () => {
+    const { hs, clock } = setup();
+    const fake = fakeApi({ jobFlow: [{ state: "processing" }] });
+    const error = await driven(hs.jobs.wait("job_1", { waitTimeout: 20 }), clock).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBeInstanceOf(WaitTimeoutError);
+    expect(error).toMatchObject({ code: "wait_timeout", status: null });
+    expect((error as WaitTimeoutError).resumeToken).toBeNull();
+    expect((error as WaitTimeoutError).message).toBe(
+      "The job is still processing after 20 s; it keeps running.",
+    );
+    expect(clock.now()).toBe(20_000);
+    expect(fake.count("job")).toBe(4);
+  });
+
+  it("does not report progress for a state other than queued or processing", async () => {
+    const { hs, clock } = setup();
+    const fake = fakeApi({ jobFlow: [{ state: "reviewing", polls: 2 }, { state: "done" }] });
+    const seen: Progress[] = [];
+    const job = await driven(hs.jobs.wait("job_1", { onProgress: (p) => seen.push(p) }), clock);
+    expect(job.state).toBe("done");
+    expect(fake.count("job")).toBe(3);
+    expect(seen).toEqual([]);
+  });
+
+  it("is cancelled by its signal while a poll is in flight", async () => {
+    const { hs } = setup();
+    const fake = fakeApi({
+      hooks: {
+        job: (call) =>
+          new Promise<Response>((_resolve, reject) => {
+            call.signal.addEventListener("abort", () => {
+              reject(call.signal.reason as Error);
+            });
+          }),
+      },
+    });
+    const stop = new AbortController();
+    const outcome = hs.jobs.wait("job_1", { signal: stop.signal }).catch((e: unknown) => e);
+    await vi.waitFor(() => {
+      expect(fake.count("job")).toBe(1);
+    });
+    stop.abort();
+    const error: unknown = await outcome;
+    expect(error).toBeInstanceOf(AbortError);
+    expect(error).toMatchObject({ code: "aborted", status: null });
+  });
+
+  it("names the job read in the error for a body it cannot use", async () => {
+    const { hs, clock } = setup();
+    fakeApi({
+      hooks: {
+        job: () =>
+          new Response("[]", { status: 200, headers: { "content-type": "application/json" } }),
+      },
+    });
+    const error = await driven(hs.jobs.wait("job_1"), clock).catch((e: unknown) => e);
+    expect(error).toMatchObject({ code: "bad_response", status: 200 });
+    expect((error as Error).message).toMatch(
+      /^GET \/v1\/jobs\/\{id\} answered with a body the SDK cannot use \(/,
+    );
+  });
+
+  it("is cancelled by its signal during a sleep", async () => {
+    const { hs } = setup();
+    fakeApi({ jobFlow: [{ state: "processing" }] });
+    const stop = new AbortController();
+    const outcome = hs.jobs.wait("job_1", { signal: stop.signal }).catch((e: unknown) => e);
+    for (let i = 0; i < 6; i += 1) await new Promise<void>((resolve) => setImmediate(resolve));
+    stop.abort();
+    const error: unknown = await outcome;
+    expect(error).toBeInstanceOf(AbortError);
+    expect(error).toMatchObject({ code: "aborted", status: null });
+  });
+
+  it.each([0, -1, Number.NaN, Number.POSITIVE_INFINITY])(
+    "refuses waitTimeout %s before any request",
+    async (waitTimeout) => {
+      const { hs } = setup();
+      const fake = fakeApi();
+      const error: unknown = await hs.jobs.wait("job_1", { waitTimeout }).catch((e: unknown) => e);
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({ code: "invalid_option", status: null });
+      expect(fake.calls).toHaveLength(0);
+    },
+  );
+
+  it.each([new Error("caller failed"), "caller failed", null])(
+    "propagates a progress callback's thrown value unchanged (%#)",
+    async (thrown) => {
+      const { hs, clock } = setup();
+      const fake = fakeApi({ jobFlow: [{ state: "processing" }] });
+      const error: unknown = await driven(
+        hs.jobs.wait("job_1", {
+          onProgress: () => {
+            // eslint-disable-next-line @typescript-eslint/only-throw-error -- verifies primitive callback errors
+            throw thrown;
+          },
+        }),
+        clock,
+      ).catch((e: unknown) => e);
+      expect(error).toBe(thrown);
+      expect(fake.calls.map((entry) => entry.route)).toEqual(["job"]);
+      expect(clock.pending).toHaveLength(0);
+    },
+  );
+});
+
+describe("sleepOrAbort", () => {
+  it("passes on a clock failure that is not an abort", async () => {
+    const broke = new Error("clock broke");
+    const clock = { ...fakeClock(), sleep: () => Promise.reject(broke) };
+    const error = await sleepOrAbort(clock, 5, new AbortController().signal).catch(
+      (e: unknown) => e,
+    );
+    expect(error).toBe(broke);
+  });
+
+  it("turns any failure after the signal fired into the SDK's AbortError", async () => {
+    const controller = new AbortController();
+    controller.abort("caller stopped");
+    const clock = { ...fakeClock(), sleep: () => Promise.reject(new Error("woken")) };
+    const error = await sleepOrAbort(clock, 5, controller.signal).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(AbortError);
+    expect(error).toMatchObject({ message: "The request was aborted.", cause: "caller stopped" });
+  });
+});
