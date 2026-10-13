@@ -1,5 +1,5 @@
 [files]
-extend-exclude = ["openapi.json", "package-lock.json", "src/generated/**", "LICENSE"]
+extend-exclude = ["openapi.json", "package-lock.json", "src/generated/**", "LICENSE", "CHANGELOG.md"]
 
 [default.extend-words]
 # Jordanian dinar, an ISO 4217 code in src/money.ts
