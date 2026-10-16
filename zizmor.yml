@@ -1,4 +1,8 @@
 rules:
+  superfluous-actions:
+    ignore:
+      # The PR action updates existing PRs and signs commits through the App.
+      - regenerate.yml
   concurrency-limits:
     ignore:
       # A release run must finish: cancelling release-please halfway can leave a tag without its release.

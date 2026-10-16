@@ -182,8 +182,8 @@ Two tool quirks worth knowing:
 - `tsup` bundles its own config next to the config file, which fails on a read-only root. `just
 build` copies `tsup.config.ts` to `/tmp` and passes `--config`. Likewise `vitest` needs a tmpfs at
   `node_modules/.vite-temp`.
-- `tsup`'s declaration build sets `baseUrl`, which TypeScript 6 deprecates: the config passes
-  `dts.compilerOptions.ignoreDeprecations: "6.0"`. `openapi-typescript` peers on TypeScript 5, so
+- `tsup` 9 no longer sets the deprecated `baseUrl` during declaration builds, so it needs no
+  TypeScript 6 deprecation workaround. `openapi-typescript` still peers on TypeScript 5, so
   `package.json` has an `overrides` entry mapping its `typescript` to the repo's.
 
 ## Generator contract
