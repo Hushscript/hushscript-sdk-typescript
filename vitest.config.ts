@@ -8,6 +8,8 @@ const config: ViteUserConfig = defineConfig({
     include: ["test/**/*.test.ts"],
     setupFiles: ["test/setup.ts"],
     maxWorkers: 4,
+    // node_modules is read-only in the containers, where vitest 5 puts its module cache.
+    fsModuleCache: false,
     coverage: {
       provider: "v8",
       // The containers have a read-only root; reports go to the scratch tmpfs.
