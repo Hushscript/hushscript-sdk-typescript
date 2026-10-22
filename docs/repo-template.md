@@ -17,13 +17,12 @@ file from this repository byte for byte.
 | `.github/CODEOWNERS`                                            | copy          | Nothing. The team handle is a placeholder until the org team exists.                                                                                                        |
 | `.github/workflows/scorecard.yml`, `dependency-review.yml`      | copy          | Nothing.                                                                                                                                                                    |
 | `.github/workflows/codeql.yml`                                  | adapt         | `languages:` and the `category` (`javascript-typescript`, `python`, `go`). PHP has no CodeQL job; see "PHP".                                                                |
-| `.github/workflows/ci.yml`                                      | adapt         | The matrix values (`node: ['22', '24']` becomes the language's floor and latest) and the env name passed to `just ci`.                                                      |
+| `.github/workflows/ci.yml`                                      | adapt         | The matrix values (`node: ['24', '26']` becomes the language's floor and latest) and the env name passed to `just ci`.                                                      |
 | `.github/workflows/nightly.yml`                                 | adapt         | Recipe names stay. Drop the `fuzz` job for PHP. Python uses `FC_RUNS_FACTOR` equivalents (Hypothesis `max_examples` profile), Go runs native fuzz targets for 60 s each.    |
-| `.github/workflows/regenerate.yml`                              | adapt         | Nothing for the control flow. `just regen` is the generator step. Egress list gains the language's registry hosts.                                                          |
 | `.github/workflows/release.yml`                                 | adapt         | `release-type` in the workflow input and in `release-please-config.json` (`node`, `python`, `go`, `php`).                                                                   |
 | `.github/workflows/publish.yml`                                 | adapt         | The registry steps; see "Publish".                                                                                                                                          |
 | `.github/dependabot.yml`                                        | adapt         | The language ecosystem (`npm`, `pip` or `uv`, `gomod`, `composer`); keep `docker` on `/docker` and `github-actions`. Keep the 7-day cooldown and the `chore` commit prefix. |
-| `release-please-config.json`, `.release-please-manifest.json`   | adapt         | `release-type`, `package-name`. Set `initial-version` to `1.0.0`. Manifest starts at `0.0.0`; the first release becomes `1.0.0`, and a breaking regen PR bumps the major.   |
+| `release-please-config.json`, `.release-please-manifest.json`   | adapt         | `release-type`, `package-name`. Set `initial-version` to `1.0.0`. Manifest starts at `0.0.0`; the first release becomes `1.0.0`, and a breaking spec sync bumps the major.  |
 | `docker/dev.Dockerfile`                                         | adapt         | The `base` image, the `deps` install command, the version stages and the `proddeps` stage; see "Dockerfile".                                                                |
 | `docker/typos.Dockerfile`                                       | copy          | Nothing.                                                                                                                                                                    |
 | `compose.yaml`                                                  | adapt         | Service commands, the `x-scratch` tmpfs list, the `regen` bind mounts. Structure, hardening and the `mock` service are copied.                                              |
@@ -31,7 +30,6 @@ file from this repository byte for byte.
 | `.hadolint.yaml`, `zizmor.yml`, `_typos.toml`, `.gitleaks.toml` | copy          | `_typos.toml` and `.gitleaks.toml` paths follow the repo layout.                                                                                                            |
 | `.dockerignore`, `.gitignore`, `.prettierignore`                | adapt         | Language build output and caches.                                                                                                                                           |
 | `scripts/generate.*`                                            | adapt         | The generator. Writes the spec to `openapi.json` byte for byte, then the language's low-level layer, then the three tables.                                                 |
-| `scripts/check-regen-diff.sh`                                   | copy          | Nothing. Fails unless only `openapi.json` and the generated directory changed.                                                                                              |
 | `openapi.json`                                                  | copy          | Identical in every repo (the committed spec).                                                                                                                               |
 | `README.md`                                                     | adapt         | Stub per language; no em-dashes.                                                                                                                                            |
 | Static-analysis configs                                         | adapt         | Per the language column of spec 13.2: `eslint.config.js`, `.prettierrc`, `knip.json`, `stryker.config.json`, `tsconfig*.json` here.                                         |
@@ -57,13 +55,13 @@ Everything runs in containers (spec 13.1). The facts the compose file relies on:
 - `regen` runs as the host user (`HOST_UID`/`HOST_GID`, exported by the justfile) and bind-mounts
   `./openapi.json` and the generated directory read-write. Nothing else is writable. When `just regen`
   gets a path to an existing file, the recipe bind-mounts that file read-only at `/spec/openapi.json`
-  and passes that path to the generator, so `regenerate.yml` generates from the exact bytes it diffed.
+  and passes that path to the generator, so the generator reads exactly the bytes that were diffed.
 - Long commands carry their own limit inside the container (`timeout 1800 ...`). A host-side
   `timeout` only kills the client.
 - Every recipe that starts compose installs `trap 'docker compose down --remove-orphans' EXIT`, so the
   mock never outlives the recipe. After a run, `docker ps -q --filter label=sdk.test` must be empty.
-- Host code never runs tools. The only host-side commands in CI are `just`, `curl` and `jq` (in
-  `regenerate.yml`), `git` and `jq` (the tag guard) and `npm` in `publish.yml` (the registry upload has
+- Host code never runs tools. The only host-side commands in CI are `just`, `git` and `jq` (the tag
+  guard) and `npm` in `publish.yml` (the registry upload has
   to run where the OIDC token is).
 - Builds must not install OS packages: CI blocks egress, so `apt-get` at image build time would need
   Debian mirror hosts on the allow-list. The TypeScript `mutation` stage builds on the full
@@ -93,8 +91,8 @@ validated by a `just` `error()` expression. `ci` with no argument runs lint on t
 conformance on floor and latest, then examples and build on the floor. With an argument it runs
 everything on that one version, which is what the CI matrix passes.
 
-Tool images other than the dev image (hadolint, actionlint, zizmor, shellcheck, gitleaks, typos,
-Bun, Deno, oasdiff) are `docker run` calls from the justfile, pinned by digest, with the sandbox flags
+Tool images other than the dev image (hadolint, actionlint, zizmor, gitleaks, typos,
+Bun, Deno) are `docker run` calls from the justfile, pinned by digest, with the sandbox flags
 `--rm --init --label sdk.test=1 --cap-drop ALL --read-only --security-opt no-new-privileges
 --pids-limit 512 --memory 4g --tmpfs /tmp --network none`. `just lint` also runs one step with network
 access: the dependency audit (`npm audit --omit=dev --audit-level=high` and `npm audit signatures`,
@@ -109,7 +107,7 @@ repository's justfile for the images both use.
 
 One multi-stage file, `docker/dev.Dockerfile`:
 
-1. Named stages hold the digest-pinned official images (`node22`, `node24`). `ARG NODE_VERSION` selects
+1. Named stages hold the digest-pinned official images (`node24`, `node26`). `ARG NODE_VERSION` selects
    one through `FROM node${NODE_VERSION} AS base`. This keeps the digests as literal `FROM` lines,
    which Dependabot can update. The indirection needs `# hadolint ignore=DL3006`.
 2. `base` creates the non-root user (uid and gid 10001), sets `HOME=/tmp` and `WORKDIR /work`.
@@ -117,7 +115,7 @@ One multi-stage file, `docker/dev.Dockerfile`:
    13.1).
 4. `dev` copies `node_modules` from `deps`, copies the source, puts `node_modules/.bin` on `PATH` and
    switches to uid 10001.
-5. `mutation` builds on the digest-pinned full images (`node22full`, `node24full`, selected like `base`)
+5. `mutation` builds on the digest-pinned full images (`node24full`, `node26full`, selected like `base`)
    because StrykerJS needs `ps` and nothing may install packages at build time. It repeats the user,
    `PATH` and source steps of `dev`.
 6. `proddeps` installs production dependencies only. `just build` uses it to assemble an install
@@ -133,7 +131,7 @@ committed (Dependabot maintains it afterwards):
 d=$(mktemp -d) && cp package.json "$d" && chmod 777 "$d"
 docker run --rm --init --label claude.adhoc=1 --label sdk.test=1 --cap-drop ALL \
   --security-opt no-new-privileges --memory 2g --pids-limit 256 --user "$(id -u):$(id -g)" \
-  -e HOME=/tmp --tmpfs /tmp -v "$d":/work -w /work node:22-bookworm-slim@sha256:<digest> \
+  -e HOME=/tmp --tmpfs /tmp -v "$d":/work -w /work node:24-bookworm-slim@sha256:<digest> \
   timeout 300 npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 cp "$d/package-lock.json" .
 ```
@@ -166,7 +164,7 @@ FC_RUNS_FACTOR`; the nightly job sets the factor to 10.
   real tarball, a type check of a consumer file against the packed `.d.ts` with the oldest supported
   TypeScript (devDependency alias `typescript-floor`, `npm:typescript@5.5.4`; Dependabot ignores it;
   `skipLibCheck: false`, `module: NodeNext`), then an `import` of the tarball in clean Node (the
-  matrix version), a `require()` of it in the same Node image (`require(esm)`, Node 22.12 and newer)
+  matrix version), a `require()` of it in the same Node image (`require(esm)`, Node 24 and newer)
   and an `import` in clean Bun and Deno containers. `package.json` `exports["."]` has `types`,
   `import` and `default` (the last makes `require(esm)` resolve). A new language states its consumer
   floor in the README and checks it the same way (Python: the oldest supported interpreter installs
@@ -174,7 +172,7 @@ FC_RUNS_FACTOR`; the nightly job sets the factor to 10.
 - Mutation: `stryker.config.json` mutates `src/http` and `src/transcribe`, `break` at 80,
   `allowEmpty: true` until those directories exist.
 - Whole-repo: hadolint (`.hadolint.yaml`, failure threshold `info`), actionlint, zizmor `--pedantic`
-  with `zizmor.yml` requiring hash pins, shellcheck on `scripts/*.sh`, gitleaks on the full history,
+  with `zizmor.yml` requiring hash pins, gitleaks on the full history,
   typos on the whole tree minus `openapi.json`, lockfiles and generated code.
 
 Two tool quirks worth knowing:
@@ -214,24 +212,16 @@ comment, and every concurrency block sets `cancel-in-progress: true` (zizmor ped
 | ----------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
 | `ci.yml`                | PR, push to `main`              | `contents: read`                                                                   |
 | `nightly.yml`           | schedule only                   | `contents: read` (smoke runs in environment `smoke`)                               |
-| `regenerate.yml`        | daily cron, `workflow_dispatch` | `contents: read` (writes go through the App token)                                 |
 | `release.yml`           | push to `main`                  | none (writes go through the App token)                                             |
 | `publish.yml`           | `release: published`            | `contents: read`, `id-token: write`, `attestations: write` (environment `release`) |
 | `codeql.yml`            | PR, push, weekly                | `contents: read`, `security-events: write`                                         |
 | `scorecard.yml`         | weekly, push, branch protection | `contents: read`, `actions: read`, `security-events: write`, `id-token: write`     |
 | `dependency-review.yml` | PR                              | `contents: read`                                                                   |
 
-`regenerate.yml` flow: fetch the spec with `curl` and compare it with `openapi.json` after `jq -S`
-normalization (stop if equal); run `oasdiff breaking --fail-on ERR` in the pinned image (exit 0 means
-not breaking, 1 breaking, anything else fails the job); `just regen`;
-`scripts/check-regen-diff.sh`; `just ci`; then `peter-evans/create-pull-request` on branch `regen/spec`
-titled `feat: sync with api spec` (`feat!:` when breaking) with the oasdiff output as the body. The
-generator reads the downloaded file itself (`just regen "$RUNNER_TEMP/openapi.new.json"`), not a second
-download. The PR is created with a GitHub App token (`actions/create-github-app-token`, secrets
-`APP_ID` and `APP_PRIVATE_KEY`): a PR opened with the default token does not start `ci.yml`, and
-`sign-commits: true` makes the API sign the commit as the App, which branch protection (signed
-commits) requires. The GITHUB_TOKEN of the job stays `contents: read`; a missing secret fails the
-App-token step.
+There is no scheduled regeneration. When the API changes, regenerate by hand: `just regen` fetches the
+production spec, or `just regen path/to/openapi.json` reads a local file. Review the diff of
+`openapi.json` and `src/generated/`, run `just ci`, and commit with `feat: sync with the api spec`
+(`feat!:` when the change breaks the SDK).
 
 ### Publish
 
@@ -257,9 +247,9 @@ publishes that same tarball. Language-specific parts:
   produced by a pinned tool image.
 - CLI: as TypeScript, with its own package name.
 
-`release.yml` creates the same kind of App token and hands it to release-please, with no fallback: a
-release created with the default token would not start `publish.yml`, and a missing secret should fail
-loudly. The token asks for `contents`, `pull-requests` and `issues` write; release-please needs
+`release.yml` creates a GitHub App token (`actions/create-github-app-token`, secrets `APP_ID` and
+`APP_PRIVATE_KEY`) and hands it to release-please, with no fallback: a release created with the
+default token would not start `publish.yml`, and a missing secret should fail loudly. The token asks for `contents`, `pull-requests` and `issues` write; release-please needs
 `issues: write` for its `autorelease:` labels (its README lists all three).
 
 ### Pinned actions
@@ -269,20 +259,18 @@ Reuse these SHAs; refresh them with Dependabot.
 | Action                             | SHA                                        | Version |
 | ---------------------------------- | ------------------------------------------ | ------- |
 | `actions/checkout`                 | `3d3c42e5aac5ba805825da76410c181273ba90b1` | v7.0.1  |
-| `actions/setup-node`               | `820762786026740c76f36085b0efc47a31fe5020` | v7.0.0  |
-| `actions/upload-artifact`          | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | v7.0.1  |
+| `actions/setup-node`               | `949feb2413d6458794dcd2491c4babbbce0c15c1` | v7.1.0  |
+| `actions/upload-artifact`          | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` | v7.0.2  |
 | `actions/attest-build-provenance`  | `4d101475d8b20a2381f78447822ac1eab6504dd8` | v4.2.2  |
 | `actions/dependency-review-action` | `a1d282b36b6f3519aa1f3fc636f609c47dddb294` | v5.0.0  |
-| `step-security/harden-runner`      | `351661ca32ac09a36dc5ee2d536e3128f2a3c8ed` | v2.22.0 |
+| `step-security/harden-runner`      | `dc2769abcc0fcfbadfc1df54081c1608579ef6b2` | v2.22.2 |
 | `extractions/setup-just`           | `53165ef7e734c5c07cb06b3c8e7b647c5aa16db3` | v4.0.0  |
-| `github/codeql-action`             | `2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2` | v4.38.2 |
-| `ossf/scorecard-action`            | `2d1146689b8cda280b9bc96326124645441f03bc` | v2.4.4  |
+| `github/codeql-action`             | `9b3254085494b55a0f7c4c2b3d2d52cc712ce370` | v4.39.1 |
+| `ossf/scorecard-action`            | `fa7117db83c52d787ae5a89f350999701505d78e` | v2.5.0  |
 | `googleapis/release-please-action` | `45996ed1f6d02564a971a2fa1b5860e934307cf7` | v5.0.0  |
-| `peter-evans/create-pull-request`  | `5f6978faf089d4d20b00c7766989d076bb2fc7f1` | v8.1.1  |
-| `actions/create-github-app-token`  | `bcd2ba49218906704ab6c1aa796996da409d3eb1` | v3.2.0  |
+| `actions/create-github-app-token`  | `64ab729a6294000f5aa4a4bc0b73d1f32bc45510` | v3.3.0  |
 
-Tool images are listed with their digests at the top of this repository's `justfile` and in
-`.github/workflows/regenerate.yml` (oasdiff).
+Tool images are listed with their digests at the top of this repository's `justfile`.
 
 ## PHP
 
@@ -298,7 +286,7 @@ The workflows cannot do these. Do every one on a new repository before the first
    permissions Contents, Pull requests and Issues set to read and write (Metadata read is implied) and
    install it on the repository. Generate a private key. Store the App id as the Actions secret
    `APP_ID` and the key as `APP_PRIVATE_KEY` (repository secrets, or organization secrets limited to
-   the SDK repositories). `regenerate.yml` and `release.yml` use them; there is no fallback token.
+   the SDK repositories). `release.yml` uses them; there is no fallback token.
 2. **Environments.** `release` (required reviewer is the owner; no secret, npm uses OIDC; for PyPI the
    environment name goes into the trusted publisher) and `smoke` (secret `SMOKE_TOKEN`, a token that
    can read the account).
@@ -310,8 +298,8 @@ The workflows cannot do these. Do every one on a new repository before the first
    hand (plan Task 19), then adds a trusted publisher on npmjs.com (organization `Hushscript`,
    repository, workflow `publish.yml`, environment `release`). PyPI: add a pending trusted publisher
    before the first release. Store no registry token in GitHub.
-6. **Branch protection on `main`.** Pull requests only, required checks `just ci (node 22)`, `just ci
-(node 24)` (renamed per language) and CodeQL, linear history, signed commits, no force-push,
+6. **Branch protection on `main`.** Pull requests only, required checks `just ci (node 24)`, `just ci
+(node 26)` (renamed per language) and CodeQL, linear history, signed commits, no force-push,
    CODEOWNERS review. Releases and regen PRs are signed by the App through the API, so the signed
    commits rule holds for them.
 7. **Private vulnerability reporting** on.

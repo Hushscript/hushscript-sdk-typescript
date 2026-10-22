@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
-  // eslint-disable-next-line n/no-unsupported-features/node-builtins -- Dev images pin Node 22.23.3 or newer.
   cpSync,
   mkdirSync,
   mkdtempSync,

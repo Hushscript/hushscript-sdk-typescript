@@ -54,7 +54,6 @@ function errorCode(error: unknown): string | undefined {
  * that point means the server cannot have received a complete request. The queue holds nothing
  * (highWaterMark 0), so a chunk is produced only when the transport asks for it.
  */
-/* eslint-disable n/no-unsupported-features/node-builtins -- stable in every Node 22 release we test; the rule's table lags */
 function bodyStream(bytes: Uint8Array, progress: { done: boolean }): ReadableStream<Uint8Array> {
   let offset = 0;
   return new ReadableStream<Uint8Array>(
@@ -72,8 +71,6 @@ function bodyStream(bytes: Uint8Array, progress: { done: boolean }): ReadableStr
     { highWaterMark: 0 },
   );
 }
-
-/* eslint-enable n/no-unsupported-features/node-builtins */
 
 const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
 

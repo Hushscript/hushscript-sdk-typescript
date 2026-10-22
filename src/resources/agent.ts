@@ -196,9 +196,7 @@ export const agentStatic: AgentStatic = {
     const api = tokenlessApi(options.baseUrl);
     const { status, body } = await readObject(
       api.POST("/v1/agent/accounts/{signup_id}/claim", {
-        // The OpenAPI document leaves the {signup_id} path parameter out of this operation, so its
-        // generated type has no `path`; openapi-fetch still fills the template from it.
-        params: { path: { signup_id: signupId } } as never,
+        params: { path: { signup_id: signupId } },
         body: { claim_secret: claimSecret },
         parseAs: "text",
       }),

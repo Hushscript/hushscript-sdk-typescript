@@ -141,7 +141,6 @@ const CHUNK_CAP = 10_000;
 export async function readChunks(body: unknown): Promise<Uint8Array[]> {
   const chunks: Uint8Array[] = [];
   if (body === null || body === undefined) return chunks;
-  // eslint-disable-next-line n/no-unsupported-features/node-builtins -- stable in every Node 22 release we test
   const reader = (body as ReadableStream<Uint8Array>).getReader();
   for (;;) {
     if (chunks.length >= CHUNK_CAP) return stall(`a request body past ${String(CHUNK_CAP)} chunks`);

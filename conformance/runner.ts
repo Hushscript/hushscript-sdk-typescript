@@ -1,4 +1,3 @@
-/* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
 // Conformance runner (docs/runner-contract.md in the conformance repo). It starts nothing: the mock
 // is the compose `mock` service this container shares a network namespace with.
 //

@@ -2,7 +2,6 @@
 //   node buy.ts 300min          asks first
 //   node buy.ts 300min --yes    skips the question
 //   node buy.ts 300min --yes --key <key>   asks again after a failure that printed a retry key
-// eslint-disable-next-line n/no-unsupported-features/node-builtins -- stable in every Node 22 release; the rule's table lags
 import { createInterface } from "node:readline/promises";
 import { Hushscript, HushscriptError } from "@hushscript/sdk";
 
