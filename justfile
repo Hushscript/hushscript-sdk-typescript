@@ -11,7 +11,6 @@ export CONFORMANCE_STRICT := env("CONFORMANCE_STRICT", "1")
 conformance_ref := `sed -n 's/^ *"conformanceRef": *"\([^"]*\)".*/\1/p' package.json`
 export CONFORMANCE_CONTEXT := env("CONFORMANCE_CONTEXT", "https://github.com/Hushscript/hushscript-sdk-conformance.git#" + conformance_ref)
 
-node22_image := "node:22-bookworm-slim@sha256:de170b39439eb0e5a3444ad7d60b015614a381e10fecae2e30ec9e735122f38d"
 node24_image := "node:24-bookworm-slim@sha256:55fb5f5a527ea2c5c4a95f963e48ef90aa38c7b346054fdc8ee9957a2b55d205"
 node26_image := "node:26-bookworm-slim@sha256:28147155d47dc31abe0a46e0d12b59b2fb3d0a2dcc5dc65fce76a074180b16fe"
 bun_image := "oven/bun:1.4.4@sha256:1d22548f177f4ff38e0c15baa3c2c46c6c2060ba2d1bc573bb4720b407548f1d"
@@ -21,15 +20,15 @@ actionlint_image := "rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47
 zizmor_image := "ghcr.io/zizmorcore/zizmor:1.31.1@sha256:42d409dbb851d4c5d35a058cf042b828bea1e3f2884378c526eb0974780e18d9"
 gitleaks_image := "ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
 sandbox := "--rm --init --label sdk.test=1 --cap-drop ALL --read-only --security-opt no-new-privileges --pids-limit 512 --memory 4g --tmpfs /tmp"
-floor := "22"
+floor := "24"
 latest := "26"
-supported := "22 24 26"
+supported := "24 26"
 
-# unit tests with coverage on Node 22 (default), 24, or 26; no network beyond the mock
+# unit tests with coverage on Node 24 (default) or 26; no network beyond the mock
 test version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
+    {{ if version == "24" { "" } else if version == "26" { "" } else { error("version must be 24 or 26") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
     extra=()
@@ -44,7 +43,7 @@ test version=floor:
 mutation version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
+    {{ if version == "24" { "" } else if version == "26" { "" } else { error("version must be 24 or 26") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
     mkdir -p reports/mutation
@@ -57,7 +56,7 @@ mutation version=floor:
 conformance version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
+    {{ if version == "24" { "" } else if version == "26" { "" } else { error("version must be 24 or 26") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
     docker compose build mock conformance
@@ -67,7 +66,7 @@ conformance version=floor:
 examples version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
+    {{ if version == "24" { "" } else if version == "26" { "" } else { error("version must be 24 or 26") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
     docker compose build mock examples
@@ -77,7 +76,7 @@ examples version=floor:
 lint version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
+    {{ if version == "24" { "" } else if version == "26" { "" } else { error("version must be 24 or 26") } }}
     export NODE_VERSION={{version}}
     trap 'docker compose down --remove-orphans >/dev/null 2>&1 || true' EXIT
     docker compose build mock lint
@@ -101,9 +100,9 @@ lint version=floor:
 build version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
+    {{ if version == "24" { "" } else if version == "26" { "" } else { error("version must be 24 or 26") } }}
     export NODE_VERSION={{version}}
-    node_image={{ if version == "22" { node22_image } else if version == "24" { node24_image } else { node26_image } }}
+    node_image={{ if version == "24" { node24_image } else { node26_image } }}
     docker build --quiet --target dev --build-arg NODE_VERSION={{version}} -f docker/dev.Dockerfile -t "hushscript-typescript-dev:node{{version}}" .
     docker build --quiet --target proddeps --build-arg NODE_VERSION={{version}} -f docker/dev.Dockerfile -t "hushscript-typescript-proddeps:node{{version}}" .
     out="$(mktemp -d)"
@@ -164,7 +163,7 @@ build version=floor:
     }'
     docker run {{sandbox}} --network none --user "$user" -v "$out/consumer":/consumer:ro -w /consumer "$node_image" \
       timeout 60 node --input-type=module -e "$check"
-    # require(esm) works through the "default" export condition (Node 22.12 and newer).
+    # require(esm) works through the "default" export condition (every supported Node).
     docker run {{sandbox}} --network none --user "$user" -v "$out/consumer":/consumer:ro -w /consumer "$node_image" \
       timeout 60 node --disable-warning=ExperimentalWarning -e 'const sdk = require("@hushscript/sdk"); if (Object.keys(sdk.ERROR_CATALOG).length === 0) throw new Error("tables missing"); console.log("require ok");'
     docker run {{sandbox}} --network none --user "$user" -v "$out/consumer":/consumer:ro -w /consumer {{bun_image}} \
@@ -177,7 +176,7 @@ build version=floor:
 publish-dry-run version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
-    {{ if version == "22" { "" } else if version == "24" { "" } else if version == "26" { "" } else { error("version must be 22, 24, or 26") } }}
+    {{ if version == "24" { "" } else if version == "26" { "" } else { error("version must be 24 or 26") } }}
     docker build --quiet --target dev --build-arg NODE_VERSION={{version}} -f docker/dev.Dockerfile -t "hushscript-typescript-dev:node{{version}}" .
     out="$(mktemp -d)"
     trap 'rm -rf "$out"' EXIT
@@ -208,7 +207,7 @@ regen spec="":
     docker compose build regen
     docker compose run --rm ${extra[@]+"${extra[@]}"} regen timeout 600 node scripts/generate.mjs ${spec:+"$spec"}
 
-# lint, then test and conformance, then examples and build; no argument runs Node 22, 24, and 26
+# lint, then test and conformance, then examples and build; no argument runs Node 24 and 26
 ci version="":
     #!/usr/bin/env bash
     set -euo pipefail

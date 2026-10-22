@@ -316,7 +316,6 @@ describe("failure messages name the underlying error", () => {
   });
 });
 
-/* eslint-disable n/no-unsupported-features/node-builtins -- stable in every Node 22 release we test; the rule's table lags */
 /** A 200 whose body delivers one chunk and then fails, or never ends. */
 function brokenBody(mode: "error" | "stall"): Response {
   const stream = new ReadableStream<Uint8Array>({
@@ -327,8 +326,6 @@ function brokenBody(mode: "error" | "stall"): Response {
   });
   return new Response(stream, { status: 200 });
 }
-
-/* eslint-enable n/no-unsupported-features/node-builtins */
 
 describe("signed URLs and secrets stay out of wrapped messages (R96)", () => {
   const SIG = "9f2c41d7a0b5c3e8f1a2b3c4d5e6f708";

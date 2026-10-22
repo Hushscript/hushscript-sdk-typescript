@@ -13,7 +13,7 @@
     "url": "https://github.com/Hushscript/hushscript-sdk-typescript/issues"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   },
   "sideEffects": false,
   "files": [

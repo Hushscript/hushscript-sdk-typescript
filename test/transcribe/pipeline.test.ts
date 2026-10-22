@@ -1,4 +1,3 @@
-/* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";
 import { mkdtemp, writeFile } from "node:fs/promises";

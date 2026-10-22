@@ -17,7 +17,7 @@ file from this repository byte for byte.
 | `.github/CODEOWNERS`                                            | copy          | Nothing. The team handle is a placeholder until the org team exists.                                                                                                        |
 | `.github/workflows/scorecard.yml`, `dependency-review.yml`      | copy          | Nothing.                                                                                                                                                                    |
 | `.github/workflows/codeql.yml`                                  | adapt         | `languages:` and the `category` (`javascript-typescript`, `python`, `go`). PHP has no CodeQL job; see "PHP".                                                                |
-| `.github/workflows/ci.yml`                                      | adapt         | The matrix values (`node: ['22', '24']` becomes the language's floor and latest) and the env name passed to `just ci`.                                                      |
+| `.github/workflows/ci.yml`                                      | adapt         | The matrix values (`node: ['24', '26']` becomes the language's floor and latest) and the env name passed to `just ci`.                                                      |
 | `.github/workflows/nightly.yml`                                 | adapt         | Recipe names stay. Drop the `fuzz` job for PHP. Python uses `FC_RUNS_FACTOR` equivalents (Hypothesis `max_examples` profile), Go runs native fuzz targets for 60 s each.    |
 | `.github/workflows/release.yml`                                 | adapt         | `release-type` in the workflow input and in `release-please-config.json` (`node`, `python`, `go`, `php`).                                                                   |
 | `.github/workflows/publish.yml`                                 | adapt         | The registry steps; see "Publish".                                                                                                                                          |
@@ -107,7 +107,7 @@ repository's justfile for the images both use.
 
 One multi-stage file, `docker/dev.Dockerfile`:
 
-1. Named stages hold the digest-pinned official images (`node22`, `node24`). `ARG NODE_VERSION` selects
+1. Named stages hold the digest-pinned official images (`node24`, `node26`). `ARG NODE_VERSION` selects
    one through `FROM node${NODE_VERSION} AS base`. This keeps the digests as literal `FROM` lines,
    which Dependabot can update. The indirection needs `# hadolint ignore=DL3006`.
 2. `base` creates the non-root user (uid and gid 10001), sets `HOME=/tmp` and `WORKDIR /work`.
@@ -115,7 +115,7 @@ One multi-stage file, `docker/dev.Dockerfile`:
    13.1).
 4. `dev` copies `node_modules` from `deps`, copies the source, puts `node_modules/.bin` on `PATH` and
    switches to uid 10001.
-5. `mutation` builds on the digest-pinned full images (`node22full`, `node24full`, selected like `base`)
+5. `mutation` builds on the digest-pinned full images (`node24full`, `node26full`, selected like `base`)
    because StrykerJS needs `ps` and nothing may install packages at build time. It repeats the user,
    `PATH` and source steps of `dev`.
 6. `proddeps` installs production dependencies only. `just build` uses it to assemble an install
@@ -131,7 +131,7 @@ committed (Dependabot maintains it afterwards):
 d=$(mktemp -d) && cp package.json "$d" && chmod 777 "$d"
 docker run --rm --init --label claude.adhoc=1 --label sdk.test=1 --cap-drop ALL \
   --security-opt no-new-privileges --memory 2g --pids-limit 256 --user "$(id -u):$(id -g)" \
-  -e HOME=/tmp --tmpfs /tmp -v "$d":/work -w /work node:22-bookworm-slim@sha256:<digest> \
+  -e HOME=/tmp --tmpfs /tmp -v "$d":/work -w /work node:24-bookworm-slim@sha256:<digest> \
   timeout 300 npm install --package-lock-only --ignore-scripts --no-audit --no-fund
 cp "$d/package-lock.json" .
 ```
@@ -164,7 +164,7 @@ FC_RUNS_FACTOR`; the nightly job sets the factor to 10.
   real tarball, a type check of a consumer file against the packed `.d.ts` with the oldest supported
   TypeScript (devDependency alias `typescript-floor`, `npm:typescript@5.5.4`; Dependabot ignores it;
   `skipLibCheck: false`, `module: NodeNext`), then an `import` of the tarball in clean Node (the
-  matrix version), a `require()` of it in the same Node image (`require(esm)`, Node 22.12 and newer)
+  matrix version), a `require()` of it in the same Node image (`require(esm)`, Node 24 and newer)
   and an `import` in clean Bun and Deno containers. `package.json` `exports["."]` has `types`,
   `import` and `default` (the last makes `require(esm)` resolve). A new language states its consumer
   floor in the README and checks it the same way (Python: the oldest supported interpreter installs
@@ -298,8 +298,8 @@ The workflows cannot do these. Do every one on a new repository before the first
    hand (plan Task 19), then adds a trusted publisher on npmjs.com (organization `Hushscript`,
    repository, workflow `publish.yml`, environment `release`). PyPI: add a pending trusted publisher
    before the first release. Store no registry token in GitHub.
-6. **Branch protection on `main`.** Pull requests only, required checks `just ci (node 22)`, `just ci
-(node 24)` (renamed per language) and CodeQL, linear history, signed commits, no force-push,
+6. **Branch protection on `main`.** Pull requests only, required checks `just ci (node 24)`, `just ci
+(node 26)` (renamed per language) and CodeQL, linear history, signed commits, no force-push,
    CODEOWNERS review. Releases and regen PRs are signed by the App through the API, so the signed
    commits rule holds for them.
 7. **Private vulnerability reporting** on.
