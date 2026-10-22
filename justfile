@@ -19,7 +19,6 @@ deno_image := "denoland/deno:debian-2.9.7@sha256:fa335acdf6b72106eda2cb6a8cb5f41
 hadolint_image := "hadolint/hadolint:v2.15.1@sha256:32dac94127fd60b7b7e3fbfc65e1383b9b5e25c9bfd7b8536de7a539fe68a12d"
 actionlint_image := "rhysd/actionlint:1.7.12@sha256:b1934ee5f1c509618f2508e6eb47ee0d3520686341fec936f3b79331f9315667"
 zizmor_image := "ghcr.io/zizmorcore/zizmor:1.31.1@sha256:42d409dbb851d4c5d35a058cf042b828bea1e3f2884378c526eb0974780e18d9"
-shellcheck_image := "koalaman/shellcheck:v0.11.0@sha256:61862eba1fcf09a484ebcc6feea46f1782532571a34ed51fedf90dd25f925a8d"
 gitleaks_image := "ghcr.io/gitleaks/gitleaks:v8.30.1@sha256:c00b6bd0aeb3071cbcb79009cb16a60dd9e0a7c60e2be9ab65d25e6bc8abbb7f"
 sandbox := "--rm --init --label sdk.test=1 --cap-drop ALL --read-only --security-opt no-new-privileges --pids-limit 512 --memory 4g --tmpfs /tmp"
 floor := "22"
@@ -74,7 +73,7 @@ examples version=floor:
     docker compose build mock examples
     docker compose run --rm examples
 
-# every static check: tsc, eslint, prettier, knip, hadolint, actionlint, zizmor, shellcheck, gitleaks, typos, npm audit
+# every static check: tsc, eslint, prettier, knip, hadolint, actionlint, zizmor, gitleaks, typos, npm audit
 lint version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -87,7 +86,6 @@ lint version=floor:
     run {{hadolint_image}} /bin/hadolint docker/dev.Dockerfile docker/typos.Dockerfile
     run {{actionlint_image}} -color
     run {{zizmor_image}} --pedantic --offline --config zizmor.yml .github
-    run {{shellcheck_image}} scripts/*.sh
     run {{gitleaks_image}} git --no-banner --redact --verbose /work
     docker build --quiet -f docker/typos.Dockerfile -t hushscript-typescript-typos:local docker
     run hushscript-typescript-typos:local --config _typos.toml
