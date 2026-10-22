@@ -4,7 +4,7 @@ import { camelize, unknownFields } from "../camel.ts";
 import { ACCOUNT } from "../shapes.ts";
 import { readBody } from "../transcribe/common.ts";
 
-/** `GET /v1/account` as the API sends it; `purchases_remaining_in_window` is not in the OpenAPI schema yet. */
+/** `GET /v1/account` as the API sends it. */
 export type RawAccount = components["schemas"]["AccountResponse"];
 
 /** The caller's current upload admission limits (the API's `limits` object, camelCased). */
@@ -25,6 +25,7 @@ export interface Account {
   balanceSeconds: number;
   /** Committed to in-flight jobs; already deducted from `balanceSeconds`. */
   heldSeconds: number;
+  /** Always null; minutes do not expire. Kept for compatibility. */
   creditsExpireAt: Date | null;
   cardOnFile: boolean;
   /** For example `us`, `eu`, `apac` or `oc`. */
@@ -42,6 +43,7 @@ export interface Balance {
   minutes: number;
   /** Committed to in-flight jobs; already deducted from `seconds`. */
   heldSeconds: number;
+  /** Always null; minutes do not expire. Kept for compatibility. */
   expiresAt: Date | null;
   /** Agent accounts only, else null. */
   purchasesRemaining: number | null;
@@ -56,8 +58,8 @@ const ACCOUNT_FIELDS: ReadonlySet<string> = new Set([
     "card_on_file",
     "data_region",
     "limits",
+    "purchases_remaining_in_window",
   ] satisfies (keyof RawAccount)[]),
-  "purchases_remaining_in_window",
 ]);
 
 function expiry(raw: RawAccount): Date | null {
@@ -65,7 +67,7 @@ function expiry(raw: RawAccount): Date | null {
 }
 
 function purchasesRemaining(raw: RawAccount): number | null {
-  const remaining = (raw as Record<string, unknown>)["purchases_remaining_in_window"];
+  const remaining = raw.purchases_remaining_in_window;
   return typeof remaining === "number" && Number.isSafeInteger(remaining) && remaining >= 0
     ? remaining
     : null;
