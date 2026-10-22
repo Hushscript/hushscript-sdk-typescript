@@ -259,16 +259,16 @@ Reuse these SHAs; refresh them with Dependabot.
 | Action                             | SHA                                        | Version |
 | ---------------------------------- | ------------------------------------------ | ------- |
 | `actions/checkout`                 | `3d3c42e5aac5ba805825da76410c181273ba90b1` | v7.0.1  |
-| `actions/setup-node`               | `820762786026740c76f36085b0efc47a31fe5020` | v7.0.0  |
-| `actions/upload-artifact`          | `043fb46d1a93c77aae656e7c1c64a875d1fc6a0a` | v7.0.1  |
+| `actions/setup-node`               | `949feb2413d6458794dcd2491c4babbbce0c15c1` | v7.1.0  |
+| `actions/upload-artifact`          | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` | v7.0.2  |
 | `actions/attest-build-provenance`  | `4d101475d8b20a2381f78447822ac1eab6504dd8` | v4.2.2  |
 | `actions/dependency-review-action` | `a1d282b36b6f3519aa1f3fc636f609c47dddb294` | v5.0.0  |
-| `step-security/harden-runner`      | `351661ca32ac09a36dc5ee2d536e3128f2a3c8ed` | v2.22.0 |
+| `step-security/harden-runner`      | `dc2769abcc0fcfbadfc1df54081c1608579ef6b2` | v2.22.2 |
 | `extractions/setup-just`           | `53165ef7e734c5c07cb06b3c8e7b647c5aa16db3` | v4.0.0  |
-| `github/codeql-action`             | `2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2` | v4.38.2 |
-| `ossf/scorecard-action`            | `2d1146689b8cda280b9bc96326124645441f03bc` | v2.4.4  |
+| `github/codeql-action`             | `9b3254085494b55a0f7c4c2b3d2d52cc712ce370` | v4.39.1 |
+| `ossf/scorecard-action`            | `fa7117db83c52d787ae5a89f350999701505d78e` | v2.5.0  |
 | `googleapis/release-please-action` | `45996ed1f6d02564a971a2fa1b5860e934307cf7` | v5.0.0  |
-| `actions/create-github-app-token`  | `bcd2ba49218906704ab6c1aa796996da409d3eb1` | v3.2.0  |
+| `actions/create-github-app-token`  | `64ab729a6294000f5aa4a4bc0b73d1f32bc45510` | v3.3.0  |
 
 Tool images are listed with their digests at the top of this repository's `justfile`.
 
