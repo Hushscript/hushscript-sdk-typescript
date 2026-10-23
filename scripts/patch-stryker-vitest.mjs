@@ -6,7 +6,7 @@ const root = resolve(process.argv[2] ?? "node_modules");
 /** @type {[string, string][]} */
 const versions = [
   ["@stryker-mutator/vitest-runner", "10.0.0"],
-  ["vitest", "5.0.3"],
+  ["vitest", "5.0.5"],
 ];
 for (const [name, version] of versions) {
   /** @type {unknown} */
@@ -88,4 +88,4 @@ if (pending.some(({ changed }) => changed !== pending[0]?.changed)) {
 for (const { path, patched, changed } of pending) {
   if (changed) writeFileSync(path, patched);
 }
-console.log("Pinned Stryker 10.0.0 / Vitest 5.0.3 selection patch verified");
+console.log("Pinned Stryker 10.0.0 / Vitest 5.0.5 selection patch verified");

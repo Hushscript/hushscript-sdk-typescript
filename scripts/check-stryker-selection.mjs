@@ -2,7 +2,6 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import {
-  // eslint-disable-next-line n/no-unsupported-features/node-builtins -- Dev images pin Node 22.23.3 or newer.
   cpSync,
   mkdirSync,
   mkdtempSync,
@@ -49,7 +48,7 @@ function checkPatchStates() {
   mkdirSync(join(fixture, "vitest"));
   const runnerPackage = join(runnerRoot, "package.json");
   writeFileSync(runnerPackage, '{"version":"10.0.0"}');
-  writeFileSync(join(fixture, "vitest/package.json"), '{"version":"5.0.3"}');
+  writeFileSync(join(fixture, "vitest/package.json"), '{"version":"5.0.5"}');
   const files = ["test-helpers.js", "stryker-setup.js", "vitest-test-runner.js"];
   const patched = files.map((file) =>
     readFileSync(join(modules, "@stryker-mutator/vitest-runner/dist/src", file), "utf8"),
@@ -144,8 +143,8 @@ function checkPatchStates() {
   rejectWithoutWrites(/Expected @stryker-mutator\/vitest-runner@10\.0\.0/);
   writeFileSync(runnerPackage, '{"version":"10.0.0"}');
   writeFileSync(join(fixture, "vitest/package.json"), '{"version":"5.0.4"}');
-  rejectWithoutWrites(/Expected vitest@5\.0\.3/);
-  writeFileSync(join(fixture, "vitest/package.json"), '{"version":"5.0.3"}');
+  rejectWithoutWrites(/Expected vitest@5\.0\.5/);
+  writeFileSync(join(fixture, "vitest/package.json"), '{"version":"5.0.5"}');
   seed(original.map((source, index) => (index === 2 ? `${source}\n` : source)));
   rejectWithoutWrites(/Unexpected original hash/);
   seed(

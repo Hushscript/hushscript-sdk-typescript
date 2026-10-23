@@ -12,8 +12,8 @@ export interface paths {
             cookie?: never;
         };
         /**
-         * Read the account's balance, expiry and upload admission limits
-         * @description Returns the caller's net credit balance, when that balance is next scheduled to expire without a completed transcription or purchase, whether a card is on file, the account's data region, and the account's current daily-minutes and concurrent-jobs limits. Call this before create_upload to confirm there is enough balance and daily headroom for the upload about to be attempted.
+         * Read the account's balance and upload admission limits
+         * @description Returns the caller's net credit balance, whether a card is on file, the account's data region, and the account's current daily-minutes and concurrent-jobs limits. Call this before create_upload to confirm there is enough balance and daily headroom for the upload about to be attempted.
          */
         get: operations["get_account"];
         put?: never;
@@ -53,7 +53,7 @@ export interface paths {
         };
         /**
          * Fetch a page of presigned direct-to-R2 part URLs
-         * @description Returns a fresh page of presigned PUT URLs for the given job's direct-to-R2 upload, starting at the requested part number. Presigned URLs expire, so a client resuming a stalled transfer should call this again rather than reusing URLs from create_upload's response.
+         * @description Returns a fresh page of presigned PUT URLs for the given job's direct-to-R2 upload, starting at the requested part number. Presigned URLs expire, so a client resuming a stalled transfer should call this again rather than reusing URLs from create_upload's response. Answers 404 when direct-to-R2 uploads are not available for the job; send the parts through upload_part then.
          */
         get: operations["get_upload_part_urls"];
         put?: never;
@@ -233,7 +233,7 @@ export interface paths {
         };
         /**
          * List purchasable minute packs
-         * @description Returns the account's minute-pack catalogue, priced in the account's own currency, including any referral buyer bonus currently available. Read the id of the pack to buy from here before calling buy_minutes. Needs the billing scope AND machine billing switched on for the account in the Hushscript app; either one off is a pat_scope_missing (code 2023) refusal, whichever it was.
+         * @description Returns the account's minute-pack catalogue, priced in the account's own currency, including any referral buyer bonus currently available. Read the id of the pack to buy from here before calling buy_minutes. Needs the billing scope, the token's own buy-minutes flag (set when the token is created), AND machine billing switched on for the account in the Hushscript app; any one off is a pat_scope_missing (code 2023) refusal, whichever it was.
          */
         get: operations["list_packs"];
         put?: never;
@@ -255,7 +255,7 @@ export interface paths {
         put?: never;
         /**
          * Charge the account's saved default card for a minute pack
-         * @description Charges a saved, fast_checkout_eligible payment method for one pack and credits the account's balance on success. quick_payment_method_id must be the account's current default, except when the account has no default at all, in which case naming an eligible card here makes it the new default. quick_payment_method_id is required: this API can only complete a purchase against a card already on file and has no way to open an interactive Checkout session, so an agent cannot use it to attach a new card. list_saved_cards can only list a card already on file, not create one; add a card first, either through the Hushscript app or by opening the hosted Checkout session create_setup_session returns. A request with no quick_payment_method_id, or a Quick Buy charge that needed authentication, a different payment method, or was declined, is refused outright rather than opened as a Checkout session nobody in this flow could complete. Needs the billing scope AND machine billing switched on for the account in the Hushscript app; either one off is a pat_scope_missing (code 2023) refusal, whichever it was.
+         * @description Charges a saved, fast_checkout_eligible payment method for one pack and credits the account's balance on success. quick_payment_method_id must be the account's current default, except when the account has no default at all, in which case naming an eligible card here makes it the new default. quick_payment_method_id is required: this API can only complete a purchase against a card already on file and has no way to open an interactive Checkout session, so an agent cannot use it to attach a new card. list_saved_cards can only list a card already on file, not create one; add a card first, either through the Hushscript app or by opening the hosted Checkout session create_setup_session returns. A request with no quick_payment_method_id, or a Quick Buy charge that needed authentication, a different payment method, or was declined, is refused outright rather than opened as a Checkout session nobody in this flow could complete. Needs the billing scope, the token's own buy-minutes flag (set when the token is created), AND machine billing switched on for the account in the Hushscript app; any one off is a pat_scope_missing (code 2023) refusal, whichever it was.
          */
         post: operations["buy_minutes"];
         delete?: never;
@@ -273,7 +273,7 @@ export interface paths {
         };
         /**
          * List the account's saved payment methods
-         * @description Returns every payment method saved on the account plus which one is the current default. This is the only source of a quick_payment_method_id for buy_minutes; it can only list a card already on file, not attach a new one. Needs the billing scope AND machine billing switched on for the account in the Hushscript app; either one off is a pat_scope_missing (code 2023) refusal, whichever it was.
+         * @description Returns every payment method saved on the account plus which one is the current default. This is the only source of a quick_payment_method_id for buy_minutes; it can only list a card already on file, not attach a new one. Needs the billing scope, the token's own buy-minutes flag (set when the token is created), AND machine billing switched on for the account in the Hushscript app; any one off is a pat_scope_missing (code 2023) refusal, whichever it was.
          */
         get: operations["list_saved_cards"];
         put?: never;
@@ -295,7 +295,7 @@ export interface paths {
         put?: never;
         /**
          * Switch which saved card Quick Buy charges
-         * @description Sets the given payment method as the account's default, which is the card buy_minutes charges when a caller sends its id as quick_payment_method_id. Use this to switch the default or to pick among multiple eligible cards; buy_minutes only adopts one automatically when the account has no default at all. The id must belong to a payment method already on file, from list_saved_cards; a well formed id this account does not own answers not found, exactly like one that is not a payment method at all. Needs the billing scope AND machine billing switched on for the account in the Hushscript app; either one off is a pat_scope_missing (code 2023) refusal, whichever it was.
+         * @description Sets the given payment method as the account's default, which is the card buy_minutes charges when a caller sends its id as quick_payment_method_id. Use this to switch the default or to pick among multiple eligible cards; buy_minutes only adopts one automatically when the account has no default at all. The id must belong to a payment method already on file, from list_saved_cards; a well formed id this account does not own answers not found, exactly like one that is not a payment method at all. Needs the billing scope, the token's own buy-minutes flag (set when the token is created), AND machine billing switched on for the account in the Hushscript app; any one off is a pat_scope_missing (code 2023) refusal, whichever it was.
          */
         post: operations["set_default_card"];
         delete?: never;
@@ -315,7 +315,7 @@ export interface paths {
         put?: never;
         /**
          * Open a hosted Checkout Session that saves a card with no charge
-         * @description Creates a Stripe Checkout Session in setup mode and returns its checkout_url. Open that URL in a browser you control (your own automation, not this API) so Stripe can render the card form and handle any bank authentication itself; card details never pass through this API. No charge is made. Once the caller completes the hosted page, the saved card becomes available from list_saved_cards and can be set as the default with set_default_card; list_saved_cards can lag a just-completed Session by up to 30 seconds, since nothing calls back into this API when the hosted page finishes, so retry rather than concluding the save failed. expires_at is when the Session stops accepting a card; call this endpoint again for a fresh link after that. idempotency_key is optional: omit it and every call opens a new Session, which is safe since a setup Session is never charged and expires on its own; supply your own key only if you want a retried call to land on the same Session instead. Needs the billing scope AND machine billing switched on for the account in the Hushscript app; either one off is a pat_scope_missing (code 2023) refusal, whichever it was.
+         * @description Creates a Stripe Checkout Session in setup mode and returns its checkout_url. Open that URL in a browser you control (your own automation, not this API) so Stripe can render the card form and handle any bank authentication itself; card details never pass through this API. No charge is made. Once the caller completes the hosted page, the saved card becomes available from list_saved_cards and can be set as the default with set_default_card; list_saved_cards can lag a just-completed Session by up to 30 seconds, since nothing calls back into this API when the hosted page finishes, so retry rather than concluding the save failed. expires_at is when the Session stops accepting a card; call this endpoint again for a fresh link after that. idempotency_key is optional: omit it and every call opens a new Session, which is safe since a setup Session is never charged and expires on its own; supply your own key only if you want a retried call to land on the same Session instead. Needs the billing scope, the token's own buy-minutes flag (set when the token is created), AND machine billing switched on for the account in the Hushscript app; any one off is a pat_scope_missing (code 2023) refusal, whichever it was.
          */
         post: operations["create_setup_session"];
         delete?: never;
@@ -393,7 +393,7 @@ export interface paths {
         };
         /**
          * Read the caller's organization summary
-         * @description A pure passthrough of GET /api/org's body: plan state and term, pool balance and expiry, retention policy, tax id, auto-renewal source and failure count, the workspace-wide default per-member cap, and the caller's own effective cap and month-to-date spend against the pool. Membership only, not admin -- renewal_user_id is visible to admins only.
+         * @description A pure passthrough of GET /api/org's body: plan state and term, pool balance, retention policy, tax id, auto-renewal source and failure count, the workspace-wide default per-member cap, and the caller's own effective cap and month-to-date spend against the pool. Membership only, not admin -- renewal_user_id is visible to admins only.
          */
         get: operations["get_org"];
         put?: never;
@@ -719,7 +719,7 @@ export interface paths {
         put?: never;
         /**
          * Claim a paid agent signup into a real account
-         * @description Exchanges a paid, unclaimed agent signup for the account it pays for. Presents the claim_secret returned once by POST /v1/agent/accounts; a wrong secret, an unknown signup_id, an already claimed signup, a refunded signup, and an expired signup all answer the identical agent_claim_invalid error so a caller can never learn which of those is true. Only once that secret checks out does payment state matter: a signup whose Checkout Session has not settled to paid answers wrong_state instead. A successful claim is single use; creates exactly one account with a synthetic, unresolvable login identity; grants the paid pack once, never twice, even on a retried request; and mints exactly one personal access token with the account's own agent scopes, returned only in this response.
+         * @description Exchanges a paid, unclaimed agent signup for the account it pays for. Presents the claim_secret returned once by POST /v1/agent/accounts; a wrong secret, an unknown signup_id, an already claimed signup whose token can no longer be re-minted, a refunded signup, and an expired signup all answer the identical agent_claim_invalid error so a caller can never learn which of those is true. Only once that secret checks out does payment state matter: a signup whose Checkout Session has not settled to paid answers wrong_state instead. A successful claim creates exactly one account with a synthetic, unresolvable login identity, grants the paid pack once, never twice, even on a retried request, and mints one personal access token with the account's own agent scopes. Only the token's hash is stored. If the 201 is lost, repeat the request with the same claim_secret: while that token has not yet made a successful request, and for up to one hour after it was minted, the retry answers 201 with the same user_id, no second pack grant and a NEW token for the same account; the lost token stops working. Making one successful call with the new token ends the window, and the same request then answers agent_claim_invalid again. A late-landing earlier retry can replace the secret of the token you hold, so make that one call right away, and if it answers 401 within the hour, repeat the claim. A retry that overlaps a first claim still in flight answers rate_limited with Retry-After: 2 or re-mints. Until the token is first used or one hour has passed, the claim_secret works as a credential for the account, so keep it private.
          */
         post: operations["claim_agent_account"];
         delete?: never;
@@ -739,7 +739,7 @@ export interface paths {
         put?: never;
         /**
          * Rotate the calling agent PAT
-         * @description Atomically mints a successor personal access token and revokes the one that authenticated this request. A machine account has no password and no usable mailbox, so this is its only way to rotate a leaked credential. The successor keeps the predecessor's scopes, billing_enabled flag, name, client_label, and expiry policy; only the secret changes. The predecessor fails authentication on the very next request. This route references no token but the one that called it: it cannot list, mint, or revoke any other credential.
+         * @description Atomically mints a successor personal access token for the one that authenticated this request. A machine account has no password and no usable mailbox, so this is its only way to rotate a leaked credential. The successor keeps the predecessor's scopes, billing_enabled flag, name, client_label, and expiry policy; only the secret changes. The predecessor is not revoked at once. It stays in a grace period that ends at the successor's first successful request or one hour after the rotation, whichever comes first. During that period it authenticates only this route, and every other route answers it with a bare 401. If the 201 is lost, call this route again with the predecessor while the successor is still unused: the response carries the same pat_id and a NEW secret, and the earlier successor secret stops working. Keep the predecessor until the successor has made one successful call, because a late-landing earlier retry can replace the successor's secret. Then make one call with the successor right away to retire the predecessor. Once the successor has been used or the hour has passed, the predecessor is refused here as well. This route references no token but the one that called it and that token's own successor: it cannot list, mint, or revoke any other credential.
          */
         post: operations["rotate_agent_credentials"];
         delete?: never;
@@ -767,8 +767,10 @@ export interface components {
             /** @description The organization's shared pool balance in seconds. Present on an org-funded balance-shortfall error instead of balance_seconds. */
             org_balance_seconds?: number;
             limits?: components["schemas"]["UploadLimits"];
-            /** @description Structured recovery detail for an error that is not a plain balance shortfall. Present on agent_pack_locked and agent_purchase_capped. */
+            /** @description Structured recovery detail for an error that is not a plain balance shortfall. Present on agent_pack_locked, agent_purchase_capped and policy_version_stale. */
             details?: {
+                /** @description The server's current terms version. Present on policy_version_stale; send it as accept_terms_version to retry. */
+                current_version?: string;
                 /** @description Pack ids the agent account may buy right now. Present on agent_pack_locked; retry with one of these. */
                 allowed_packs?: string[];
                 /** @description The per-credential purchase cap for the rolling window. Present on agent_purchase_capped. */
@@ -795,12 +797,14 @@ export interface components {
             balance_seconds: number;
             /** @description Seconds currently committed to in-flight jobs and not yet settled. */
             held_seconds: number;
-            /** @description Unix seconds after which the balance expires without a completed transcription or purchase, or null if no expiry is currently armed. */
+            /** @description Always null; minutes do not expire. Retained for compatibility until the next SDK major version. */
             credits_expire_at: number | null;
             card_on_file: boolean;
             /** @description The region this account's data lives in, e.g. us, eu, apac or oc. */
             data_region: string;
             limits: components["schemas"]["UploadLimits"];
+            /** @description Agent accounts only: how many purchases are still available in the current rolling window, never below 0. Absent for human accounts. */
+            purchases_remaining_in_window?: number;
         };
         PresignedPartUrl: {
             /** @description The 1-based part number this URL is for. */
@@ -863,7 +867,7 @@ export interface components {
         };
         Job: {
             id: string;
-            /** @description One of uploading, fetching, queued, processing, done or failed. */
+            /** @description One of uploading, fetching, queued, processing, awaiting_unlock, done or failed. */
             state: string;
             mode: string;
             declared_seconds: number;
@@ -1058,7 +1062,7 @@ export interface components {
             created_at: number;
             deleted_at: number;
             /**
-             * @description Which deletion path removed the transcript: an explicit delete (manual), the transcript's own auto_delete_at retention date (scheduled), the dormant-account purge (dormant), or the global retention sweep (expired).
+             * @description Which deletion path removed the transcript: an explicit delete (manual), the transcript's own auto_delete_at retention date (scheduled), the personal-transcript purge after about 24 months of account inactivity and a 30-day warning (dormant; excludes legal holds and firm custody), or the global retention sweep (expired).
              * @enum {string}
              */
             cause: "manual" | "scheduled" | "dormant" | "expired";
@@ -1272,7 +1276,7 @@ export interface components {
         AgentClaimResponse: {
             /** @description The account created by this claim. There is no login path for it; authenticate with pat instead. */
             user_id: string;
-            /** @description Returned exactly once. Only its hash is stored; there is no way to recover it later. */
+            /** @description Only its hash is stored; there is no way to recover it later. A retry of the claim while this token is unused and within one hour of the mint returns a new token for the same account. */
             pat: string;
             /** @description The scopes carried by pat. */
             scopes: string[];
@@ -1280,7 +1284,7 @@ export interface components {
             balance_seconds: number;
         };
         AgentCredentialsRotateResponse: {
-            /** @description The successor token, returned exactly once. Only its hash is stored; there is no way to recover it later. The predecessor that authenticated this request stops working immediately. */
+            /** @description The successor token. Only its hash is stored; there is no way to recover it later. A repeated call with the predecessor while this token is unused returns a new secret for the same pat_id. The predecessor keeps working for this route only, until the successor's first successful request or one hour, whichever comes first. */
             pat: string;
             /** @description The successor's id. */
             pat_id: string;
@@ -1312,7 +1316,7 @@ export interface components {
             balance_seconds: number;
             /** @description balance_seconds floored at zero, and zeroed outright when the org is outside its funding window (frozen or lapsed past grace). */
             spendable_seconds: number;
-            /** @description Unix seconds the pool's own rolling 365-day expiry falls at, re-anchored on every credit and every settle. Null if the pool has never held a positive balance. */
+            /** @description Always null; minutes do not expire. Retained for compatibility until the next SDK major version. */
             pool_expires_at: number | null;
             default_retention_days: number | null;
             max_retention_days: number | null;
@@ -1432,7 +1436,7 @@ export interface operations {
         requestBody: {
             content: {
                 "application/json": {
-                    /** @description The exact declared byte size of the audio file, up to the 5 GB cap. */
+                    /** @description The exact declared byte size of the audio file, from 1 byte up to the 5 GB cap. */
                     size_bytes: number;
                     /** @description The declared duration in seconds, from 15 seconds up to the 10 hour cap. Rechecked against the probed exact duration at complete_upload. */
                     duration_seconds: number;
@@ -1567,7 +1571,7 @@ export interface operations {
                         part_urls: components["schemas"]["PresignedPartUrl"][];
                         /** @description The next part number not covered by this page, or null once every part has a URL. */
                         next_part_number: number | null;
-                    } | null;
+                    };
                 };
             };
             /** @description Error response. */
@@ -3564,7 +3568,10 @@ export interface operations {
         parameters: {
             query?: never;
             header?: never;
-            path?: never;
+            path: {
+                /** @description The signup id returned by agent signup. */
+                signup_id: string;
+            };
             cookie?: never;
         };
         requestBody: {

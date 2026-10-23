@@ -1,4 +1,3 @@
-/* eslint-disable n/no-unsupported-features/node-builtins -- ReadableStream is stable in every Node 22 release we test; the rule's table lags */
 import type { Stats } from "node:fs";
 import { open, stat, type FileHandle } from "node:fs/promises";
 import { PreflightError, UploadError, describeError } from "../errors.ts";

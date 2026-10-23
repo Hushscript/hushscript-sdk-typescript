@@ -26,7 +26,7 @@ interface Probe {
 
 /**
  * How many times undici sends a GET that a reused connection dropped after the whole request
- * arrived. It does not replay it (Node 22 and 24), so the mutating cases below could not be
+ * arrived. It does not replay it (Node 24 and 26), so the mutating cases below could not be
  * replayed by accident either; the probe is live because the server counts every request line on any
  * connection, so a replay would show up as a second entry, as a request on a new connection does.
  */
