@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.0](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.0.1...v1.1.0) (2026-10-23)
+
+
+### Features
+
+* sync with the api spec ([ef37f79](https://github.com/Hushscript/hushscript-sdk-typescript/commit/ef37f79636d2eb86912b77d3f0050f9796d8c511))
+
 ## [1.0.1](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.0.0...v1.0.1) (2026-10-13)
 
 
