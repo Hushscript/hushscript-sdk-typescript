@@ -3,6 +3,7 @@
   "testRunner": "vitest",
   "plugins": ["@stryker-mutator/vitest-runner"],
   "mutate": ["src/http/**/*.ts", "src/transcribe/**/*.ts"],
+  "disableTypeChecks": "src/{http,transcribe}/**/*.ts",
   "coverageAnalysis": "perTest",
   "tempDirName": ".stryker-tmp",
   "cleanTempDir": false,
