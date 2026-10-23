@@ -189,7 +189,7 @@ try {
   writeFileSync(join(work, "package.json"), '{"type":"module"}');
   writeFileSync(
     join(work, "vitest.config.ts"),
-    `export default {test:{include:['selection.test.ts'],maxWorkers:1}};`,
+    `export default {test:{include:['selection.test.ts'],maxWorkers:1,fsModuleCache:false}};`,
   );
   writeFileSync(
     join(work, "selection.test.ts"),
