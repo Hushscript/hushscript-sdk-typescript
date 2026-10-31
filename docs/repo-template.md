@@ -263,7 +263,7 @@ Reuse these SHAs; refresh them with Dependabot.
 | `actions/upload-artifact`          | `cf430e030ddbb5b0abf93d22962f4752f3646cd9` | v7.0.2  |
 | `actions/attest-build-provenance`  | `4d101475d8b20a2381f78447822ac1eab6504dd8` | v4.2.2  |
 | `actions/dependency-review-action` | `a1d282b36b6f3519aa1f3fc636f609c47dddb294` | v5.0.0  |
-| `step-security/harden-runner`      | `dc2769abcc0fcfbadfc1df54081c1608579ef6b2` | v2.22.2 |
+| `step-security/harden-runner`      | `46b06cea07f9e64621fdf066ba77ac6915163d43` | v2.22.3 |
 | `extractions/setup-just`           | `53165ef7e734c5c07cb06b3c8e7b647c5aa16db3` | v4.0.0  |
 | `github/codeql-action`             | `9b3254085494b55a0f7c4c2b3d2d52cc712ce370` | v4.39.1 |
 | `ossf/scorecard-action`            | `fa7117db83c52d787ae5a89f350999701505d78e` | v2.5.0  |
