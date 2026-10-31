@@ -5,7 +5,7 @@ import { resolve } from "node:path";
 const root = resolve(process.argv[2] ?? "node_modules");
 /** @type {[string, string][]} */
 const versions = [
-  ["@stryker-mutator/vitest-runner", "10.0.0"],
+  ["@stryker-mutator/vitest-runner", "10.1.1"],
   ["vitest", "5.0.5"],
 ];
 for (const [name, version] of versions) {
@@ -15,21 +15,6 @@ for (const [name, version] of versions) {
   if (pkg.version !== version) throw new Error(`Expected ${name}@${version}, got ${pkg.version}`);
 }
 
-const oldName = `function collectTestName({ name, suite, }) {
-    const nameParts = [name];
-    let currentSuite = suite;
-    while (currentSuite) {
-        nameParts.unshift(currentSuite.name);
-        currentSuite = currentSuite.suite;
-    }
-    return nameParts.join(' ').trim();
-}`;
-const newName = `function collectTestName({ fullTestName }) {
-    if (typeof fullTestName !== 'string') {
-        throw new Error('Pinned Vitest 5 fullTestName is missing');
-    }
-    return fullTestName;
-}`;
 const beforeRun = `        const dryRunResult = await this.run({`;
 const guardedRun = `        if (options.testFilter?.length === 0) {
             throw new Error('Stryker Vitest selection executed zero tests: empty testFilter');
@@ -41,24 +26,14 @@ const guardedHitCount = `        if (dryRunResult.status === DryRunStatus.Comple
             throw new Error('Stryker Vitest selection executed zero tests');
         }
 ${beforeHitCount}`;
-const oldPattern = `            const regex = new RegExp(regexTestNameFilter);`;
-const newPattern = `            const regex = new RegExp('^(?:' + regexTestNameFilter + ')$');`;
+const oldPattern = "            const regex = new RegExp(`(?:${regexTestNameFilter})\\\\s*$`);";
+const newPattern = "            const regex = new RegExp(`^(?:${regexTestNameFilter})\\\\s*$`);";
 
 /** @type {[string, string, [string, string][]][]} */
 const patches = [
   [
-    "test-helpers.js",
-    "120ef95f006b5449019155f93c049d888f2c73b525cfd57a9131ebe3d953535e",
-    [[oldName, newName]],
-  ],
-  [
-    "stryker-setup.js",
-    "11ea94ed9ba49a916fb0f6cbb365e896f4ce67958009f7a4320ceebaba14febb",
-    [[oldName, newName]],
-  ],
-  [
     "vitest-test-runner.js",
-    "be9ca8376eee10364398deb9d92faed06ac77fbfa53a55482799172925789ea4",
+    "2fbe77b4380075f86284e6e6f745a3549f336e8af83b52e1e70fa1fedd7c7cf5",
     [
       [beforeRun, guardedRun],
       [beforeHitCount, guardedHitCount],
@@ -82,10 +57,7 @@ const pending = patches.map(([file, expectedHash, replacements]) => {
   if (current !== original && current !== patched) throw new Error(`Partial patch: ${file}`);
   return { path, patched, changed: current !== patched };
 });
-if (pending.some(({ changed }) => changed !== pending[0]?.changed)) {
-  throw new Error("Mixed patch state: expected all three files original or all three patched");
-}
 for (const { path, patched, changed } of pending) {
   if (changed) writeFileSync(path, patched);
 }
-console.log("Pinned Stryker 10.0.0 / Vitest 5.0.5 selection patch verified");
+console.log("Pinned Stryker 10.1.1 / Vitest 5.0.5 selection patch verified");
