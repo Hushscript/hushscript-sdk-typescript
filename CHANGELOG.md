@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.1](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.1.0...v1.1.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **deps:** update dependencies to latest ([ebbd530](https://github.com/Hushscript/hushscript-sdk-typescript/commit/ebbd5305ce5169febd892154cb38f957d9102870))
+
 ## [1.1.0](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.0.1...v1.1.0) (2026-10-23)
 
 
