@@ -47,31 +47,14 @@ function checkPatchStates() {
   mkdirSync(dist, { recursive: true });
   mkdirSync(join(fixture, "vitest"));
   const runnerPackage = join(runnerRoot, "package.json");
-  writeFileSync(runnerPackage, '{"version":"10.0.0"}');
+  writeFileSync(runnerPackage, '{"version":"10.1.1"}');
   writeFileSync(join(fixture, "vitest/package.json"), '{"version":"5.0.5"}');
-  const files = ["test-helpers.js", "stryker-setup.js", "vitest-test-runner.js"];
+  const files = ["vitest-test-runner.js"];
   const patched = files.map((file) =>
     readFileSync(join(modules, "@stryker-mutator/vitest-runner/dist/src", file), "utf8"),
   );
   const original = patched.map((source) =>
     source
-      .replace(
-        `function collectTestName({ fullTestName }) {
-    if (typeof fullTestName !== 'string') {
-        throw new Error('Pinned Vitest 5 fullTestName is missing');
-    }
-    return fullTestName;
-}`,
-        `function collectTestName({ name, suite, }) {
-    const nameParts = [name];
-    let currentSuite = suite;
-    while (currentSuite) {
-        nameParts.unshift(currentSuite.name);
-        currentSuite = currentSuite.suite;
-    }
-    return nameParts.join(' ').trim();
-}`,
-      )
       .replace(
         `        if (options.testFilter?.length === 0) {
             throw new Error('Stryker Vitest selection executed zero tests: empty testFilter');
@@ -88,8 +71,8 @@ function checkPatchStates() {
         "",
       )
       .replace(
-        "new RegExp('^(?:' + regexTestNameFilter + ')$')",
-        "new RegExp(regexTestNameFilter)",
+        "new RegExp(`^(?:${regexTestNameFilter})\\\\s*$`)",
+        () => "new RegExp(`(?:${regexTestNameFilter})\\\\s*$`)",
       ),
   );
   const patchScript = resolve("scripts/patch-stryker-vitest.mjs");
@@ -128,39 +111,25 @@ function checkPatchStates() {
   const second = runPatch();
   assert.equal(second.status, 0, second.stderr);
   assert.deepEqual(snapshot(), beforeIdempotence);
-  for (let mask = 1; mask < 7; mask++) {
-    seed(
-      files.map((_, index) => {
-        const source = mask & (1 << index) ? patched[index] : original[index];
-        assert.ok(typeof source === "string");
-        return source;
-      }),
-    );
-    rejectWithoutWrites(/Mixed patch state/);
-  }
   seed(original);
-  writeFileSync(runnerPackage, '{"version":"10.0.1"}');
-  rejectWithoutWrites(/Expected @stryker-mutator\/vitest-runner@10\.0\.0/);
-  writeFileSync(runnerPackage, '{"version":"10.0.0"}');
+  writeFileSync(runnerPackage, '{"version":"10.1.0"}');
+  rejectWithoutWrites(/Expected @stryker-mutator\/vitest-runner@10\.1\.1/);
+  writeFileSync(runnerPackage, '{"version":"10.1.1"}');
   writeFileSync(join(fixture, "vitest/package.json"), '{"version":"5.0.4"}');
   rejectWithoutWrites(/Expected vitest@5\.0\.5/);
   writeFileSync(join(fixture, "vitest/package.json"), '{"version":"5.0.5"}');
-  seed(original.map((source, index) => (index === 2 ? `${source}\n` : source)));
+  seed(original.map((source) => `${source}\n`));
   rejectWithoutWrites(/Unexpected original hash/);
   seed(
-    original.map((source, index) =>
-      index === 2
-        ? source.replace(
-            "new RegExp(regexTestNameFilter)",
-            () => "new RegExp('^(?:' + regexTestNameFilter + ')$')",
-          )
-        : source,
+    original.map((source) =>
+      source.replace(
+        "new RegExp(`(?:${regexTestNameFilter})\\\\s*$`)",
+        () => "new RegExp(`^(?:${regexTestNameFilter})\\\\s*$`)",
+      ),
     ),
   );
   rejectWithoutWrites(/Partial patch/);
-  console.log(
-    "PASS patch versions, hashes, partial snippets, all six mixed states, no writes, idempotence",
-  );
+  console.log("PASS patch versions, hashes, partial snippets, no writes, idempotence");
 }
 
 /** @param {string} directory @param {(runner: Runner) => Promise<void>} check @param {boolean} related */
