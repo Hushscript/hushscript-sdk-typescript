@@ -1,3 +1,4 @@
+import { defaultMaxListeners, getMaxListeners, setMaxListeners } from "node:events";
 import type { ResolvedConfig } from "../config.ts";
 import { MAX_BODY_DEPTH, nestsDeeperThan } from "../depth.ts";
 import {
@@ -73,6 +74,19 @@ function bodyStream(bytes: Uint8Array, progress: { done: boolean }): ReadableStr
 }
 
 const NULL_BODY_STATUSES: ReadonlySet<number> = new Set([204, 205, 304]);
+
+/**
+ * The signal a Request built from `input` and `init` follows. A Request follows it only through a
+ * WeakRef to its own controller, so a Request the SDK builds and then drops can be collected
+ * mid-call, and the caller's abort no longer reaches its signal. The SDK listens to this one instead.
+ */
+export function callerSignal(
+  input: Parameters<typeof fetch>[0],
+  init: Parameters<typeof fetch>[1],
+): AbortSignal | null {
+  if (init?.signal !== undefined) return init.signal;
+  return input instanceof Request ? input.signal : null;
+}
 
 /** Never resolves; rejects with the signal's reason once it aborts. */
 function whenAborted(signal: AbortSignal): Promise<never> {
@@ -248,16 +262,21 @@ export function hardenedFetch(
     input: Parameters<typeof fetch>[0],
     init: Parameters<typeof fetch>[1],
     wire: { sent: boolean; everSent: boolean },
+    signal: AbortSignal,
   ): Promise<Response> => {
     // Bytes are used where they are: building a Request from them would copy every part.
     const direct = init?.body instanceof Uint8Array ? init.body : null;
-    const request = new Request(input, direct === null ? init : { ...init, body: null });
+    // Detached from the caller's signal: `signal` already carries its abort.
+    const request = new Request(input, {
+      ...init,
+      ...(direct === null ? {} : { body: null }),
+      signal: null,
+    });
     const url = new URL(request.url);
     const method = request.method.toUpperCase();
     const operation = operationFor(method, url.pathname);
     const apiOrigin = new URL(cfg.baseUrl).origin;
     const target = describeTarget(url, apiOrigin);
-    const signal = request.signal;
     // A request without a body reads as zero bytes, and zero bytes go out as no body.
     const buffer = direct ?? new Uint8Array(await request.arrayBuffer());
     const bytes = buffer.byteLength > 0 ? buffer : null;
@@ -356,8 +375,22 @@ export function hardenedFetch(
   // server cannot repeat, it is an unknown outcome, not a plain failure.
   return async (input, init) => {
     const wire = { sent: false, everSent: false };
+    // The caller's signal holds this listener, and through it the whole call, so an abort reaches
+    // the call however long it runs and whatever the garbage collector has done meanwhile.
+    const caller = callerSignal(input, init);
+    const controller = new AbortController();
+    const forward = (): void => {
+      controller.abort(caller?.reason);
+    };
     try {
-      return await guarded(input, init, wire);
+      if (caller?.aborted === true) forward();
+      else if (caller !== null) {
+        // As undici does for the Requests it builds on a signal: one signal shared by many
+        // concurrent calls is expected, not a leak.
+        if (getMaxListeners(caller) === defaultMaxListeners) setMaxListeners(1500, caller);
+        caller.addEventListener("abort", forward);
+      }
+      return await guarded(input, init, wire, controller.signal);
     } catch (error) {
       // `everSent` spans the retries: a failure on a later attempt can still follow a first one that went out.
       if (error instanceof HushscriptError) throw wire.everSent ? error : markNotSent(error);
@@ -369,6 +402,8 @@ export function hardenedFetch(
       }
       const wrapped = asHushscriptError(error, wire.everSent);
       throw wire.everSent ? wrapped : markNotSent(wrapped);
+    } finally {
+      caller?.removeEventListener("abort", forward);
     }
   };
 }
