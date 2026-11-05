@@ -1242,7 +1242,10 @@ describe("abort and timeout while the body is being read", () => {
   });
 
   it.each([
-    ["the hardened fetch", (signal: AbortSignal, cfg: ResolvedConfig) => call("safe", { signal, cfg })],
+    [
+      "the hardened fetch",
+      (signal: AbortSignal, cfg: ResolvedConfig) => call("safe", { signal, cfg }),
+    ],
     [
       "the transport",
       (signal: AbortSignal, cfg: ResolvedConfig) =>
@@ -1264,6 +1267,58 @@ describe("abort and timeout while the body is being read", () => {
     await settle();
     controller.abort();
     expect(await pending).toBeInstanceOf(AbortError);
+  });
+
+  it.each([
+    [
+      "the hardened fetch",
+      (signal: AbortSignal, cfg: ResolvedConfig) => call("safe", { signal, cfg }),
+    ],
+    [
+      "the transport",
+      (signal: AbortSignal, cfg: ResolvedConfig) =>
+        createTransport(cfg)(`${BASE}/v1/account`, { signal }),
+    ],
+    [
+      "the transport, from a Request whose signal the init overrides",
+      (signal: AbortSignal, cfg: ResolvedConfig) =>
+        createTransport(cfg)(
+          new Request(`${BASE}/v1/account`, { signal: new AbortController().signal }),
+          { signal },
+        ),
+    ],
+  ])("carries the caller's abort reason as the cause through %s", async (_, send) => {
+    const stub = stalledBody();
+    const controller = new AbortController();
+    const reason = new Error("caller stopped");
+    const pending = send(controller.signal, config(fakeClock({ manual: true }))).catch(
+      (e: unknown) => e,
+    );
+    await vi.waitFor(() => {
+      expect(stub.answered()).toBe(true);
+    });
+    await settle();
+    controller.abort(reason);
+    const error = await pending;
+    expect(error).toBeInstanceOf(AbortError);
+    expect((error as AbortError).cause).toMatchObject({ message: "caller stopped" });
+  });
+
+  it("lets one signal serve many concurrent calls without a listener warning", async () => {
+    const warnings: Error[] = [];
+    const onWarning = (warning: Error): void => {
+      warnings.push(warning);
+    };
+    process.on("warning", onWarning);
+    try {
+      stubFetch([{ status: 200, body: {} }]);
+      const signal = new AbortController().signal;
+      await Promise.all(Array.from({ length: 12 }, () => call("safe", { signal })));
+      await settle();
+    } finally {
+      process.off("warning", onWarning);
+    }
+    expect(warnings.map((w) => w.name)).not.toContain("MaxListenersExceededWarning");
   });
 
   it("leaves no listener on the caller's signal once the call settles", async () => {

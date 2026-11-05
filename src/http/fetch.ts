@@ -1,3 +1,4 @@
+import { defaultMaxListeners, getMaxListeners, setMaxListeners } from "node:events";
 import type { ResolvedConfig } from "../config.ts";
 import { MAX_BODY_DEPTH, nestsDeeperThan } from "../depth.ts";
 import {
@@ -381,9 +382,14 @@ export function hardenedFetch(
     const forward = (): void => {
       controller.abort(caller?.reason);
     };
-    if (caller?.aborted === true) forward();
-    else caller?.addEventListener("abort", forward);
     try {
+      if (caller?.aborted === true) forward();
+      else if (caller !== null) {
+        // As undici does for the Requests it builds on a signal: one signal shared by many
+        // concurrent calls is expected, not a leak.
+        if (getMaxListeners(caller) === defaultMaxListeners) setMaxListeners(1500, caller);
+        caller.addEventListener("abort", forward);
+      }
       return await guarded(input, init, wire, controller.signal);
     } catch (error) {
       // `everSent` spans the retries: a failure on a later attempt can still follow a first one that went out.
