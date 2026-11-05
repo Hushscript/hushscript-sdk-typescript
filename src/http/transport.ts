@@ -1,5 +1,5 @@
 import type { ResolvedConfig } from "../config.ts";
-import { hardenedFetch } from "./fetch.ts";
+import { callerSignal, hardenedFetch } from "./fetch.ts";
 import { retryClassForRequest } from "./operations.ts";
 
 /**
@@ -9,13 +9,16 @@ import { retryClassForRequest } from "./operations.ts";
  */
 export function createTransport(config: ResolvedConfig): typeof fetch {
   return async (input, init) => {
-    const request = new Request(input, init);
+    // Detached from the caller's signal, which is handed on below instead.
+    const request = new Request(input, { ...init, signal: null });
     const pathname = new URL(request.url).pathname;
     // Only an upload create needs its body looked at: its retry class depends on the key.
     const body =
       request.method.toUpperCase() === "POST" && pathname === "/v1/uploads"
         ? await request.clone().text()
         : null;
-    return hardenedFetch(config, retryClassForRequest(request.method, pathname, body))(request);
+    return hardenedFetch(config, retryClassForRequest(request.method, pathname, body))(request, {
+      signal: callerSignal(input, init),
+    });
   };
 }

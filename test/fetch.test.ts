@@ -1,6 +1,9 @@
+import { getEventListeners } from "node:events";
 import { createServer, type IncomingMessage, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { inspect } from "node:util";
+import { setFlagsFromString } from "node:v8";
+import { runInNewContext } from "node:vm";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AbortError,
@@ -12,6 +15,7 @@ import {
 import type { Clock } from "../src/clock";
 import type { ResolvedConfig } from "../src/config";
 import { hardenedFetch } from "../src/http/fetch";
+import { createTransport } from "../src/http/transport";
 import { REDACTED } from "../src/redact";
 import { Hushscript } from "../src/client";
 import { driven, fakeApi } from "./transcribe/fakeapi";
@@ -1206,6 +1210,10 @@ describe("what the hardened fetch reads from a failure", () => {
 });
 
 describe("abort and timeout while the body is being read", () => {
+  setFlagsFromString("--expose-gc");
+  // A fresh context picks up the flag, so this is a real full GC without a CLI switch.
+  const gc = runInNewContext("gc") as () => void;
+
   /** A fetch that answers with headers and a body that never ends; `answered` turns true once it has. */
   function stalledBody(): { answered: () => boolean } {
     let answered = false;
@@ -1231,6 +1239,40 @@ describe("abort and timeout while the body is being read", () => {
     const error = await pending;
     expect(error).toBeInstanceOf(AbortError);
     expect(error).toMatchObject({ code: "aborted", message: "The request was aborted." });
+  });
+
+  it.each([
+    ["the hardened fetch", (signal: AbortSignal, cfg: ResolvedConfig) => call("safe", { signal, cfg })],
+    [
+      "the transport",
+      (signal: AbortSignal, cfg: ResolvedConfig) =>
+        createTransport(cfg)(`${BASE}/v1/account`, { signal }),
+    ],
+  ])("still raises AbortError through %s when a GC runs while the body stalls", async (_, send) => {
+    const stub = stalledBody();
+    const controller = new AbortController();
+    const pending = send(controller.signal, config(fakeClock({ manual: true }))).catch(
+      (e: unknown) => e,
+    );
+    await vi.waitFor(() => {
+      expect(stub.answered()).toBe(true);
+    });
+    await settle();
+    gc();
+    await settle();
+    gc();
+    await settle();
+    controller.abort();
+    expect(await pending).toBeInstanceOf(AbortError);
+  });
+
+  it("leaves no listener on the caller's signal once the call settles", async () => {
+    const signal = new AbortController().signal;
+    stubFetch([{ status: 200, body: {} }]);
+    await call("safe", { signal });
+    stubFetch([{ status: 404, body: { error: "not_found", code: 4040 } }]);
+    await call("safe", { signal }).catch(() => undefined);
+    expect(getEventListeners(signal, "abort")).toEqual([]);
   });
 
   it("times out after the headers arrived, naming the timeout and logging it", async () => {
