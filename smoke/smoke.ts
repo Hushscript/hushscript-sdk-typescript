@@ -1,4 +1,4 @@
-// Nightly production smoke. Placeholder until the client exists: it reads the account over the raw
+// Production smoke on the promotion PR. Placeholder until the client exists: it reads the account over the raw
 // API and asserts the balance is a number. The client task swaps this for `await hs.balance()`.
 const baseUrl = process.env["HUSHSCRIPT_BASE_URL"] ?? "https://api.hushscript.com";
 const token = process.env["HUSHSCRIPT_TOKEN"];
