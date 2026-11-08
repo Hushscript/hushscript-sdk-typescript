@@ -39,7 +39,7 @@ test version=floor:
     docker compose build mock test
     docker compose run --rm ${extra[@]+"${extra[@]}"} test
 
-# StrykerJS on src/http and src/transcribe (nightly)
+# StrykerJS on src/http and src/transcribe (promotion PR)
 mutation version=floor:
     #!/usr/bin/env bash
     set -euo pipefail
@@ -220,7 +220,7 @@ ci version="":
       just build "$v"
     done
 
-# nightly smoke against production; needs SMOKE_TOKEN (outbound network)
+# production smoke (promotion PR); needs SMOKE_TOKEN (outbound network)
 smoke:
     #!/usr/bin/env bash
     set -euo pipefail
