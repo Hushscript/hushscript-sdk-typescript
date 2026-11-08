@@ -121,7 +121,7 @@ services:
       - ./src/generated:/work/src/generated
     command: ["timeout", "600", "node", "scripts/generate.mjs"]
 
-  # Outbound network: the one test that talks to production. Nightly only.
+  # Outbound network: the one test that talks to production. Promotion PR only.
   smoke:
     <<: *dev
     tmpfs:

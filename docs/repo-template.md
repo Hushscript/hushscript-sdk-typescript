@@ -18,7 +18,7 @@ file from this repository byte for byte.
 | `.github/workflows/scorecard.yml`, `dependency-review.yml`      | copy          | Nothing.                                                                                                                                                                    |
 | `.github/workflows/codeql.yml`                                  | adapt         | `languages:` and the `category` (`javascript-typescript`, `python`, `go`). PHP has no CodeQL job; see "PHP".                                                                |
 | `.github/workflows/ci.yml`                                      | adapt         | The matrix values (`node: ['24', '26']` becomes the language's floor and latest) and the env name passed to `just ci`.                                                      |
-| `.github/workflows/nightly.yml`                                 | adapt         | Recipe names stay. Drop the `fuzz` job for PHP. Python uses `FC_RUNS_FACTOR` equivalents (Hypothesis `max_examples` profile), Go runs native fuzz targets for 60 s each.    |
+| `.github/workflows/promotion.yml`                               | adapt         | Recipe names stay. Drop the `fuzz` job for PHP. Python uses `FC_RUNS_FACTOR` equivalents (Hypothesis `max_examples` profile), Go runs native fuzz targets for 60 s each.    |
 | `.github/workflows/release.yml`                                 | adapt         | `release-type` in the workflow input and in `release-please-config.json` (`node`, `python`, `go`, `php`).                                                                   |
 | `.github/workflows/publish.yml`                                 | adapt         | The registry steps; see "Publish".                                                                                                                                          |
 | `.github/dependabot.yml`                                        | adapt         | The language ecosystem (`npm`, `pip` or `uv`, `gomod`, `composer`); keep `docker` on `/docker` and `github-actions`. Keep the 7-day cooldown and the `chore` commit prefix. |
@@ -86,7 +86,7 @@ field or a constant in the generator); the mock's build context and `hints.json`
 
 Recipes and arguments are fixed: `test [version]`, `lint [version]`, `conformance [version]`,
 `examples [version]`, `build [version]`, `regen [spec-path-or-url]`, `ci [version]`, `smoke`, plus `mutation`
-(used by the nightly job). The version argument is the runtime version (default: the floor) and is
+(used by the promotion workflow). The version argument is the runtime version (default: the floor) and is
 validated by a `just` `error()` expression. `ci` with no argument runs lint on the floor, test and
 conformance on floor and latest, then examples and build on the floor. With an argument it runs
 everything on that one version, which is what the CI matrix passes.
@@ -159,7 +159,7 @@ The gates are in `just lint` and `just test`. Values for the other languages are
 - vitest with v8 coverage: `include: ["src/**/*.ts"]`, `exclude: ["src/generated/**"]`, thresholds
   `lines: 90`, `branches: 85`, `maxWorkers: 4`. The report goes to `os.tmpdir()` because the root
   filesystem is read-only. `test/setup.ts` sets the global `fast-check` run count to `100 *
-FC_RUNS_FACTOR`; the nightly job sets the factor to 10.
+FC_RUNS_FACTOR`; the promotion workflow sets the factor to 10.
 - Package checks in `just build`: `npm pack --dry-run`, `publint` and `attw --profile esm-only` on the
   real tarball, a type check of a consumer file against the packed `.d.ts` with the oldest supported
   TypeScript (devDependency alias `typescript-floor`, `npm:typescript@5.5.4`; Dependabot ignores it;
@@ -211,7 +211,7 @@ comment, and every concurrency block sets `cancel-in-progress: true` (zizmor ped
 | Workflow                | Trigger                         | Job permissions                                                                    |
 | ----------------------- | ------------------------------- | ---------------------------------------------------------------------------------- |
 | `ci.yml`                | PR, push to `main`              | `contents: read`                                                                   |
-| `nightly.yml`           | schedule only                   | `contents: read` (smoke runs in environment `smoke`)                               |
+| `promotion.yml`         | PRs into main from develop      | `contents: read` (smoke runs in environment `smoke`)                               |
 | `release.yml`           | push to `main`                  | none (writes go through the App token)                                             |
 | `publish.yml`           | `release: published`            | `contents: read`, `id-token: write`, `attestations: write` (environment `release`) |
 | `codeql.yml`            | PR, push, weekly                | `contents: read`, `security-events: write`                                         |
