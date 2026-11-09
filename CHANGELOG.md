@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.1.3](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.1.2...v1.1.3) (2026-11-09)
+
+
+### Miscellaneous Chores
+
+* release 1.1.3 ([b23def9](https://github.com/Hushscript/hushscript-sdk-typescript/commit/b23def942470931b0294241f5ed9f229d4627a4e))
+
 ## [1.1.2](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.1.1...v1.1.2) (2026-11-08)
 
 
