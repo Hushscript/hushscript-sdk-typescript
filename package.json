@@ -55,15 +55,15 @@
     "eslint-plugin-n": "18.5.0",
     "eslint-plugin-regexp": "3.3.3",
     "fast-check": "4.10.2",
-    "globals": "17.13.0",
+    "globals": "17.14.0",
     "knip": "6.44.1",
     "openapi-typescript": "7.13.0",
     "prettier": "3.9.10",
     "publint": "0.3.25",
     "tsup": "9.0.0",
     "typescript": "6.0.3",
-    "typescript-floor": "npm:typescript@5.5.4",
     "typescript-eslint": "8.72.1",
+    "typescript-floor": "npm:typescript@5.5.4",
     "vitest": "5.0.5"
   },
   "overrides": {
