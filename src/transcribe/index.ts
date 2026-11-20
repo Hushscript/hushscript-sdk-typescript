@@ -54,6 +54,8 @@ function transcriptionOptions(options: TranscribeOptions): CreateBody["transcrip
   if (keyterms.length > 0) out.keyterms_prompt = keyterms;
   if (prompt !== undefined) out.prompt = prompt;
   if (options.medical !== undefined) out.medical_mode = options.medical;
+  if (options.vet !== undefined) out.vet_mode = options.vet;
+  if (options.keepDisfluencies !== undefined) out.keep_disfluencies = options.keepDisfluencies;
   if (options.multichannel !== undefined) out.multichannel = options.multichannel;
   if (options.autoInsights !== undefined) out.auto_generate_insights = options.autoInsights;
   return Object.keys(out).length === 0 ? undefined : out;

@@ -16,6 +16,8 @@ export interface JobOptions {
   languageCode: string | null;
   speakerDetection: boolean;
   medicalMode: boolean;
+  vetMode: boolean;
+  keepDisfluencies: boolean;
   multichannel: boolean;
   translationTargets: string[];
   /** Whether keyterms were set; the terms themselves are not returned. */

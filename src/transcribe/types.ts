@@ -25,8 +25,12 @@ export interface TranscribeOptions {
    * 203 + prompt + the sum of (term + 2) for each unique term + (terms - 1).
    */
   prompt?: string | undefined;
-  /** medical_mode; language must be en, es, fr or de; 2x. */
+  /** medical_mode; needs a language from the medical list (en, en_au, en_uk, en_us, es, fr, de, de_ch); 2x. Not with `vet`. */
   medical?: boolean | undefined;
+  /** vet_mode (beta); needs a language the API lists for it, none yet; 2x. Not with `medical`. */
+  vet?: boolean | undefined;
+  /** keep_disfluencies; keeps filler words and, in many languages, repetitions and false starts. Free. */
+  keepDisfluencies?: boolean | undefined;
   /** Billed per channel, up to 8. */
   multichannel?: boolean | undefined;
   /** auto_generate_insights override. */
