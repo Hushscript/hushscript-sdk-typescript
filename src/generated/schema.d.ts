@@ -35,7 +35,7 @@ export interface paths {
         put?: never;
         /**
          * Start a new transcription upload and place a credit hold
-         * @description Declares the size and duration of a new audio upload, places a credit hold for the billable seconds (duration plus any transcription_options surcharge), and returns a job id plus, when direct-to-R2 uploads are available, a first page of presigned part URLs. Resending the same idempotency_key returns the already-created job instead of opening a second one. Long direct-to-R2 transfers must call heartbeat_upload periodically or the job is reaped as idle.
+         * @description Declares the size and duration of a new audio upload, places a credit hold for the billable seconds (duration plus any transcription_options surcharge: medical_mode or vet_mode, multichannel, translation), and returns a job id plus, when direct-to-R2 uploads are available, a first page of presigned part URLs. Resending the same idempotency_key returns the already-created job instead of opening a second one. Long direct-to-R2 transfers must call heartbeat_upload periodically or the job is reaped as idle.
          */
         post: operations["create_upload"];
         delete?: never;
@@ -74,7 +74,7 @@ export interface paths {
         get?: never;
         /**
          * Upload one part of a job's audio through this API
-         * @description Sends one part's raw bytes to be written into the job's in-progress R2 multipart upload. Only needed when direct-to-R2 presigned URLs are unavailable, or as a fallback for a part whose presigned PUT failed. A repeated PUT of the same part number replaces that part rather than adding to the declared total, so retries are always safe.
+         * @description Sends one part's raw bytes to be written into the job's in-progress R2 multipart upload. Only needed when direct-to-R2 presigned URLs are unavailable, or as a fallback for a part whose presigned PUT failed. A repeated PUT of the same part number replaces that part rather than adding to the declared total, so retries are always safe. A Content-Length header is required: the body is streamed to storage and held to that length, and a part sent without one (chunked transfer) is refused with 400 bad_request.
          */
         put: operations["upload_part"];
         post?: never;
@@ -856,6 +856,8 @@ export interface components {
             language_code: string | null;
             speaker_detection: boolean;
             medical_mode: boolean;
+            vet_mode: boolean;
+            keep_disfluencies: boolean;
             multichannel: boolean;
             translation_targets: string[];
             /** @description Whether a keyterms prompt was set. The terms themselves are not included. */
@@ -1014,6 +1016,11 @@ export interface components {
             status: string;
             created_at: number;
             payment_method_type: string | null;
+            /**
+             * @description Where the purchase was paid: Stripe (card, wallet, bank), or a store (Apple, Google Play).
+             * @enum {string}
+             */
+            provider: "stripe" | "apple" | "google";
             payment_method_brand: string | null;
             payment_method_last4: string | null;
             /** @description The public receipt reference, e.g. HS-20260101-abcdef0123456789-1. */
@@ -1243,7 +1250,7 @@ export interface components {
             contact_email: string;
             /** @description Which minute pack to buy. See GET /v1/billing/packs for the catalogue. */
             pack_id: string;
-            /** @description Must equal the server's current policy version or the request is refused with policy_version_stale, which names the current value. */
+            /** @description Must be the server's current policy version or, for 30 days after the current version's date, the previous one; otherwise the request is refused with policy_version_stale, which names the current value. */
             accept_terms_version: string;
             /** @description Optional region hint. Honored only when it agrees with the region derived from your network location; otherwise the derived region is used silently. */
             data_region?: string;
@@ -1461,9 +1468,13 @@ export interface operations {
                         keyterms_prompt?: string[];
                         /** @description Free-text context to bias transcription toward. */
                         prompt?: string | null;
-                        /** @description Bill and transcribe as a medical dictation. Requires language_code to be one of en, es, fr, de; billed at a 100 percent surcharge on the duration. */
+                        /** @description Bill and transcribe as a medical dictation. Requires language_code to be one of en, es, fr, de; billed at a 100 percent surcharge on the duration. Cannot be combined with vet_mode. */
                         medical_mode?: boolean;
-                        /** @description Transcribe each audio channel independently. Billed per channel: a stereo file counts twice, a 3-channel file three times, up to 8 channels, and the medical surcharge applies on top of that; translation targets stay on a single duration. The channel count is the most channels any audio track of the file carries. A file with more than 8 channels, or one whose channel count cannot be read, falls back to mixed audio with speaker labels and is billed once. Without this option the file is transcribed as one mixed channel and billed once. The initial hold at upload creation is for a single channel; verification raises it to the per-channel amount and fails the job with insufficient_balance if the balance cannot cover it. */
+                        /** @description Beta. Transcribe as a veterinary dictation. Requires a manually set language_code from the supported list; auto-detection is refused. Billed at a 100 percent surcharge on the duration, exactly like medical_mode, and cannot be combined with medical_mode. Not available in private mode. */
+                        vet_mode?: boolean;
+                        /** @description Keep disfluencies in the transcript instead of removing them. On many languages this also keeps repetitions, stutters and false starts; on others it keeps filler words only. Free, and allowed in private mode. Defaults to false. */
+                        keep_disfluencies?: boolean;
+                        /** @description Transcribe each audio channel independently. Billed per channel: a stereo file counts twice, a 3-channel file three times, up to 8 channels, and the medical or vet surcharge applies on top of that; translation targets stay on a single duration. The channel count is the most channels any audio track of the file carries. A file with more than 8 channels, or one whose channel count cannot be read, falls back to mixed audio with speaker labels and is billed once. Without this option the file is transcribed as one mixed channel and billed once. The initial hold at upload creation is for a single channel; verification raises it to the per-channel amount and fails the job with insufficient_balance if the balance cannot cover it. */
                         multichannel?: boolean;
                         /** @description Locales to additionally translate the transcript into. Each target adds a 25 percent surcharge on the duration and forces speaker_detection on. */
                         translation_targets?: string[];

@@ -41,6 +41,8 @@ const OPTIONS_SUMMARY = objectOf<Schemas["OptionsSummary"]>({
   language_code: nullable(str),
   speaker_detection: bool,
   medical_mode: bool,
+  vet_mode: bool,
+  keep_disfluencies: bool,
   multichannel: bool,
   translation_targets: arrayOf(str),
   keyterms: bool,

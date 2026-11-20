@@ -26,7 +26,28 @@ export const MAX_PROMPT_CHARS = 2000;
 /** The fixed text the server wraps around a prompt and key terms: prefix, vocabulary and instructions. */
 export const COMPILED_PROMPT_OVERHEAD = 203;
 const MAX_MATTER_CODE = 64;
-const MEDICAL_LANGUAGES: readonly string[] = ["en", "es", "fr", "de"];
+/** Mirrors the API's `MEDICAL_LANGUAGES` (`transcription_options.rs`). */
+const MEDICAL_LANGUAGES: readonly string[] = [
+  "en",
+  "en_au",
+  "en_uk",
+  "en_us",
+  "es",
+  "fr",
+  "de",
+  "de_ch",
+];
+/** Mirrors the API's `VET_LANGUAGES`. */
+const VET_LANGUAGES: readonly string[] = [
+  "en",
+  "en_au",
+  "en_uk",
+  "en_us",
+  "es",
+  "fr",
+  "de",
+  "de_ch",
+];
 const SNIFF_BYTES = 64;
 
 const WHITE_SPACE_EDGES = /^\p{White_Space}+|\p{White_Space}+$/gu;
@@ -135,10 +156,23 @@ function checkIdempotencyKey(key: string): void {
   }
 }
 
+function languageRule(option: string, languages: readonly string[]): string {
+  return languages.length === 0
+    ? `${option} is not available for any language yet.`
+    : `${option} needs language to be one of ${languages.join(", ")}.`;
+}
+
 function checkOptions(options: TranscribeOptions): void {
+  if (options.medical === true && options.vet === true) {
+    throw invalidOption("medical and vet cannot be combined.");
+  }
   // Stryker disable next-line StringLiteral: the default only has to be a string that is not a medical language
   if (options.medical === true && !MEDICAL_LANGUAGES.includes(options.language ?? "")) {
-    throw invalidOption("medical needs language to be one of en, es, fr or de.");
+    throw invalidOption(languageRule("medical", MEDICAL_LANGUAGES));
+  }
+  // Stryker disable next-line StringLiteral: the default only has to be a string that is not a vet language
+  if (options.vet === true && !VET_LANGUAGES.includes(options.language ?? "")) {
+    throw invalidOption(languageRule("vet", VET_LANGUAGES));
   }
   checkContext(options);
   // Stryker disable next-line StringLiteral: the default only has to be under the length limit

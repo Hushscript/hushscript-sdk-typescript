@@ -21,6 +21,8 @@ export const JOB_OPTIONS = {
   language_code: null,
   speaker_detection: true,
   medical_mode: false,
+  vet_mode: false,
+  keep_disfluencies: false,
   multichannel: false,
   translation_targets: [] as string[],
   keyterms: false,
