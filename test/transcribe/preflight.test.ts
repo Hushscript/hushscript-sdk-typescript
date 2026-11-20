@@ -158,7 +158,7 @@ describe("preflight", () => {
   });
 
   const medical = "medical needs language to be one of en, en_au, en_uk, en_us, es, fr, de, de_ch.";
-  const vet = "vet is not available for any language yet.";
+  const vet = "vet needs language to be one of en, en_au, en_uk, en_us, es, fr, de, de_ch.";
   const domains = "medical and vet cannot be combined.";
   const key = "idempotencyKey must be 16 to 128 printable ASCII characters, without spaces.";
   it.each<[string, Record<string, unknown>, string]>([
@@ -166,7 +166,7 @@ describe("preflight", () => {
     ["medical in a language it does not cover", { medical: true, language: "ja" }, medical],
     ["medical in a regional variant it does not cover", { medical: true, language: "pt" }, medical],
     ["vet without a language", { vet: true }, vet],
-    ["vet in English", { vet: true, language: "en" }, vet],
+    ["vet in a language it does not cover", { vet: true, language: "ja" }, vet],
     ["medical and vet together", { medical: true, vet: true, language: "en" }, domains],
     ["medical and vet together without a language", { medical: true, vet: true }, domains],
     [
@@ -240,6 +240,20 @@ describe("preflight", () => {
       await driven(hs.transcribe(bytes, { medical: true, language }), clock);
       expect(fake.creates[0]?.["transcription_options"]).toMatchObject({
         medical_mode: true,
+        language_code: language,
+      });
+    },
+  );
+
+  it.each(["en", "en_au", "en_uk", "en_us", "es", "fr", "de", "de_ch"])(
+    "accepts vet for %s",
+    async (language) => {
+      const { hs, clock } = client();
+      const fake = fakeApi();
+      const bytes = await fixtureBytes("cbr-20s.mp3");
+      await driven(hs.transcribe(bytes, { vet: true, language }), clock);
+      expect(fake.creates[0]?.["transcription_options"]).toMatchObject({
+        vet_mode: true,
         language_code: language,
       });
     },

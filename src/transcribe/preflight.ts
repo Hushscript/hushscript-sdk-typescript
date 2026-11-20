@@ -37,8 +37,17 @@ const MEDICAL_LANGUAGES: readonly string[] = [
   "de",
   "de_ch",
 ];
-/** Mirrors the API's `VET_LANGUAGES`, empty until the API lists a language for vet mode. */
-const VET_LANGUAGES: readonly string[] = [];
+/** Mirrors the API's `VET_LANGUAGES`. */
+const VET_LANGUAGES: readonly string[] = [
+  "en",
+  "en_au",
+  "en_uk",
+  "en_us",
+  "es",
+  "fr",
+  "de",
+  "de_ch",
+];
 const SNIFF_BYTES = 64;
 
 const WHITE_SPACE_EDGES = /^\p{White_Space}+|\p{White_Space}+$/gu;
