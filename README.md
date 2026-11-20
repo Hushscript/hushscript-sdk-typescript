@@ -69,6 +69,33 @@ const transcript = await hs.transcribe(response.body!, {
 The stream stays yours: the SDK never cancels or closes it, on success, failure or abort. It only
 releases its reader, so you can read what is left or cancel it yourself.
 
+## Key terms and prompt
+
+`keyterms` and `prompt` steer the vocabulary. They are sent as two separate fields: the prompt exactly
+as you wrote it, the key terms as a list. Terms and prompt are trimmed, and blanks and empty lists
+are not sent.
+
+```ts
+const transcript = await hs.transcribe("meeting.mp3", {
+  language: "en",
+  keyterms: ["Hushscript", "ward round"],
+  prompt: "A cardiology team reviewing three cases.",
+});
+```
+
+The SDK refuses a call before any request when:
+
+- there are more than 1000 unique terms, or the unique terms total more than 1000 words
+  (split on white space; a duplicate counts once);
+- a term has more than 6 words or 128 characters;
+- the prompt has more than 2000 characters. The prompt is checked on its own and does not count
+  against the term limits, nor the terms against it.
+
+The API also keeps a token budget on the terms and prompt together. How many terms fit depends on the
+script and the length of the terms, so the SDK does not predict it; the API refuses a call over it
+before any minutes are held. Only some languages use key terms and a prompt, so with `language` set
+to one that does not (for example `pl` or `th`) the call is refused too. Auto-detect is not.
+
 ## Check my balance
 
 ```ts
@@ -303,10 +330,10 @@ once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(t
 - **Checks before it spends.** It sniffs the format from the file's bytes, probes the duration,
   and refuses a file the server would refuse, or one your daily limit cannot cover, before any
   minutes are held. It also checks `keyterms` and `prompt` against the server's limits: at most 1000
-  unique terms of at most 6 words and 128 characters each, and a prompt of at most 2000 characters
-  (with key terms, counted together as the server compiles them). Terms and prompt are trimmed,
-  and blanks and empty lists are not sent. With `language` set to one the API does not apply them
-  in (for example `pl` or `th`), non-blank `keyterms` or a `prompt` are refused as well; auto-detect is not. Whether your balance covers the file is the server's call: a 402 comes back
+  unique terms of at most 6 words and 128 characters each and 1000 words in total, and a prompt of
+  at most 2000 characters (see [Key terms and prompt](#key-terms-and-prompt)). With `language` set to
+  one the API does not apply them in (for example `pl` or `th`), non-blank `keyterms` or a `prompt`
+  are refused as well; auto-detect is not. Whether your balance covers the file is the server's call: a 402 comes back
   when the upload is created, before any part is sent.
 - **Keeps retries from charging twice.** Every upload and purchase carries an idempotency key, and
   retries reuse it. A `resumeToken` replays the same job instead of starting a new one, and the key

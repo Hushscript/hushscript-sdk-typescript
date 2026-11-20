@@ -15,17 +15,18 @@ export interface TranscribeOptions {
   translateTo?: string[] | undefined;
   /**
    * keyterms_prompt. Terms are trimmed and blanks dropped; an empty list is not sent. At most 1000
-   * unique terms, each at most 6 words and 128 characters (Unicode code points). With a prompt,
-   * the two are compiled into one provider prompt and count together toward the prompt limit.
+   * unique terms, each at most 6 words and 128 characters (Unicode code points), and at most 1000
+   * words in total across the unique terms. The prompt is sent as its own field and does not count
+   * against these limits. The API also keeps a token budget on the terms and prompt together and
+   * refuses a call over it; the SDK does not check that.
    * Only some languages use them; with `language` set to one that does not (for example `pl`) the
    * call is refused. Auto-detect is not refused.
    */
   keyterms?: string[] | undefined;
   /**
    * Free-text context, trimmed; a blank prompt is not sent. At most 2000 characters (Unicode code
-   * points). With key terms the limit applies to the compiled prompt:
-   * 203 + prompt + the sum of (term + 2) for each unique term + (terms - 1). Only some languages
-   * use it; with `language` set to one that does not, the call is refused.
+   * points), checked on its own, apart from the key terms. Only some languages use it; with
+   * `language` set to one that does not, the call is refused.
    */
   prompt?: string | undefined;
   /** medical_mode; needs a language from the medical list (en, en_au, en_uk, en_us, es, fr, de, de_ch); 2x. Not with `vet`. */

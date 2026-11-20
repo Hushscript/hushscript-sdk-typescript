@@ -23,8 +23,8 @@ export const MAX_KEYTERMS = 1000;
 export const MAX_KEYTERM_WORDS = 6;
 export const MAX_KEYTERM_CHARS = 128;
 export const MAX_PROMPT_CHARS = 2000;
-/** The fixed text the server wraps around a prompt and key terms: prefix, vocabulary and instructions. */
-export const COMPILED_PROMPT_OVERHEAD = 203;
+/** Whitespace-split words across the unique key terms; the server also keeps a token budget the SDK does not mirror. */
+export const MAX_KEYTERM_TOTAL_WORDS = 1000;
 const MAX_MATTER_CODE = 64;
 /** Mirrors the API's `MEDICAL_LANGUAGES` (`transcription_options.rs`). */
 const MEDICAL_LANGUAGES: readonly string[] = [
@@ -230,20 +230,15 @@ function checkContext(options: TranscribeOptions): void {
       throw invalidOption(`${name} has more than ${String(MAX_KEYTERM_WORDS)} words.`);
     }
   });
-  if (prompt === undefined) return;
-  const promptChars = codePoints(prompt);
-  if (promptChars > MAX_PROMPT_CHARS) {
-    throw invalidOption(`prompt is longer than ${String(MAX_PROMPT_CHARS)} characters.`);
+  let totalWords = 0;
+  for (const term of unique) totalWords += term.split(WHITE_SPACE_RUN).length;
+  if (totalWords > MAX_KEYTERM_TOTAL_WORDS) {
+    throw invalidOption(
+      `keyterms takes at most ${String(MAX_KEYTERM_TOTAL_WORDS)} words in total (${String(totalWords)} given).`,
+    );
   }
-  if (unique.size > 0) {
-    let termChars = unique.size - 1;
-    for (const term of unique) termChars += codePoints(term) + 2;
-    const compiled = COMPILED_PROMPT_OVERHEAD + promptChars + termChars;
-    if (compiled > MAX_PROMPT_CHARS) {
-      throw invalidOption(
-        `prompt and keyterms together exceed ${String(MAX_PROMPT_CHARS)} characters (${String(compiled)}).`,
-      );
-    }
+  if (prompt !== undefined && codePoints(prompt) > MAX_PROMPT_CHARS) {
+    throw invalidOption(`prompt is longer than ${String(MAX_PROMPT_CHARS)} characters.`);
   }
 }
 
