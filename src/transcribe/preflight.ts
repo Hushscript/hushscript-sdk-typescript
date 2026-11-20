@@ -23,8 +23,8 @@ export const MAX_KEYTERMS = 1000;
 export const MAX_KEYTERM_WORDS = 6;
 export const MAX_KEYTERM_CHARS = 128;
 export const MAX_PROMPT_CHARS = 2000;
-/** The fixed text the server wraps around a prompt and key terms: prefix, vocabulary and instructions. */
-export const COMPILED_PROMPT_OVERHEAD = 203;
+/** Whitespace-split words across the unique key terms; the server also keeps a token budget the SDK does not mirror. */
+export const MAX_KEYTERM_TOTAL_WORDS = 1000;
 const MAX_MATTER_CODE = 64;
 /** Mirrors the API's `MEDICAL_LANGUAGES` (`transcription_options.rs`). */
 const MEDICAL_LANGUAGES: readonly string[] = [
@@ -47,6 +47,115 @@ const VET_LANGUAGES: readonly string[] = [
   "fr",
   "de",
   "de_ch",
+];
+/** Mirrors the API's `STT37_LANGUAGES`: the languages that apply key terms and a prompt. */
+const STT37_LANGUAGES: readonly string[] = [
+  "af",
+  "ar",
+  "ca",
+  "da",
+  "de",
+  "de_ch",
+  "en",
+  "en_au",
+  "en_uk",
+  "en_us",
+  "es",
+  "et",
+  "fa",
+  "fi",
+  "fr",
+  "gl",
+  "he",
+  "hi",
+  "it",
+  "ja",
+  "ko",
+  "mr",
+  "nl",
+  "nn",
+  "no",
+  "pt",
+  "ro",
+  "ru",
+  "sv",
+  "tr",
+  "ur",
+  "vi",
+  "zh",
+];
+/** The rest of the API's `SOURCE_LANGUAGES`; the server names a code in neither list itself. */
+const UNIVERSAL_2_LANGUAGES: readonly string[] = [
+  "am",
+  "as",
+  "az",
+  "ba",
+  "be",
+  "bg",
+  "bn",
+  "bo",
+  "br",
+  "bs",
+  "cs",
+  "cy",
+  "el",
+  "eu",
+  "fo",
+  "gu",
+  "ha",
+  "haw",
+  "hr",
+  "ht",
+  "hu",
+  "hy",
+  "id",
+  "is",
+  "jw",
+  "ka",
+  "kk",
+  "km",
+  "kn",
+  "la",
+  "lb",
+  "ln",
+  "lo",
+  "lt",
+  "lv",
+  "mg",
+  "mi",
+  "mk",
+  "ml",
+  "mn",
+  "ms",
+  "mt",
+  "my",
+  "ne",
+  "oc",
+  "pa",
+  "pl",
+  "ps",
+  "sa",
+  "sd",
+  "si",
+  "sk",
+  "sl",
+  "sn",
+  "so",
+  "sq",
+  "sr",
+  "su",
+  "sw",
+  "ta",
+  "te",
+  "tg",
+  "th",
+  "tk",
+  "tl",
+  "tt",
+  "uk",
+  "uz",
+  "yi",
+  "yo",
 ];
 const SNIFF_BYTES = 64;
 
@@ -87,8 +196,25 @@ export function normalizeContext(options: TranscribeOptions): ContextOptions {
   return { keyterms, keytermIndexes, prompt: prompt === "" ? undefined : prompt };
 }
 
+/** Typed key terms or a prompt do nothing in a language the API does not serve with its newest model, so the API refuses them. */
+function checkContextLanguage(
+  options: TranscribeOptions,
+  keyterms: string[],
+  prompt: string | undefined,
+): void {
+  // Stryker disable next-line StringLiteral: the default only has to be a string that is not a listed language
+  const language = trimWhiteSpace(options.language ?? "").toLowerCase();
+  if (!UNIVERSAL_2_LANGUAGES.includes(language)) return;
+  const option = keyterms.length > 0 ? "keyterms" : prompt === undefined ? undefined : "prompt";
+  if (option === undefined) return;
+  throw invalidOption(
+    `${option} does not work for language "${language}"; it needs language to be one of ${STT37_LANGUAGES.join(", ")}.`,
+  );
+}
+
 function checkContext(options: TranscribeOptions): void {
   const { keyterms, keytermIndexes, prompt } = normalizeContext(options);
+  checkContextLanguage(options, keyterms, prompt);
   const unique = new Set(keyterms);
   if (unique.size > MAX_KEYTERMS) {
     throw invalidOption(
@@ -104,20 +230,15 @@ function checkContext(options: TranscribeOptions): void {
       throw invalidOption(`${name} has more than ${String(MAX_KEYTERM_WORDS)} words.`);
     }
   });
-  if (prompt === undefined) return;
-  const promptChars = codePoints(prompt);
-  if (promptChars > MAX_PROMPT_CHARS) {
-    throw invalidOption(`prompt is longer than ${String(MAX_PROMPT_CHARS)} characters.`);
+  let totalWords = 0;
+  for (const term of unique) totalWords += term.split(WHITE_SPACE_RUN).length;
+  if (totalWords > MAX_KEYTERM_TOTAL_WORDS) {
+    throw invalidOption(
+      `keyterms takes at most ${String(MAX_KEYTERM_TOTAL_WORDS)} words in total (${String(totalWords)} given).`,
+    );
   }
-  if (unique.size > 0) {
-    let termChars = unique.size - 1;
-    for (const term of unique) termChars += codePoints(term) + 2;
-    const compiled = COMPILED_PROMPT_OVERHEAD + promptChars + termChars;
-    if (compiled > MAX_PROMPT_CHARS) {
-      throw invalidOption(
-        `prompt and keyterms together exceed ${String(MAX_PROMPT_CHARS)} characters (${String(compiled)}).`,
-      );
-    }
+  if (prompt !== undefined && codePoints(prompt) > MAX_PROMPT_CHARS) {
+    throw invalidOption(`prompt is longer than ${String(MAX_PROMPT_CHARS)} characters.`);
   }
 }
 

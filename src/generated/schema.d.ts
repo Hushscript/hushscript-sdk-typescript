@@ -860,9 +860,9 @@ export interface components {
             keep_disfluencies: boolean;
             multichannel: boolean;
             translation_targets: string[];
-            /** @description Whether a keyterms prompt was set. The terms themselves are not included. */
+            /** @description Whether a keyterms prompt was set and applies. False when the language cannot use key terms, even if a saved dictionary was selected. The terms themselves are not included. */
             keyterms: boolean;
-            /** @description Whether a free-text context prompt was set. The prompt itself is not included. */
+            /** @description Whether a free-text context prompt was set and applies. False when the language cannot use a prompt, even if a saved preset was selected. The prompt itself is not included. */
             prompt: boolean;
             /** @description This upload's override of automatic Insights generation, or null if it used the account default. */
             auto_generate_insights: boolean | null;
@@ -1460,19 +1460,19 @@ export interface operations {
                     /** @description Free text, trimmed, at most 64 characters; blank is valid. Accepted for backward compatibility: for an org caller the client is always resolved from the matter instead, never from this field. */
                     client_code?: string | null;
                     transcription_options?: {
-                        /** @description Force a specific spoken language instead of auto-detection. */
+                        /** @description Force a specific spoken language instead of auto-detection. Key terms, a prompt and filler words (keep_disfluencies) only take effect for the 33 languages AssemblyAI serves with its newest model; for the other languages, typed key terms or a typed prompt are refused with invalid_transcription_options. */
                         language_code?: string | null;
                         /** @description Label distinct speakers in the transcript. Forced on automatically when translation_targets is non-empty. */
                         speaker_detection?: boolean;
-                        /** @description Domain vocabulary to bias transcription toward, up to 1000 terms of at most 6 words each. */
+                        /** @description Domain vocabulary to bias transcription toward, up to 1000 terms of at most 6 words each, and at most 1,000 words in total after merging saved dictionaries and one-off terms. Refused with invalid_transcription_options when the language (language_code, or every expected language under auto-detection) is one where key terms have no effect, or when the merged terms and the prompt together exceed the provider token budget (how many fit depends on the script and the length of the terms). */
                         keyterms_prompt?: string[];
-                        /** @description Free-text context to bias transcription toward. */
+                        /** @description Free-text context to bias transcription toward. Refused with invalid_transcription_options when the language is one where a prompt has no effect. Sent as written, separately from the key terms; the two share one provider token budget. */
                         prompt?: string | null;
-                        /** @description Bill and transcribe as a medical dictation. Requires language_code to be one of en, es, fr, de; billed at a 100 percent surcharge on the duration. Cannot be combined with vet_mode. */
+                        /** @description Bill and transcribe as a medical dictation. Requires language_code to be one of en, en_au, en_uk, en_us, es, fr, de, de_ch; billed at a 100 percent surcharge on the duration. Cannot be combined with vet_mode. */
                         medical_mode?: boolean;
                         /** @description Beta. Transcribe as a veterinary dictation. Requires a manually set language_code from the supported list; auto-detection is refused. Billed at a 100 percent surcharge on the duration, exactly like medical_mode, and cannot be combined with medical_mode. Not available in private mode. */
                         vet_mode?: boolean;
-                        /** @description Keep disfluencies in the transcript instead of removing them. On many languages this also keeps repetitions, stutters and false starts; on others it keeps filler words only. Free, and allowed in private mode. Defaults to false. */
+                        /** @description Keep disfluencies in the transcript instead of removing them. On many languages this also keeps repetitions, stutters and false starts; on others it keeps filler words only. Free, and allowed in private mode. Defaults to false. Only takes effect for the languages where key terms take effect; for any other language the server stores false. */
                         keep_disfluencies?: boolean;
                         /** @description Transcribe each audio channel independently. Billed per channel: a stereo file counts twice, a 3-channel file three times, up to 8 channels, and the medical or vet surcharge applies on top of that; translation targets stay on a single duration. The channel count is the most channels any audio track of the file carries. A file with more than 8 channels, or one whose channel count cannot be read, falls back to mixed audio with speaker labels and is billed once. Without this option the file is transcribed as one mixed channel and billed once. The initial hold at upload creation is for a single channel; verification raises it to the per-channel amount and fails the job with insufficient_balance if the balance cannot cover it. */
                         multichannel?: boolean;

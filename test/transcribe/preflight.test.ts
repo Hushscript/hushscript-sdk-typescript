@@ -9,9 +9,9 @@ import {
 import { BASE, TEST_TIMEOUT_SECONDS, TOKEN, fakeClock, stubFetch } from "../helpers";
 import { driven, fakeApi } from "./fakeapi";
 import {
-  COMPILED_PROMPT_OVERHEAD,
   MAX_KEYTERMS,
   MAX_KEYTERM_CHARS,
+  MAX_KEYTERM_TOTAL_WORDS,
   MAX_KEYTERM_WORDS,
   MAX_PROMPT_CHARS,
 } from "../../src/transcribe/preflight";
@@ -41,7 +41,7 @@ describe("context limits", () => {
     expect(MAX_KEYTERM_WORDS).toBe(6);
     expect(MAX_KEYTERM_CHARS).toBe(128);
     expect(MAX_PROMPT_CHARS).toBe(2000);
-    expect(COMPILED_PROMPT_OVERHEAD).toBe(203);
+    expect(MAX_KEYTERM_TOTAL_WORDS).toBe(1000);
   });
 });
 
@@ -270,6 +270,114 @@ describe("preflight", () => {
     });
   });
 
+  describe("key terms and prompt by language", () => {
+    // Restated on purpose: these mirror backend/src/provider_language_features.rs.
+    const stt37 = [
+      ...["af", "ar", "ca", "da", "de", "de_ch", "en", "en_au", "en_uk", "en_us", "es"],
+      ...["et", "fa", "fi", "fr", "gl", "he", "hi", "it", "ja", "ko", "mr", "nl", "nn", "no"],
+      ...["pt", "ro", "ru", "sv", "tr", "ur", "vi", "zh"],
+    ];
+    const universal2 = [
+      ...["am", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "cs", "cy", "el", "eu"],
+      ...["fo", "gu", "ha", "haw", "hr", "ht", "hu", "hy", "id", "is", "jw", "ka", "kk", "km"],
+      ...["kn", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "ms", "mt"],
+      ...["my", "ne", "oc", "pa", "pl", "ps", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq"],
+      ...["sr", "su", "sw", "ta", "te", "tg", "th", "tk", "tl", "tt", "uk", "uz", "yi", "yo"],
+    ];
+    const supported = stt37.join(", ");
+    const message = (option: string, language: string): string =>
+      `${option} does not work for language "${language}"; it needs language to be one of ${supported}.`;
+
+    async function refused(options: Record<string, unknown>): Promise<unknown> {
+      const { hs, clock } = client();
+      const f = stubFetch([{ status: 500 }]);
+      const bytes = await fixtureBytes("cbr-20s.mp3");
+      const error = await refusal(driven(hs.transcribe(bytes, options), clock));
+      expect(f.calls).toBe(0);
+      return error;
+    }
+
+    async function created(options: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const { hs, clock } = client();
+      const fake = fakeApi();
+      const bytes = await fixtureBytes("cbr-20s.mp3");
+      await driven(hs.transcribe(bytes, options), clock);
+      return (fake.creates[0]?.["transcription_options"] ?? {}) as Record<string, unknown>;
+    }
+
+    it("covers the 103 source languages", () => {
+      expect(new Set([...stt37, ...universal2]).size).toBe(103);
+      expect(stt37).toHaveLength(33);
+    });
+
+    it.each(universal2)("refuses keyterms for %s", async (language) => {
+      const error = await refused({ keyterms: ["Hushscript"], language });
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        status: null,
+        message: message("keyterms", language),
+      });
+    });
+
+    it.each(universal2)("refuses a prompt for %s", async (language) => {
+      const error = await refused({ prompt: "Names.", language });
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        status: null,
+        message: message("prompt", language),
+      });
+    });
+
+    it.each(stt37)("accepts keyterms and a prompt for %s", async (language) => {
+      expect(await created({ keyterms: ["Hushscript"], prompt: "Names.", language })).toMatchObject(
+        {
+          language_code: language,
+          keyterms_prompt: ["Hushscript"],
+          prompt: "Names.",
+        },
+      );
+    });
+
+    it("names the key terms when both are given, and normalizes the language", async () => {
+      const error = await refused({ keyterms: ["x"], prompt: "Names.", language: " PL " });
+      expect(error).toMatchObject({ code: "invalid_option", message: message("keyterms", "pl") });
+    });
+
+    it("refuses a language code padded with U+0085, as the server does", async () => {
+      const error = await refused({ keyterms: ["x"], language: "pl\u0085" });
+      expect(error).toMatchObject({ code: "invalid_option", message: message("keyterms", "pl") });
+    });
+
+    it("refuses a prompt next to blank key terms", async () => {
+      const error = await refused({ keyterms: [" ", ""], prompt: "Names.", language: "th" });
+      expect(error).toMatchObject({ code: "invalid_option", message: message("prompt", "th") });
+    });
+
+    it.each<[string, Record<string, unknown>]>([
+      ["blank key terms and a blank prompt", { keyterms: [" ", ""], prompt: "  " }],
+      ["an empty key term list", { keyterms: [] }],
+      ["no context, with keepDisfluencies", { keepDisfluencies: true }],
+    ])("does not refuse %s in a language without context", async (_name, options) => {
+      expect(await created({ ...options, language: "pl" })).toMatchObject({ language_code: "pl" });
+    });
+
+    it("does not refuse key terms or a prompt under auto-detect", async () => {
+      expect(await created({ keyterms: ["Hushscript"], prompt: "Names." })).toMatchObject({
+        keyterms_prompt: ["Hushscript"],
+        prompt: "Names.",
+      });
+    });
+
+    it("leaves a code it does not list to the server", async () => {
+      expect(await created({ keyterms: ["Hushscript"], language: "xx" })).toMatchObject({
+        language_code: "xx",
+        keyterms_prompt: ["Hushscript"],
+      });
+    });
+  });
+
   describe("key term and prompt limits", () => {
     const wordsOf = (count: number): string =>
       Array.from({ length: count }, (_, i) => `w${String(i)}`).join(" ");
@@ -288,11 +396,10 @@ describe("preflight", () => {
       await driven(hs.transcribe(await fixtureBytes("cbr-20s.mp3"), options), clock);
       return fake.creates[0]?.["transcription_options"];
     };
-    const compiledLength = (prompt: string, terms: string[]): number =>
-      COMPILED_PROMPT_OVERHEAD +
-      Array.from(prompt).length +
-      terms.reduce((sum, term) => sum + Array.from(term).length + 2, 0) +
-      (terms.length - 1);
+    const phrases = (prefix: string, terms: number, wordsEach: number): string[] =>
+      Array.from({ length: terms }, (_, t) =>
+        Array.from({ length: wordsEach }, (_, w) => `${prefix}${String(t)}x${String(w)}`).join(" "),
+      );
 
     it("accepts a term of the character cap and refuses one past it, naming its index", async () => {
       expect(await created({ keyterms: ["x".repeat(MAX_KEYTERM_CHARS)] })).toEqual({
@@ -373,32 +480,45 @@ describe("preflight", () => {
       expect(await created({ prompt: `  ${prompt}\n` })).toEqual({ prompt });
     });
 
-    it("holds prompt and key terms to the cap together, exactly at the boundary", async () => {
-      const terms = ["alpha", "beta gamma", "\u{1F600}"];
-      const base = compiledLength("", terms);
-      const fits = "p".repeat(MAX_PROMPT_CHARS - base);
-      expect(compiledLength(fits, terms)).toBe(MAX_PROMPT_CHARS);
-      expect(await created({ prompt: fits, keyterms: terms })).toEqual({
-        prompt: fits,
-        keyterms_prompt: terms,
-      });
-      const error = await refused({ prompt: `${fits}p`, keyterms: terms });
+    it("holds the key terms to the word cap in total, exactly at the boundary", async () => {
+      const terms = phrases("a", MAX_KEYTERM_TOTAL_WORDS / 2, 2);
+      expect(await created({ keyterms: terms })).toEqual({ keyterms_prompt: terms });
+      const error = await refused({ keyterms: [...terms, "extra"] });
       expect(error).toBeInstanceOf(PreflightError);
       expect(error).toMatchObject({
         code: "invalid_option",
-        message: `prompt and keyterms together exceed ${String(MAX_PROMPT_CHARS)} characters (${String(MAX_PROMPT_CHARS + 1)}).`,
+        message: `keyterms takes at most ${String(MAX_KEYTERM_TOTAL_WORDS)} words in total (${String(MAX_KEYTERM_TOTAL_WORDS + 1)} given).`,
       });
     });
 
-    it("counts a duplicate term once toward the compiled prompt", async () => {
-      const terms = ["alpha", "beta"];
-      const prompt = "p".repeat(MAX_PROMPT_CHARS - compiledLength("", terms));
-      expect(await created({ prompt, keyterms: [...terms, " alpha"] })).toMatchObject({ prompt });
+    it("splits the word total on Unicode white space and counts a duplicate term once", async () => {
+      const terms = phrases("a", MAX_KEYTERM_TOTAL_WORDS / 2, 2);
+      expect(await created({ keyterms: [...terms, ` ${terms[0] ?? ""}`] })).toMatchObject({
+        keyterms_prompt: [...terms, terms[0]],
+      });
+      const nel = terms.map((term) => term.replace(" ", "\u0085"));
+      expect(await created({ keyterms: nel })).toEqual({ keyterms_prompt: nel });
+      expect(await refused({ keyterms: [...nel, "a\u3000b"] })).toMatchObject({
+        message: expect.stringContaining("words in total (1002 given)") as unknown,
+      });
+    });
+
+    it("does not count the prompt toward the key-term words or the key terms toward the prompt", async () => {
+      const terms = phrases("a", MAX_KEYTERM_TOTAL_WORDS / 2, 2);
+      const prompt = "p ".repeat(MAX_PROMPT_CHARS / 2).trim();
+      expect(await created({ keyterms: terms, prompt })).toEqual({
+        keyterms_prompt: terms,
+        prompt,
+      });
+      const emoji = "\u{1F600}".repeat(MAX_PROMPT_CHARS);
+      expect(await created({ keyterms: ["alpha"], prompt: emoji })).toEqual({
+        keyterms_prompt: ["alpha"],
+        prompt: emoji,
+      });
     });
 
     it("applies only the term limits when there is no prompt", async () => {
       const terms = Array.from({ length: 50 }, (_, i) => `${String(i)}${"t".repeat(120)}`);
-      expect(compiledLength("", terms)).toBeGreaterThan(MAX_PROMPT_CHARS);
       expect(await created({ keyterms: terms, prompt: " \n" })).toEqual({
         keyterms_prompt: terms,
       });
