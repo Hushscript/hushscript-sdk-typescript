@@ -203,7 +203,7 @@ function checkContextLanguage(
   prompt: string | undefined,
 ): void {
   // Stryker disable next-line StringLiteral: the default only has to be a string that is not a listed language
-  const language = (options.language ?? "").trim().toLowerCase();
+  const language = trimWhiteSpace(options.language ?? "").toLowerCase();
   if (!UNIVERSAL_2_LANGUAGES.includes(language)) return;
   const option = keyterms.length > 0 ? "keyterms" : prompt === undefined ? undefined : "prompt";
   if (option === undefined) return;

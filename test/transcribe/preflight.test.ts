@@ -345,6 +345,11 @@ describe("preflight", () => {
       expect(error).toMatchObject({ code: "invalid_option", message: message("keyterms", "pl") });
     });
 
+    it("refuses a language code padded with U+0085, as the server does", async () => {
+      const error = await refused({ keyterms: ["x"], language: "pl\u0085" });
+      expect(error).toMatchObject({ code: "invalid_option", message: message("keyterms", "pl") });
+    });
+
     it("refuses a prompt next to blank key terms", async () => {
       const error = await refused({ keyterms: [" ", ""], prompt: "Names.", language: "th" });
       expect(error).toMatchObject({ code: "invalid_option", message: message("prompt", "th") });
