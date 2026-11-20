@@ -305,7 +305,8 @@ once the job exists it carries `resumeToken` too. Pass the token to `hs.resume(t
   minutes are held. It also checks `keyterms` and `prompt` against the server's limits: at most 1000
   unique terms of at most 6 words and 128 characters each, and a prompt of at most 2000 characters
   (with key terms, counted together as the server compiles them). Terms and prompt are trimmed,
-  and blanks and empty lists are not sent. Whether your balance covers the file is the server's call: a 402 comes back
+  and blanks and empty lists are not sent. With `language` set to one the API does not apply them
+  in (for example `pl` or `th`), non-blank `keyterms` or a `prompt` are refused as well; auto-detect is not. Whether your balance covers the file is the server's call: a 402 comes back
   when the upload is created, before any part is sent.
 - **Keeps retries from charging twice.** Every upload and purchase carries an idempotency key, and
   retries reuse it. A `resumeToken` replays the same job instead of starting a new one, and the key

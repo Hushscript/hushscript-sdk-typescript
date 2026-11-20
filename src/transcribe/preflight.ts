@@ -48,6 +48,115 @@ const VET_LANGUAGES: readonly string[] = [
   "de",
   "de_ch",
 ];
+/** Mirrors the API's `STT37_LANGUAGES`: the languages that apply key terms and a prompt. */
+const STT37_LANGUAGES: readonly string[] = [
+  "af",
+  "ar",
+  "ca",
+  "da",
+  "de",
+  "de_ch",
+  "en",
+  "en_au",
+  "en_uk",
+  "en_us",
+  "es",
+  "et",
+  "fa",
+  "fi",
+  "fr",
+  "gl",
+  "he",
+  "hi",
+  "it",
+  "ja",
+  "ko",
+  "mr",
+  "nl",
+  "nn",
+  "no",
+  "pt",
+  "ro",
+  "ru",
+  "sv",
+  "tr",
+  "ur",
+  "vi",
+  "zh",
+];
+/** The rest of the API's `SOURCE_LANGUAGES`; the server names a code in neither list itself. */
+const UNIVERSAL_2_LANGUAGES: readonly string[] = [
+  "am",
+  "as",
+  "az",
+  "ba",
+  "be",
+  "bg",
+  "bn",
+  "bo",
+  "br",
+  "bs",
+  "cs",
+  "cy",
+  "el",
+  "eu",
+  "fo",
+  "gu",
+  "ha",
+  "haw",
+  "hr",
+  "ht",
+  "hu",
+  "hy",
+  "id",
+  "is",
+  "jw",
+  "ka",
+  "kk",
+  "km",
+  "kn",
+  "la",
+  "lb",
+  "ln",
+  "lo",
+  "lt",
+  "lv",
+  "mg",
+  "mi",
+  "mk",
+  "ml",
+  "mn",
+  "ms",
+  "mt",
+  "my",
+  "ne",
+  "oc",
+  "pa",
+  "pl",
+  "ps",
+  "sa",
+  "sd",
+  "si",
+  "sk",
+  "sl",
+  "sn",
+  "so",
+  "sq",
+  "sr",
+  "su",
+  "sw",
+  "ta",
+  "te",
+  "tg",
+  "th",
+  "tk",
+  "tl",
+  "tt",
+  "uk",
+  "uz",
+  "yi",
+  "yo",
+];
 const SNIFF_BYTES = 64;
 
 const WHITE_SPACE_EDGES = /^\p{White_Space}+|\p{White_Space}+$/gu;
@@ -87,8 +196,25 @@ export function normalizeContext(options: TranscribeOptions): ContextOptions {
   return { keyterms, keytermIndexes, prompt: prompt === "" ? undefined : prompt };
 }
 
+/** Typed key terms or a prompt do nothing in a language the API does not serve with its newest model, so the API refuses them. */
+function checkContextLanguage(
+  options: TranscribeOptions,
+  keyterms: string[],
+  prompt: string | undefined,
+): void {
+  // Stryker disable next-line StringLiteral: the default only has to be a string that is not a listed language
+  const language = (options.language ?? "").trim().toLowerCase();
+  if (!UNIVERSAL_2_LANGUAGES.includes(language)) return;
+  const option = keyterms.length > 0 ? "keyterms" : prompt === undefined ? undefined : "prompt";
+  if (option === undefined) return;
+  throw invalidOption(
+    `${option} does not work for language "${language}"; it needs language to be one of ${STT37_LANGUAGES.join(", ")}.`,
+  );
+}
+
 function checkContext(options: TranscribeOptions): void {
   const { keyterms, keytermIndexes, prompt } = normalizeContext(options);
+  checkContextLanguage(options, keyterms, prompt);
   const unique = new Set(keyterms);
   if (unique.size > MAX_KEYTERMS) {
     throw invalidOption(

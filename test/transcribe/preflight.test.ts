@@ -270,6 +270,109 @@ describe("preflight", () => {
     });
   });
 
+  describe("key terms and prompt by language", () => {
+    // Restated on purpose: these mirror backend/src/provider_language_features.rs.
+    const stt37 = [
+      ...["af", "ar", "ca", "da", "de", "de_ch", "en", "en_au", "en_uk", "en_us", "es"],
+      ...["et", "fa", "fi", "fr", "gl", "he", "hi", "it", "ja", "ko", "mr", "nl", "nn", "no"],
+      ...["pt", "ro", "ru", "sv", "tr", "ur", "vi", "zh"],
+    ];
+    const universal2 = [
+      ...["am", "as", "az", "ba", "be", "bg", "bn", "bo", "br", "bs", "cs", "cy", "el", "eu"],
+      ...["fo", "gu", "ha", "haw", "hr", "ht", "hu", "hy", "id", "is", "jw", "ka", "kk", "km"],
+      ...["kn", "la", "lb", "ln", "lo", "lt", "lv", "mg", "mi", "mk", "ml", "mn", "ms", "mt"],
+      ...["my", "ne", "oc", "pa", "pl", "ps", "sa", "sd", "si", "sk", "sl", "sn", "so", "sq"],
+      ...["sr", "su", "sw", "ta", "te", "tg", "th", "tk", "tl", "tt", "uk", "uz", "yi", "yo"],
+    ];
+    const supported = stt37.join(", ");
+    const message = (option: string, language: string): string =>
+      `${option} does not work for language "${language}"; it needs language to be one of ${supported}.`;
+
+    async function refused(options: Record<string, unknown>): Promise<unknown> {
+      const { hs, clock } = client();
+      const f = stubFetch([{ status: 500 }]);
+      const bytes = await fixtureBytes("cbr-20s.mp3");
+      const error = await refusal(driven(hs.transcribe(bytes, options), clock));
+      expect(f.calls).toBe(0);
+      return error;
+    }
+
+    async function created(options: Record<string, unknown>): Promise<Record<string, unknown>> {
+      const { hs, clock } = client();
+      const fake = fakeApi();
+      const bytes = await fixtureBytes("cbr-20s.mp3");
+      await driven(hs.transcribe(bytes, options), clock);
+      return (fake.creates[0]?.["transcription_options"] ?? {}) as Record<string, unknown>;
+    }
+
+    it("covers the 103 source languages", () => {
+      expect(new Set([...stt37, ...universal2]).size).toBe(103);
+      expect(stt37).toHaveLength(33);
+    });
+
+    it.each(universal2)("refuses keyterms for %s", async (language) => {
+      const error = await refused({ keyterms: ["Hushscript"], language });
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        status: null,
+        message: message("keyterms", language),
+      });
+    });
+
+    it.each(universal2)("refuses a prompt for %s", async (language) => {
+      const error = await refused({ prompt: "Names.", language });
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        status: null,
+        message: message("prompt", language),
+      });
+    });
+
+    it.each(stt37)("accepts keyterms and a prompt for %s", async (language) => {
+      expect(await created({ keyterms: ["Hushscript"], prompt: "Names.", language })).toMatchObject(
+        {
+          language_code: language,
+          keyterms_prompt: ["Hushscript"],
+          prompt: "Names.",
+        },
+      );
+    });
+
+    it("names the key terms when both are given, and normalizes the language", async () => {
+      const error = await refused({ keyterms: ["x"], prompt: "Names.", language: " PL " });
+      expect(error).toMatchObject({ code: "invalid_option", message: message("keyterms", "pl") });
+    });
+
+    it("refuses a prompt next to blank key terms", async () => {
+      const error = await refused({ keyterms: [" ", ""], prompt: "Names.", language: "th" });
+      expect(error).toMatchObject({ code: "invalid_option", message: message("prompt", "th") });
+    });
+
+    it.each<[string, Record<string, unknown>]>([
+      ["blank key terms and a blank prompt", { keyterms: [" ", ""], prompt: "  " }],
+      ["an empty key term list", { keyterms: [] }],
+      ["no context, with keepDisfluencies", { keepDisfluencies: true }],
+    ])("does not refuse %s in a language without context", async (_name, options) => {
+      expect(await created({ ...options, language: "pl" })).toMatchObject({ language_code: "pl" });
+    });
+
+    it("does not refuse key terms or a prompt under auto-detect", async () => {
+      expect(await created({ keyterms: ["Hushscript"], prompt: "Names." })).toMatchObject({
+        keyterms_prompt: ["Hushscript"],
+        prompt: "Names.",
+      });
+    });
+
+    it("leaves a code it does not list to the server", async () => {
+      expect(await created({ keyterms: ["Hushscript"], language: "xx" })).toMatchObject({
+        language_code: "xx",
+        keyterms_prompt: ["Hushscript"],
+      });
+    });
+  });
+
   describe("key term and prompt limits", () => {
     const wordsOf = (count: number): string =>
       Array.from({ length: count }, (_, i) => `w${String(i)}`).join(" ");

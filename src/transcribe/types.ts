@@ -17,19 +17,22 @@ export interface TranscribeOptions {
    * keyterms_prompt. Terms are trimmed and blanks dropped; an empty list is not sent. At most 1000
    * unique terms, each at most 6 words and 128 characters (Unicode code points). With a prompt,
    * the two are compiled into one provider prompt and count together toward the prompt limit.
+   * Only some languages use them; with `language` set to one that does not (for example `pl`) the
+   * call is refused. Auto-detect is not refused.
    */
   keyterms?: string[] | undefined;
   /**
    * Free-text context, trimmed; a blank prompt is not sent. At most 2000 characters (Unicode code
    * points). With key terms the limit applies to the compiled prompt:
-   * 203 + prompt + the sum of (term + 2) for each unique term + (terms - 1).
+   * 203 + prompt + the sum of (term + 2) for each unique term + (terms - 1). Only some languages
+   * use it; with `language` set to one that does not, the call is refused.
    */
   prompt?: string | undefined;
   /** medical_mode; needs a language from the medical list (en, en_au, en_uk, en_us, es, fr, de, de_ch); 2x. Not with `vet`. */
   medical?: boolean | undefined;
   /** vet_mode (beta); needs a language from the vet list (en, en_au, en_uk, en_us, es, fr, de, de_ch); 2x. Not with `medical`. */
   vet?: boolean | undefined;
-  /** keep_disfluencies; keeps filler words and, in many languages, repetitions and false starts. Free. */
+  /** keep_disfluencies; keeps filler words and, in many languages, repetitions and false starts. Free. Has no effect in a language that does not use key terms. */
   keepDisfluencies?: boolean | undefined;
   /** Billed per channel, up to 8. */
   multichannel?: boolean | undefined;
