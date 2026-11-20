@@ -1464,9 +1464,9 @@ export interface operations {
                         language_code?: string | null;
                         /** @description Label distinct speakers in the transcript. Forced on automatically when translation_targets is non-empty. */
                         speaker_detection?: boolean;
-                        /** @description Domain vocabulary to bias transcription toward, up to 1000 terms of at most 6 words each. Refused with invalid_transcription_options when the language (language_code, or every expected language under auto-detection) is one where key terms have no effect. Key terms and prompt share one provider token budget, so how many terms fit depends on the script and the length of the terms. */
+                        /** @description Domain vocabulary to bias transcription toward, up to 1000 terms of at most 6 words each, and at most 1,000 words in total after merging saved dictionaries and one-off terms. Refused with invalid_transcription_options when the language (language_code, or every expected language under auto-detection) is one where key terms have no effect, or when the merged terms and the prompt together exceed the provider token budget (how many fit depends on the script and the length of the terms). */
                         keyterms_prompt?: string[];
-                        /** @description Free-text context to bias transcription toward. Refused with invalid_transcription_options when the language is one where a prompt has no effect. Shares one provider token budget with keyterms_prompt. */
+                        /** @description Free-text context to bias transcription toward. Refused with invalid_transcription_options when the language is one where a prompt has no effect. Sent as written, separately from the key terms; the two share one provider token budget. */
                         prompt?: string | null;
                         /** @description Bill and transcribe as a medical dictation. Requires language_code to be one of en, en_au, en_uk, en_us, es, fr, de, de_ch; billed at a 100 percent surcharge on the duration. Cannot be combined with vet_mode. */
                         medical_mode?: boolean;

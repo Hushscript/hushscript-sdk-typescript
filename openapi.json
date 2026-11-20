@@ -156,14 +156,14 @@
                             "items": {
                               "type": "string"
                             },
-                            "description": "Domain vocabulary to bias transcription toward, up to 1000 terms of at most 6 words each. Refused with invalid_transcription_options when the language (language_code, or every expected language under auto-detection) is one where key terms have no effect. Key terms and prompt share one provider token budget, so how many terms fit depends on the script and the length of the terms."
+                            "description": "Domain vocabulary to bias transcription toward, up to 1000 terms of at most 6 words each, and at most 1,000 words in total after merging saved dictionaries and one-off terms. Refused with invalid_transcription_options when the language (language_code, or every expected language under auto-detection) is one where key terms have no effect, or when the merged terms and the prompt together exceed the provider token budget (how many fit depends on the script and the length of the terms)."
                           },
                           "prompt": {
                             "type": [
                               "string",
                               "null"
                             ],
-                            "description": "Free-text context to bias transcription toward. Refused with invalid_transcription_options when the language is one where a prompt has no effect. Shares one provider token budget with keyterms_prompt."
+                            "description": "Free-text context to bias transcription toward. Refused with invalid_transcription_options when the language is one where a prompt has no effect. Sent as written, separately from the key terms; the two share one provider token budget."
                           },
                           "medical_mode": {
                             "type": "boolean",
