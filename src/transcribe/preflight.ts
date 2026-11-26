@@ -25,6 +25,8 @@ export const MAX_KEYTERM_CHARS = 128;
 export const MAX_PROMPT_CHARS = 2000;
 /** Whitespace-split words across the unique key terms; the server also keeps a token budget the SDK does not mirror. */
 export const MAX_KEYTERM_TOTAL_WORDS = 1000;
+/** Mirrors the API's `MAX_TRANSLATION_TARGETS`: the saved-edit language limit (16) less the original. */
+export const MAX_TRANSLATION_TARGETS = 15;
 const MAX_MATTER_CODE = 64;
 /** Mirrors the API's `MEDICAL_LANGUAGES` (`transcription_options.rs`). */
 const MEDICAL_LANGUAGES: readonly string[] = [
@@ -196,14 +198,18 @@ export function normalizeContext(options: TranscribeOptions): ContextOptions {
   return { keyterms, keytermIndexes, prompt: prompt === "" ? undefined : prompt };
 }
 
+/** A language code as the server reads it: trimmed with Unicode White_Space, lowercased as ASCII only. */
+function normalizeCode(code: string | undefined): string {
+  return trimWhiteSpace(code ?? "").replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
 /** Typed key terms or a prompt do nothing in a language the API does not serve with its newest model, so the API refuses them. */
 function checkContextLanguage(
   options: TranscribeOptions,
   keyterms: string[],
   prompt: string | undefined,
 ): void {
-  // Stryker disable next-line StringLiteral: the default only has to be a string that is not a listed language
-  const language = trimWhiteSpace(options.language ?? "").toLowerCase();
+  const language = normalizeCode(options.language);
   if (!UNIVERSAL_2_LANGUAGES.includes(language)) return;
   const option = keyterms.length > 0 ? "keyterms" : prompt === undefined ? undefined : "prompt";
   if (option === undefined) return;
@@ -283,18 +289,32 @@ function languageRule(option: string, languages: readonly string[]): string {
     : `${option} needs language to be one of ${languages.join(", ")}.`;
 }
 
+/** Distinct targets after trimming, ASCII-lowercasing and dropping blanks, as the server counts them. */
+function checkTranslationTargets(targets: string[] | undefined): void {
+  const unique = new Set<string>();
+  for (const target of targets ?? []) {
+    const code = normalizeCode(target);
+    if (code !== "") unique.add(code);
+  }
+  if (unique.size > MAX_TRANSLATION_TARGETS) {
+    throw invalidOption(
+      `translateTo takes at most ${String(MAX_TRANSLATION_TARGETS)} distinct languages (${String(unique.size)} given).`,
+    );
+  }
+}
+
 function checkOptions(options: TranscribeOptions): void {
   if (options.medical === true && options.vet === true) {
     throw invalidOption("medical and vet cannot be combined.");
   }
-  // Stryker disable next-line StringLiteral: the default only has to be a string that is not a medical language
-  if (options.medical === true && !MEDICAL_LANGUAGES.includes(options.language ?? "")) {
+  const language = normalizeCode(options.language);
+  if (options.medical === true && !MEDICAL_LANGUAGES.includes(language)) {
     throw invalidOption(languageRule("medical", MEDICAL_LANGUAGES));
   }
-  // Stryker disable next-line StringLiteral: the default only has to be a string that is not a vet language
-  if (options.vet === true && !VET_LANGUAGES.includes(options.language ?? "")) {
+  if (options.vet === true && !VET_LANGUAGES.includes(language)) {
     throw invalidOption(languageRule("vet", VET_LANGUAGES));
   }
+  checkTranslationTargets(options.translateTo);
   checkContext(options);
   // Stryker disable next-line StringLiteral: the default only has to be under the length limit
   if ((options.matterCode ?? "").length > MAX_MATTER_CODE) {

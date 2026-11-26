@@ -6,6 +6,12 @@
 
 * add the `vet_mode` (Veterinary mode, beta; en, en_au, en_uk, en_us, es, fr, de, de_ch; refused with `medical_mode` and in private mode) and `keep_disfluencies` (free, default off) transcription options, both echoed in the job options summary; the medical language list and the API spec are synced.
 
+### Bug Fixes
+
+* translation no longer forces speaker detection on: `speakers` is sent exactly as given. `translateTo` accepts every base source language and takes at most 15 distinct targets (trimmed, lowercased); more is refused before any request with `PreflightError` `invalid_option`.
+* `medical` and `vet` read `language` the way the server does (trimmed, ASCII-lowercased), so a padded or upper-case code is no longer refused client-side.
+* the API spec is synced: the `origin_source` request option and the `origin_source`, `origin_app` and job `title` response fields.
+
 ## [1.1.0](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.0.1...v1.1.0) (2026-10-23)
 
 

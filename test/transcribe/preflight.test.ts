@@ -14,6 +14,7 @@ import {
   MAX_KEYTERM_TOTAL_WORDS,
   MAX_KEYTERM_WORDS,
   MAX_PROMPT_CHARS,
+  MAX_TRANSLATION_TARGETS,
 } from "../../src/transcribe/preflight";
 import { fixtureBytes, fixturePath } from "./fixtures";
 
@@ -42,6 +43,7 @@ describe("context limits", () => {
     expect(MAX_KEYTERM_CHARS).toBe(128);
     expect(MAX_PROMPT_CHARS).toBe(2000);
     expect(MAX_KEYTERM_TOTAL_WORDS).toBe(1000);
+    expect(MAX_TRANSLATION_TARGETS).toBe(15);
   });
 });
 
@@ -374,6 +376,77 @@ describe("preflight", () => {
       expect(await created({ keyterms: ["Hushscript"], language: "xx" })).toMatchObject({
         language_code: "xx",
         keyterms_prompt: ["Hushscript"],
+      });
+    });
+  });
+
+  it.each([
+    ["medical", { medical: true }],
+    ["vet", { vet: true }],
+  ])("reads the language for %s as the server does: trimmed and lowercased", async (_name, on) => {
+    const { hs, clock } = client();
+    const fake = fakeApi();
+    await driven(
+      hs.transcribe(await fixtureBytes("cbr-20s.mp3"), { ...on, language: " EN_US\u0085" }),
+      clock,
+    );
+    expect(fake.creates[0]?.["transcription_options"]).toMatchObject({
+      language_code: " EN_US\u0085",
+    });
+  });
+
+  describe("translation targets", () => {
+    const codes = "es fr de it pt nl af sq am ar hy as az ba eu be".split(" ");
+    const targets = (count: number): string[] => codes.slice(0, count);
+    const refused = async (options: Record<string, unknown>): Promise<unknown> => {
+      const { hs, clock } = client();
+      const f = stubFetch([{ status: 500 }]);
+      const error = await refusal(
+        driven(hs.transcribe(await fixtureBytes("cbr-20s.mp3"), options), clock),
+      );
+      expect(f.calls).toBe(0);
+      return error;
+    };
+    const created = async (options: Record<string, unknown>): Promise<unknown> => {
+      const { hs, clock } = client();
+      const fake = fakeApi();
+      await driven(hs.transcribe(await fixtureBytes("cbr-20s.mp3"), options), clock);
+      return fake.creates[0]?.["transcription_options"];
+    };
+
+    it("accepts the cap and refuses one distinct target more, before any request", async () => {
+      expect(await created({ translateTo: targets(MAX_TRANSLATION_TARGETS) })).toEqual({
+        translation_targets: targets(MAX_TRANSLATION_TARGETS),
+      });
+      const error = await refused({ translateTo: targets(MAX_TRANSLATION_TARGETS + 1) });
+      expect(error).toBeInstanceOf(PreflightError);
+      expect(error).toMatchObject({
+        code: "invalid_option",
+        status: null,
+        message: `translateTo takes at most ${String(MAX_TRANSLATION_TARGETS)} distinct languages (${String(MAX_TRANSLATION_TARGETS + 1)} given).`,
+      });
+    });
+
+    it("counts a target once however it is cased, padded or repeated, and ignores blanks", async () => {
+      const padded = [
+        ...targets(MAX_TRANSLATION_TARGETS).map((code) => code.toUpperCase()),
+        " ES ",
+        "es",
+        "",
+        "  ",
+      ];
+      expect(await created({ translateTo: padded })).toMatchObject({ translation_targets: padded });
+    });
+
+    it("sends speaker_detection as given and does not force it on", async () => {
+      expect(await created({ translateTo: ["es"], speakers: false })).toEqual({
+        speaker_detection: false,
+        translation_targets: ["es"],
+      });
+      expect(await created({ translateTo: ["es"] })).toEqual({ translation_targets: ["es"] });
+      expect(await created({ translateTo: ["es"], speakers: true })).toEqual({
+        speaker_detection: true,
+        translation_targets: ["es"],
       });
     });
   });

@@ -11,7 +11,7 @@ export interface TranscribeOptions {
   language?: string | undefined;
   /** speaker_detection; default true. */
   speakers?: boolean | undefined;
-  /** translation_targets; +25% each, forces speakers. */
+  /** translation_targets; +25% each; at most 15 distinct languages. Independent of `speakers`. */
   translateTo?: string[] | undefined;
   /**
    * keyterms_prompt. Terms are trimmed and blanks dropped; an empty list is not sent. At most 1000

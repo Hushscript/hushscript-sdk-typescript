@@ -896,6 +896,18 @@ export interface components {
             fetched_bytes?: number;
             /** @description The total byte size a from-url import is fetching toward. Present only while a fetch is in progress. */
             fetch_total_bytes?: number;
+            /**
+             * @description How the audio entered Hushscript: a file upload, an import from a link, or an in-app recording. Null when unknown, which is always the case for rows created before this field existed.
+             * @enum {string|null}
+             */
+            origin_source: "upload" | "url" | "recording" | null;
+            /**
+             * @description The app the job was created from: the web app, the Chrome extension, the Android or iOS app, or the API. Null when unknown, which is always the case for rows created before this field existed.
+             * @enum {string|null}
+             */
+            origin_app: "web" | "extension" | "android" | "ios" | "api" | null;
+            /** @description The current title of this job's transcript, or null while the job has no transcript or the transcript has no title. Always null for a private-mode job, and null unless the caller may read transcripts: a personal access token needs the transcripts:read scope (a transcribe-only token always gets null). */
+            title: string | null;
         };
         JobList: {
             jobs: components["schemas"]["Job"][];
@@ -941,6 +953,16 @@ export interface components {
             /** @description The workspace client this transcript is filed under, or null. Set at upload time and editable afterwards; always null for a transcript that was never funded by a workspace. */
             client_code: string | null;
             body: components["schemas"]["TranscriptEnvelope"];
+            /**
+             * @description How the audio entered Hushscript: a file upload, an import from a link, or an in-app recording. Null when unknown, which is always the case for rows created before this field existed.
+             * @enum {string|null}
+             */
+            origin_source: "upload" | "url" | "recording" | null;
+            /**
+             * @description The app the job was created from: the web app, the Chrome extension, the Android or iOS app, or the API. Null when unknown, which is always the case for rows created before this field existed.
+             * @enum {string|null}
+             */
+            origin_app: "web" | "extension" | "android" | "ios" | "api" | null;
         };
         TranscriptListRow: {
             id: string;
@@ -956,6 +978,16 @@ export interface components {
              * @enum {string}
              */
             insights_state: "generating" | "ready" | "failed" | "none";
+            /**
+             * @description How the audio entered Hushscript: a file upload, an import from a link, or an in-app recording. Null when unknown, which is always the case for rows created before this field existed.
+             * @enum {string|null}
+             */
+            origin_source: "upload" | "url" | "recording" | null;
+            /**
+             * @description The app the job was created from: the web app, the Chrome extension, the Android or iOS app, or the API. Null when unknown, which is always the case for rows created before this field existed.
+             * @enum {string|null}
+             */
+            origin_app: "web" | "extension" | "android" | "ios" | "api" | null;
         };
         TranscriptList: {
             transcripts: components["schemas"]["TranscriptListRow"][];
@@ -1462,7 +1494,7 @@ export interface operations {
                     transcription_options?: {
                         /** @description Force a specific spoken language instead of auto-detection. Key terms, a prompt and filler words (keep_disfluencies) only take effect for the 33 languages AssemblyAI serves with its newest model; for the other languages, typed key terms or a typed prompt are refused with invalid_transcription_options. */
                         language_code?: string | null;
-                        /** @description Label distinct speakers in the transcript. Forced on automatically when translation_targets is non-empty. */
+                        /** @description Label distinct speakers in the transcript. Independent of translation_targets. */
                         speaker_detection?: boolean;
                         /** @description Domain vocabulary to bias transcription toward, up to 1000 terms of at most 6 words each, and at most 1,000 words in total after merging saved dictionaries and one-off terms. Refused with invalid_transcription_options when the language (language_code, or every expected language under auto-detection) is one where key terms have no effect, or when the merged terms and the prompt together exceed the provider token budget (how many fit depends on the script and the length of the terms). */
                         keyterms_prompt?: string[];
@@ -1476,11 +1508,16 @@ export interface operations {
                         keep_disfluencies?: boolean;
                         /** @description Transcribe each audio channel independently. Billed per channel: a stereo file counts twice, a 3-channel file three times, up to 8 channels, and the medical or vet surcharge applies on top of that; translation targets stay on a single duration. The channel count is the most channels any audio track of the file carries. A file with more than 8 channels, or one whose channel count cannot be read, falls back to mixed audio with speaker labels and is billed once. Without this option the file is transcribed as one mixed channel and billed once. The initial hold at upload creation is for a single channel; verification raises it to the per-channel amount and fails the job with insufficient_balance if the balance cannot cover it. */
                         multichannel?: boolean;
-                        /** @description Locales to additionally translate the transcript into. Each target adds a 25 percent surcharge on the duration and forces speaker_detection on. */
+                        /** @description Locales to additionally translate the transcript into: any language code accepted by language_code except the regional variants (en_au, en_uk, en_us, de_ch), 99 in all. At most 15 distinct targets per upload (a saved edit holds the original plus 15 translations); more is refused with invalid_transcription_options. A target equal to the source language is refused. Each target adds a 25 percent surcharge on the duration. */
                         translation_targets?: string[];
                         /** @description Override the account's automatic-Insights default for this upload alone. Omit to inherit the account default; an explicit false always suppresses automatic generation for this upload. */
                         auto_generate_insights?: boolean | null;
                     } | null;
+                    /**
+                     * @description Optional. Whether the audio is an uploaded file or a recording. Any other value is ignored, never refused. When absent, a retry inherits its retry_of job's value, and a Personal Access Token caller outside the Chrome extension is recorded as upload.
+                     * @enum {string|null}
+                     */
+                    origin_source?: "upload" | "recording" | null;
                 };
             };
         };
