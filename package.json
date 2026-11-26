@@ -34,7 +34,7 @@
     "provenance": true
   },
   "config": {
-    "conformanceRef": "v1.0.0"
+    "conformanceRef": "b32acc95696ce69ecf0f515965bb618e82731fce"
   },
   "scripts": {
     "build": "tsup",
