@@ -149,7 +149,7 @@
                           },
                           "speaker_detection": {
                             "type": "boolean",
-                            "description": "Label distinct speakers in the transcript. Forced on automatically when translation_targets is non-empty."
+                            "description": "Label distinct speakers in the transcript. Independent of translation_targets."
                           },
                           "keyterms_prompt": {
                             "type": "array",
@@ -186,7 +186,8 @@
                             "items": {
                               "type": "string"
                             },
-                            "description": "Locales to additionally translate the transcript into. Each target adds a 25 percent surcharge on the duration and forces speaker_detection on."
+                            "maxItems": 15,
+                            "description": "Locales to additionally translate the transcript into: any language code accepted by language_code except the regional variants (en_au, en_uk, en_us, de_ch), 99 in all. At most 15 distinct targets per upload (a saved edit holds the original plus 15 translations); more is refused with invalid_transcription_options. A target equal to the source language is refused. Each target adds a 25 percent surcharge on the duration."
                           },
                           "auto_generate_insights": {
                             "type": [
@@ -201,6 +202,18 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "origin_source": {
+                    "type": [
+                      "string",
+                      "null"
+                    ],
+                    "enum": [
+                      "upload",
+                      "recording",
+                      null
+                    ],
+                    "description": "Optional. Whether the audio is an uploaded file or a recording. Any other value is ignored, never refused. When absent, a retry inherits its retry_of job's value, and a Personal Access Token caller outside the Chrome extension is recorded as upload."
                   }
                 },
                 "required": [
@@ -3873,6 +3886,41 @@
           "fetch_total_bytes": {
             "type": "integer",
             "description": "The total byte size a from-url import is fetching toward. Present only while a fetch is in progress."
+          },
+          "origin_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "upload",
+              "url",
+              "recording",
+              null
+            ],
+            "description": "How the audio entered Hushscript: a file upload, an import from a link, or an in-app recording. Null when unknown, which is always the case for rows created before this field existed."
+          },
+          "origin_app": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "web",
+              "extension",
+              "android",
+              "ios",
+              "api",
+              null
+            ],
+            "description": "The app the job was created from: the web app, the Chrome extension, the Android or iOS app, or the API. Null when unknown, which is always the case for rows created before this field existed."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The current title of this job's transcript, or null while the job has no transcript or the transcript has no title. Always null for a private-mode job, and null unless the caller may read transcripts: a personal access token needs the transcripts:read scope (a transcribe-only token always gets null)."
           }
         },
         "required": [
@@ -3890,7 +3938,10 @@
           "transcript_id",
           "private_result_expires_at",
           "private_result_available",
-          "options"
+          "options",
+          "origin_source",
+          "origin_app",
+          "title"
         ]
       },
       "JobList": {
@@ -4042,6 +4093,34 @@
           },
           "body": {
             "$ref": "#/components/schemas/TranscriptEnvelope"
+          },
+          "origin_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "upload",
+              "url",
+              "recording",
+              null
+            ],
+            "description": "How the audio entered Hushscript: a file upload, an import from a link, or an in-app recording. Null when unknown, which is always the case for rows created before this field existed."
+          },
+          "origin_app": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "web",
+              "extension",
+              "android",
+              "ios",
+              "api",
+              null
+            ],
+            "description": "The app the job was created from: the web app, the Chrome extension, the Android or iOS app, or the API. Null when unknown, which is always the case for rows created before this field existed."
           }
         },
         "required": [
@@ -4057,7 +4136,9 @@
           "edited",
           "matter_code",
           "client_code",
-          "body"
+          "body",
+          "origin_source",
+          "origin_app"
         ]
       },
       "TranscriptListRow": {
@@ -4107,6 +4188,34 @@
               "none"
             ],
             "description": "A display hint only, never an authority on whether Insights may be generated or charged for."
+          },
+          "origin_source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "upload",
+              "url",
+              "recording",
+              null
+            ],
+            "description": "How the audio entered Hushscript: a file upload, an import from a link, or an in-app recording. Null when unknown, which is always the case for rows created before this field existed."
+          },
+          "origin_app": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "enum": [
+              "web",
+              "extension",
+              "android",
+              "ios",
+              "api",
+              null
+            ],
+            "description": "The app the job was created from: the web app, the Chrome extension, the Android or iOS app, or the API. Null when unknown, which is always the case for rows created before this field existed."
           }
         },
         "required": [
@@ -4118,7 +4227,9 @@
           "auto_delete_at",
           "tags",
           "options",
-          "insights_state"
+          "insights_state",
+          "origin_source",
+          "origin_app"
         ]
       },
       "TranscriptList": {
