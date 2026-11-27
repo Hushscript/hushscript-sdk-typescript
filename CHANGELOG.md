@@ -12,6 +12,10 @@
 * `medical` and `vet` read `language` the way the server does (trimmed, ASCII-lowercased), so a padded or upper-case code is no longer refused client-side.
 * the API spec is synced: the `origin_source` request option and the `origin_source`, `origin_app` and job `title` response fields.
 
+### Documentation
+
+* README links point at the live pricing page and the SDK section of the developers page; the old `/pricing` and `/sdks` URLs redirect there.
+
 ## [1.1.0](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.0.1...v1.1.0) (2026-10-23)
 
 
