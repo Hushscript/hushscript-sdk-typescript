@@ -80,6 +80,8 @@ function body(utterances: Body["body"]["original"]["utterances"], extra: Partial
     edited: false,
     matter_code: null,
     client_code: null,
+    origin_source: null,
+    origin_app: null,
     body: { version: 1, original: { utterances }, translations: {} },
     ...extra,
   };

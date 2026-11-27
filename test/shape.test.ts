@@ -430,6 +430,8 @@ const JOB_FIELDS = [
     "language_code",
     "speaker_detection",
     "medical_mode",
+    "vet_mode",
+    "keep_disfluencies",
     "multichannel",
     "translation_targets",
     "keyterms",
