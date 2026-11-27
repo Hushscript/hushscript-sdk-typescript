@@ -58,7 +58,7 @@
     "globals": "17.14.0",
     "knip": "6.44.1",
     "openapi-typescript": "7.13.0",
-    "prettier": "3.9.10",
+    "prettier": "3.10.1",
     "publint": "0.3.25",
     "tsup": "9.0.0",
     "typescript": "6.0.3",
