@@ -18,6 +18,28 @@
 
 * README links point at the live pricing page and the SDK section of the developers page; the old `/pricing` and `/sdks` URLs redirect there.
 
+## [1.1.3](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.1.2...v1.1.3) (2026-11-09)
+
+
+### Miscellaneous Chores
+
+* release 1.1.3 ([b23def9](https://github.com/Hushscript/hushscript-sdk-typescript/commit/b23def942470931b0294241f5ed9f229d4627a4e))
+
+## [1.1.2](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.1.1...v1.1.2) (2026-11-08)
+
+
+### Bug Fixes
+
+* keep the caller's abort reaching a request after a gc ([126d53e](https://github.com/Hushscript/hushscript-sdk-typescript/commit/126d53ee2480b81eb72080805ac66a97760a4f31))
+* raise the abort listener cap and pin the abort reason ([b3b014f](https://github.com/Hushscript/hushscript-sdk-typescript/commit/b3b014f227ec1a34f4ce7cc07ea675746ea65d54))
+
+## [1.1.1](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.1.0...v1.1.1) (2026-10-31)
+
+
+### Bug Fixes
+
+* **deps:** update dependencies to latest ([ebbd530](https://github.com/Hushscript/hushscript-sdk-typescript/commit/ebbd5305ce5169febd892154cb38f957d9102870))
+
 ## [1.1.0](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.0.1...v1.1.0) (2026-10-23)
 
 
