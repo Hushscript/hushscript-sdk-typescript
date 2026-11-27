@@ -1330,7 +1330,7 @@ export interface components {
             /** @description The scopes carried by pat, identical to the predecessor's. */
             scopes: string[];
             /** @description The successor's expiry policy, carried over from the predecessor unchanged. Null when the predecessor never expired. */
-            expires_at?: number | null;
+            expires_at: number | null;
         };
         OrgSummaryResponse: {
             id: string;
@@ -1382,10 +1382,6 @@ export interface components {
             caller_effective_cap_seconds: number | null;
             /** @description The signed-in caller's own month-to-date spend against the pool. Null under the same condition caller_effective_cap_seconds is null. */
             caller_spent_seconds_this_month: number | null;
-            /** @description Whether the signed-in caller is the workspace's single transferable owner (distinct from is_admin). */
-            is_owner: boolean;
-            /** @description The id of the workspace's transferable owner, visible to every member. Falls back to the org's creator if owner_user_id was never explicitly set on the row. */
-            owner_user_id: string;
             /** @description private or firm. private: transcripts belong to the member, no reviewer can open them. firm: a transcript created while a member belongs to the workspace is workspace property; is_reviewer members can open it. */
             custody: string;
             /** @description Unix seconds the pending private-to-firm switch takes effect, or null when no switch is scheduled. Only ever set while custody is still private. */
@@ -1394,6 +1390,19 @@ export interface components {
             retention_reclamp_at: number | null;
             /** @description The retention day count the armed re-clamp will apply, or null when none is scheduled. Mirrors max_retention_days at the moment the re-clamp was armed, not necessarily the current value. */
             retention_reclamp_days: number | null;
+            /**
+             * @description Whether uploads by members must carry a matter_code: off, optional, or required (an upload without one is refused with org_matter_code_required).
+             * @enum {string}
+             */
+            matter_code_policy: "off" | "optional" | "required";
+            /** @description The workspace's client rebill rate in US cents per hour of audio, used for usage reports and exports. */
+            rebill_rate_cents_per_hour: number;
+            /** @description The workspace letterhead printed on exports, or null when none is set. */
+            letterhead: {
+                name: string;
+                address_lines: string[];
+                footer: string;
+            } | null;
         };
     };
     responses: {
@@ -1481,8 +1490,11 @@ export interface operations {
                     duration_seconds: number;
                     /** @description An optional display title. A value longer than 300 bytes is truncated on a character boundary rather than rejected, and this response does not echo the stored value; read it back from the transcript once the job completes. In `private` mode the title is not stored at all. */
                     title?: string | null;
-                    /** @description Optional job mode, e.g. a private-result upload. */
-                    mode?: string | null;
+                    /**
+                     * @description standard (the default when absent or null) or private: a private-result upload saves no transcript and returns a password-protected archive. Any other value is refused.
+                     * @enum {string|null}
+                     */
+                    mode?: "standard" | "private" | null;
                     /** @description Optional smaller part size for a flaky connection. Clamped to this API's supported range; omit for the 32 MiB default. */
                     part_size_bytes?: number | null;
                     /** @description An optional client-minted key, 16 to 128 bytes. Resending the same key returns the same job with no second hold. */
@@ -1500,6 +1512,18 @@ export interface operations {
                         keyterms_prompt?: string[];
                         /** @description Free-text context to bias transcription toward. Refused with invalid_transcription_options when the language is one where a prompt has no effect. Sent as written, separately from the key terms; the two share one provider token budget. */
                         prompt?: string | null;
+                        /** @description Key terms for this job only, merged with keyterms_prompt and the terms of any dictionary_ids. Same limits as keyterms_prompt: up to 1000 terms of at most 6 words each, and at most 1,000 words in total across all key terms. Refused with invalid_transcription_options on a language where key terms have no effect. */
+                        one_off_keyterms?: string[];
+                        /** @description Prompt text for this job only, joined to prompt and any prompt_preset_id text. Refused with invalid_transcription_options on a language where a prompt has no effect. Shares the provider token budget with the key terms. */
+                        one_off_prompt?: string | null;
+                        /** @description Saved dictionaries to apply, by the 32-character lowercase hex ids that GET /v1/transcription-context lists. Their terms join the key terms and count toward the key-term limits. Duplicates are ignored; at most 50 distinct ids. A malformed id or one the caller cannot read is refused with invalid_transcription_options. On a language where key terms have no effect the selection is skipped, not refused. */
+                        dictionary_ids?: string[];
+                        /** @description A saved prompt preset to apply, by the 32-character lowercase hex id that GET /v1/transcription-context lists. Its text is joined to prompt and one_off_prompt. A malformed id or one the caller cannot read is refused with invalid_transcription_options. On a language where a prompt has no effect the selection is skipped, not refused. */
+                        prompt_preset_id?: string | null;
+                        /** @description Auto-detection hint: restrict language detection to these codes (any code accepted by language_code). Ignored when language_code is set. An unsupported code is refused with invalid_transcription_options. Key terms, a prompt and keep_disfluencies apply when every expected language supports them, are skipped when none does, and otherwise apply only if the detected language does. */
+                        expected_languages?: string[];
+                        /** @description Auto-detection hint: the language to use when detection is unsure. Must be one of expected_languages, otherwise refused with invalid_transcription_options. Ignored when language_code is set. */
+                        fallback_language?: string | null;
                         /** @description Bill and transcribe as a medical dictation. Requires language_code to be one of en, en_au, en_uk, en_us, es, fr, de, de_ch; billed at a 100 percent surcharge on the duration. Cannot be combined with vet_mode. */
                         medical_mode?: boolean;
                         /** @description Beta. Transcribe as a veterinary dictation. Requires a manually set language_code from the supported list; auto-detection is refused. Billed at a 100 percent surcharge on the duration, exactly like medical_mode, and cannot be combined with medical_mode. Not available in private mode. */
