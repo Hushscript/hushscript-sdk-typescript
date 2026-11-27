@@ -64,7 +64,7 @@
     "typescript": "6.0.3",
     "typescript-eslint": "8.72.1",
     "typescript-floor": "npm:typescript@5.5.4",
-    "vitest": "5.0.5"
+    "vitest": "5.1.0"
   },
   "overrides": {
     "openapi-typescript": {
