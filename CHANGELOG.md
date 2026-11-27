@@ -18,6 +18,14 @@
 
 * README links point at the live pricing page and the SDK section of the developers page; the old `/pricing` and `/sdks` URLs redirect there.
 
+## [1.2.0](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.1.3...v1.2.0) (2026-11-27)
+
+
+### Bug Fixes
+
+* cap translation targets at 15, drop the speaker coupling, normalize the language for medical and vet; sync api spec ([e25bf76](https://github.com/Hushscript/hushscript-sdk-typescript/commit/e25bf7607c9cdb136b8e3da7ac8ab7a60f4de62c))
+* sync the api spec with production and pin conformance v1.1.0 ([2bc9e1e](https://github.com/Hushscript/hushscript-sdk-typescript/commit/2bc9e1e639f23f0c0d78164974e000b555769fe6))
+
 ## [1.1.3](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.1.2...v1.1.3) (2026-11-09)
 
 
