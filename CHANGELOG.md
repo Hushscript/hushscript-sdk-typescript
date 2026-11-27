@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.1](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.2.0...v1.2.1) (2026-11-27)
+
+
+### Bug Fixes
+
+* sync the spec with the backend: org summary drops is_owner and owner_user_id (never sent) and adds matter_code_policy, rebill_rate_cents_per_hour and letterhead; upload mode is standard or private; six more upload options; rotate always returns expires_at ([fc2d91a](https://github.com/Hushscript/hushscript-sdk-typescript/commit/fc2d91a214f81cc8c6c5ac1cf363db6d748e31ca))
+
 ## [1.2.0](https://github.com/Hushscript/hushscript-sdk-typescript/compare/v1.1.3...v1.2.0) (2026-11-27)
 
 ### Features
